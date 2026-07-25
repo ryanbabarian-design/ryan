@@ -4,18 +4,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="하나금속 제안 접수·검색·심사 관리 시스템">
-  <meta name="theme-color" content="#07111f">
+  <meta name="theme-color" content="#10213b">
   <title>하나금속 제안관리</title>
-  <link rel="stylesheet" href="./css/styles.css">
-  <script src="./js/config.js"></script>
+  <link rel="stylesheet" href="./css/styles.css?v=1.3">
+  <script src="./js/config.js?v=1.3"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
   <header class="site-header">
-    <button class="brand" type="button" data-route="dashboard" aria-label="HANA METAL 대시보드">
-      <img class="brand-logo" src="./assets/hana-metal-logo.png" alt="HANA METAL">
-    </button>
+    <div class="brand" role="banner">
+      <div class="brand-mark">H</div>
+      <div class="brand-text">
+        <strong>하나금속 제안관리</strong>
+        <small>IDEA MANAGEMENT</small>
+      </div>
+    </div>
 
     <nav class="main-nav" aria-label="주요 메뉴">
       <button class="nav-link active" data-route="dashboard">대시보드</button>
@@ -47,6 +51,6 @@
     <img id="lightboxImage" alt="확대 사진">
   </dialog>
 
-  <script type="module" src="./js/app.js"></script>
+  <script type="module" src="./js/app.js?v=1.3"></script>
 </body>
 </html>
