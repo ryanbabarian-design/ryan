@@ -197,6 +197,67 @@ export function dashboardBreakdown(proposals, requestedYear = "") {
   };
 }
 
+
+export function dashboardHighlights(proposals, requestedYear = "") {
+  const source = Array.isArray(proposals) ? proposals : [];
+  const { selectedYear } = dashboardBreakdown(source, requestedYear);
+  const filtered = source.filter((proposal) => {
+    const date = proposalDateParts(proposal);
+    if (!date) return false;
+    return selectedYear === "all" || date.year === selectedYear;
+  });
+
+  const proposerMap = new Map();
+  for (const proposal of filtered) {
+    const name = String(proposal.proposer_name || "미지정").trim() || "미지정";
+    const department = String(proposal.department || "미지정").trim() || "미지정";
+    const key = `${name}\u0000${department}`;
+    const row = proposerMap.get(key) || {
+      name,
+      department,
+      count: 0,
+      adoptedCount: 0,
+      totalScore: 0,
+    };
+    row.count += 1;
+    if (proposal.review_result === "채택") row.adoptedCount += 1;
+    if (proposal.score !== null && proposal.score !== "" && Number.isFinite(Number(proposal.score))) {
+      row.totalScore += Number(proposal.score);
+    }
+    proposerMap.set(key, row);
+  }
+
+  const topProposer = Array.from(proposerMap.values()).sort((a, b) =>
+    b.count - a.count
+    || b.adoptedCount - a.adoptedCount
+    || b.totalScore - a.totalScore
+    || a.name.localeCompare(b.name, "ko")
+  )[0] || null;
+
+  const scored = filtered
+    .filter((proposal) => proposal.score !== null && proposal.score !== "" && Number.isFinite(Number(proposal.score)))
+    .sort((a, b) =>
+      Number(b.score) - Number(a.score)
+      || safeAmount(b.effect_amount) - safeAmount(a.effect_amount)
+      || safeAmount(b.award_amount) - safeAmount(a.award_amount)
+      || String(b.received_date || "").localeCompare(String(a.received_date || ""))
+      || String(b.proposal_no || "").localeCompare(String(a.proposal_no || ""))
+    );
+
+  const best = scored[0];
+  const bestProposal = best ? {
+    proposal_no: String(best.proposal_no || ""),
+    title: String(best.title || "제안명 없음"),
+    proposer_name: String(best.proposer_name || "미지정"),
+    department: String(best.department || "미지정"),
+    score: Number(best.score),
+    award_amount: safeAmount(best.award_amount),
+    effect_amount: safeAmount(best.effect_amount),
+  } : null;
+
+  return { selectedYear, topProposer, bestProposal };
+}
+
 export async function sha256(value) {
   const data = new TextEncoder().encode(String(value));
   const digest = await crypto.subtle.digest("SHA-256", data);

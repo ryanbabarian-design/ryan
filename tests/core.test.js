@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   calculateAward,
+  dashboardHighlights,
   dashboardMetrics,
   filterProposals,
   isEmployeeEditable,
@@ -204,4 +205,93 @@ test("dashboardBreakdown defaults to the latest available year", () => {
   const report = dashboardBreakdown(analyticsProposals, "2099");
   assert.equal(report.selectedYear, "2026");
   assert.equal(report.totals.count, 3);
+});
+
+
+test("dashboardHighlights finds top proposer and highest-scoring proposal for selected year", () => {
+  const rows = [
+    {
+      proposal_no: "Q26-001",
+      received_date: "2026-01-10",
+      department: "가공",
+      proposer_name: "김영훈",
+      title: "첫 제안",
+      review_result: "채택",
+      score: 82,
+      award_amount: 50000,
+      effect_amount: 300000,
+    },
+    {
+      proposal_no: "Q26-002",
+      received_date: "2026-02-10",
+      department: "가공",
+      proposer_name: "김영훈",
+      title: "두 번째 제안",
+      review_result: "미채택",
+      score: 70,
+      award_amount: 30000,
+      effect_amount: 100000,
+    },
+    {
+      proposal_no: "Q26-003",
+      received_date: "2026-03-10",
+      department: "공무",
+      proposer_name: "박성호",
+      title: "최고 점수 제안",
+      review_result: "채택",
+      score: 95,
+      award_amount: 100000,
+      effect_amount: 900000,
+    },
+    {
+      proposal_no: "Q25-001",
+      received_date: "2025-03-10",
+      department: "압연",
+      proposer_name: "이전년도",
+      title: "이전년도 우수",
+      review_result: "채택",
+      score: 100,
+      award_amount: 100000,
+      effect_amount: 1000000,
+    },
+  ];
+
+  const result = dashboardHighlights(rows, "2026");
+
+  assert.deepEqual(result.topProposer, {
+    name: "김영훈",
+    department: "가공",
+    count: 2,
+    adoptedCount: 1,
+    totalScore: 152,
+  });
+  assert.deepEqual(result.bestProposal, {
+    proposal_no: "Q26-003",
+    title: "최고 점수 제안",
+    proposer_name: "박성호",
+    department: "공무",
+    score: 95,
+    award_amount: 100000,
+    effect_amount: 900000,
+  });
+});
+
+test("dashboardHighlights uses adoption and score as top-proposer tie breakers", () => {
+  const rows = [
+    { proposal_no: "Q26-001", received_date: "2026-01-01", proposer_name: "가나다", department: "가공", review_result: "채택", score: 60 },
+    { proposal_no: "Q26-002", received_date: "2026-01-02", proposer_name: "라마바", department: "공무", review_result: "미채택", score: 100 },
+  ];
+
+  const result = dashboardHighlights(rows, "2026");
+  assert.equal(result.topProposer.name, "가나다");
+});
+
+test("dashboardHighlights returns null best proposal when no score exists", () => {
+  const rows = [
+    { proposal_no: "Q26-001", received_date: "2026-01-01", proposer_name: "김영훈", department: "가공", score: null },
+  ];
+
+  const result = dashboardHighlights(rows, "2026");
+  assert.equal(result.topProposer.name, "김영훈");
+  assert.equal(result.bestProposal, null);
 });

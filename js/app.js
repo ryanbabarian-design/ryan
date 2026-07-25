@@ -1,6 +1,7 @@
 import {
   calculateAward,
   dashboardBreakdown,
+  dashboardHighlights,
   dashboardMetrics,
   filterProposals,
   formatCurrency,
@@ -239,6 +240,7 @@ function analyticsTable(rows, labelHeading) {
 function renderDashboard() {
   const metrics = dashboardMetrics(state.proposals);
   const report = dashboardBreakdown(state.proposals, getDashboardYearFromUrl());
+  const highlights = dashboardHighlights(state.proposals, report.selectedYear);
   const recent = filterProposals(state.proposals).slice(0, 3);
   const departments = [...new Set(state.proposals.map((item) => item.department).filter(Boolean))].sort();
   const selectedLabel = report.selectedYear === "all" ? "전체 연도" : `${report.selectedYear}년`;
@@ -354,15 +356,68 @@ function renderDashboard() {
           </div>
         </article>
 
-        <article class="analytics-panel department-panel">
-          <div class="analytics-panel-head">
-            <div><span class="eyebrow">DEPARTMENT</span><h2>부서별 제안실적</h2><p>제안건수가 많은 부서 순으로 표시합니다.</p></div>
-            <span class="analytics-count">${report.departments.length.toLocaleString("ko-KR")}개 부서</span>
-          </div>
-          <div class="analytics-list department-list">
-            ${analyticsRows(report.departments, "부서별 집계자료가 없습니다.")}
-          </div>
-        </article>
+        <div class="analytics-side-stack">
+          <article class="analytics-panel department-panel">
+            <div class="analytics-panel-head">
+              <div><span class="eyebrow">DEPARTMENT</span><h2>부서별 제안실적</h2><p>제안건수가 많은 부서 순으로 표시합니다.</p></div>
+              <span class="analytics-count">${report.departments.length.toLocaleString("ko-KR")}개 부서</span>
+            </div>
+            <div class="analytics-list department-list">
+              ${analyticsRows(report.departments, "부서별 집계자료가 없습니다.")}
+            </div>
+          </article>
+
+          <section class="dashboard-highlight-list" aria-label="우수 제안 하이라이트">
+            <article class="dashboard-highlight-card top-proposer-card">
+              <div class="highlight-card-icon" aria-hidden="true">★</div>
+              <div class="highlight-card-body">
+                <span class="eyebrow">MOST ACTIVE</span>
+                <h2>최다제안</h2>
+                ${highlights.topProposer ? `
+                  <div class="highlight-winner-row">
+                    <div>
+                      <strong>${escapeHtml(highlights.topProposer.name)}</strong>
+                      <span>${escapeHtml(highlights.topProposer.department)}</span>
+                    </div>
+                    <b>${highlights.topProposer.count.toLocaleString("ko-KR")}건</b>
+                  </div>
+                  <dl class="highlight-stats">
+                    <div><dt>채택</dt><dd>${highlights.topProposer.adoptedCount.toLocaleString("ko-KR")}건</dd></div>
+                    <div><dt>점수 합계</dt><dd>${highlights.topProposer.totalScore.toLocaleString("ko-KR")}점</dd></div>
+                  </dl>
+                  <button class="highlight-link" data-search="${escapeHtml(highlights.topProposer.name)}">제안내역 보기 ›</button>
+                ` : `
+                  <div class="highlight-empty">선택 기간에 등록된 제안자가 없습니다.</div>
+                `}
+                <p class="highlight-rule">제안건수 기준 · 동률 시 채택건수와 점수합계 순</p>
+              </div>
+            </article>
+
+            <article class="dashboard-highlight-card best-proposal-card">
+              <div class="highlight-card-icon" aria-hidden="true">♛</div>
+              <div class="highlight-card-body">
+                <span class="eyebrow">BEST IDEA</span>
+                <h2>최우수제안</h2>
+                ${highlights.bestProposal ? `
+                  <div class="best-proposal-title">
+                    <span>${escapeHtml(highlights.bestProposal.proposal_no)}</span>
+                    <strong>${escapeHtml(highlights.bestProposal.title)}</strong>
+                    <small>${escapeHtml(highlights.bestProposal.proposer_name)} · ${escapeHtml(highlights.bestProposal.department)}</small>
+                  </div>
+                  <dl class="highlight-stats best-stats">
+                    <div><dt>심사점수</dt><dd>${highlights.bestProposal.score.toLocaleString("ko-KR")}점</dd></div>
+                    <div><dt>포상금</dt><dd>${formatCurrency(highlights.bestProposal.award_amount)}</dd></div>
+                    <div><dt>효과금액</dt><dd>${formatCurrency(highlights.bestProposal.effect_amount)}</dd></div>
+                  </dl>
+                  <button class="highlight-link" data-action="detail" data-no="${escapeHtml(highlights.bestProposal.proposal_no)}">제안 상세보기 ›</button>
+                ` : `
+                  <div class="highlight-empty">심사점수가 입력된 제안이 없습니다.</div>
+                `}
+                <p class="highlight-rule">심사점수 기준 · 동률 시 효과금액과 포상금 순</p>
+              </div>
+            </article>
+          </section>
+        </div>
       </section>
 
       <section class="analytics-panel yearly-panel">
