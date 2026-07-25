@@ -1,0 +1,324 @@
+/* V1.6 - A4 제안서 인쇄 전용 화면 */
+.print-open-button { white-space: nowrap; }
+
+body.print-route {
+  background: #dfe3e8;
+}
+
+body.print-route .site-header,
+body.print-route .site-footer {
+  display: none;
+}
+
+body.print-route #app {
+  width: min(100% - 28px, 1120px);
+  padding: 24px 0 60px;
+}
+
+.proposal-print-screen {
+  display: grid;
+  gap: 18px;
+}
+
+.print-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  position: sticky;
+  z-index: 20;
+  top: 12px;
+  border: 1px solid #c9d0da;
+  border-radius: 16px;
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 12px 30px rgba(16, 28, 49, .14);
+  backdrop-filter: blur(12px);
+}
+.print-toolbar strong,
+.print-toolbar span { display: block; }
+.print-toolbar strong { color: #101c31; font-size: 16px; }
+.print-toolbar span { margin-top: 3px; color: #667085; font-size: 12px; }
+.print-toolbar-actions { display: flex; gap: 8px; }
+
+.proposal-print-document {
+  box-sizing: border-box;
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+  padding: 12mm 11mm 10mm;
+  background: white;
+  color: #252a31;
+  font-family: "Malgun Gothic", "Apple SD Gothic Neo", Arial, sans-serif;
+  font-size: 10pt;
+  line-height: 1.48;
+  box-shadow: 0 18px 45px rgba(16, 28, 49, .22);
+}
+
+.print-form-reference {
+  margin-bottom: 2mm;
+  color: #555;
+  font-size: 9pt;
+}
+
+.print-document-header {
+  display: grid;
+  grid-template-columns: 42mm 1fr 78mm;
+  align-items: end;
+  min-height: 25mm;
+  margin-bottom: 3mm;
+}
+.print-logo-cell img {
+  display: block;
+  width: 37mm;
+  max-height: 18mm;
+  object-fit: contain;
+  object-position: left center;
+}
+.print-document-header h1 {
+  margin: 0 0 2mm;
+  text-align: center;
+  color: #252a31;
+  font-family: Batang, "Noto Serif KR", serif;
+  font-size: 24pt;
+  letter-spacing: .45em;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.print-approval-table,
+.print-info-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.print-approval-table th,
+.print-approval-table td {
+  height: 11mm;
+  border: .6pt solid #555;
+  padding: 1mm;
+  text-align: center;
+  vertical-align: middle;
+  font-size: 8.5pt;
+}
+.print-approval-table th { height: 6mm; font-weight: 700; }
+.print-approval-table .approval-side { width: 8mm; font-weight: 700; }
+
+.print-info-table { margin-bottom: 0; }
+.print-info-table th,
+.print-info-table td {
+  border: .65pt solid #555;
+  padding: 2mm 2.2mm;
+  vertical-align: middle;
+}
+.print-info-table th {
+  width: 23mm;
+  background: #fafafa;
+  text-align: center;
+  font-weight: 700;
+}
+.print-info-table .print-title-cell {
+  font-size: 12pt;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+.print-category-section {
+  display: grid;
+  grid-template-columns: 23mm 1fr;
+  border: .65pt solid #555;
+  border-top: 0;
+}
+.print-category-label {
+  display: grid;
+  place-items: center;
+  border-right: .65pt solid #555;
+  background: #fafafa;
+  text-align: center;
+  font-weight: 700;
+}
+.print-category-content { min-width: 0; }
+.print-category-line {
+  display: grid;
+  grid-template-columns: 25mm 1fr;
+  gap: 2mm;
+  min-height: 10mm;
+  padding: 1.8mm 2.2mm;
+  align-items: center;
+}
+.print-category-line + .print-category-line { border-top: .65pt solid #555; }
+.print-category-line strong { white-space: nowrap; }
+.print-category-line span { font-size: 8.2pt; line-height: 1.55; }
+.print-checkbox {
+  display: inline-grid;
+  place-items: center;
+  width: 4mm;
+  height: 4mm;
+  margin-right: 1.2mm;
+  border: .7pt solid #333;
+  font-size: 9pt;
+  line-height: 1;
+}
+.print-checkbox.checked { color: #c51f27; font-weight: 900; }
+
+.print-comparison-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: .65pt solid #555;
+  border-top: 0;
+}
+.print-comparison-column {
+  min-width: 0;
+  padding: 3mm;
+}
+.print-comparison-column + .print-comparison-column { border-left: .65pt solid #555; }
+.print-section-label {
+  margin-bottom: 1.5mm;
+  color: #555;
+  font-weight: 700;
+}
+.print-comparison-column h2 {
+  margin: 0 0 2mm;
+  font-size: 10pt;
+  font-weight: 700;
+}
+.print-long-text {
+  min-height: 20mm;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.print-image-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2mm;
+  margin-top: 3mm;
+}
+.print-image-grid.single { grid-template-columns: 1fr; }
+.print-image-item {
+  margin: 0;
+  break-inside: avoid;
+  border: .55pt solid #aeb4bc;
+  padding: 1mm;
+}
+.print-image-item img {
+  display: block;
+  width: 100%;
+  height: 43mm;
+  object-fit: contain;
+  background: #f4f5f6;
+}
+.print-image-grid.single .print-image-item img { height: 58mm; }
+.print-image-item figcaption {
+  margin-top: .8mm;
+  text-align: center;
+  color: #666;
+  font-size: 7.5pt;
+}
+.print-image-empty {
+  display: grid;
+  min-height: 38mm;
+  margin-top: 3mm;
+  place-items: center;
+  border: .55pt dashed #aaa;
+  color: #888;
+  font-size: 8.5pt;
+}
+
+.print-effect-section,
+.print-review-section {
+  border: .65pt solid #555;
+  border-top: 0;
+  padding: 3mm;
+  break-inside: avoid;
+}
+.print-money-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 3mm 0 0;
+  border: .55pt solid #aaa;
+}
+.print-money-grid div { padding: 2mm; text-align: center; }
+.print-money-grid div + div { border-left: .55pt solid #aaa; }
+.print-money-grid dt { color: #666; font-size: 8pt; }
+.print-money-grid dd { margin: .8mm 0 0; font-weight: 700; }
+.print-review-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2mm 7mm;
+  margin-bottom: 2mm;
+  font-size: 8.5pt;
+}
+.print-review-section .review-text { min-height: 24mm; }
+
+.print-document-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4mm;
+  color: #777;
+  font-size: 8pt;
+}
+.print-document-footer img {
+  width: 34mm;
+  max-height: 10mm;
+  object-fit: contain;
+  object-position: left center;
+}
+
+@media screen and (max-width: 900px) {
+  body.print-route #app { width: 100%; padding: 12px 0 40px; }
+  .print-toolbar { position: static; margin: 0 12px; align-items: stretch; flex-direction: column; }
+  .print-toolbar-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .proposal-print-document {
+    width: 210mm;
+    transform: scale(.72);
+    transform-origin: top center;
+    margin-bottom: calc(-297mm * .28);
+  }
+}
+
+@page {
+  size: A4 portrait;
+  margin: 8mm;
+}
+
+@media print {
+  html, body {
+    width: 210mm;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+  }
+  body.print-route #app {
+    width: auto;
+    margin: 0;
+    padding: 0;
+  }
+  .print-toolbar,
+  #toast,
+  dialog { display: none !important; }
+  .proposal-print-screen { display: block; }
+  .proposal-print-document {
+    width: auto;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+  .print-document-header,
+  .print-info-table,
+  .print-category-section,
+  .print-image-item,
+  .print-money-grid,
+  .print-document-footer {
+    break-inside: avoid;
+  }
+  .print-comparison-section { break-inside: auto; }
+  .print-comparison-column { break-inside: auto; }
+  .print-page-break-candidate { break-before: auto; }
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}

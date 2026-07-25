@@ -13,6 +13,7 @@ import {
   WORKFLOW_STATUSES,
 } from "./core.js";
 import { createStore } from "./services/store.js";
+import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js";
 
 const store = createStore();
 const state = {
@@ -128,7 +129,8 @@ async function init() {
 
 function render() {
   const [route = "dashboard"] = routeParts();
-  setActiveNav(route === "detail" || route === "edit" ? "list" : route);
+  document.body.classList.toggle("print-route", route === "print");
+  setActiveNav(route === "detail" || route === "edit" || route === "print" ? "list" : route);
   $("#modeBadge").textContent = store.mode === "demo" ? "데모 모드" : "Supabase 연결";
   $("#modeBadge").className = `mode-badge ${store.mode}`;
 
@@ -145,6 +147,7 @@ function render() {
   else if (route === "new") renderProposalForm();
   else if (route === "list") renderList();
   else if (route === "detail") renderDetail(routeParts()[1]);
+  else if (route === "print") renderPrint(routeParts()[1]);
   else if (route === "edit") renderProposalForm(routeParts()[1]);
   else if (route === "admin") renderAdmin(routeParts()[1], routeParts()[2]);
   else renderDashboard();
@@ -674,6 +677,7 @@ function renderDetail(proposalNo) {
         <div class="detail-actions">
           ${statusBadge(proposal.status)}
           ${statusBadge(proposal.review_result)}
+          <button class="button button-ghost print-open-button" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
           ${!proposal.locked && proposal.status === "접수"
             ? `<button class="button button-secondary" data-route="edit/${escapeHtml(proposal.proposal_no)}">제안자 수정</button>`
             : ""}
@@ -722,6 +726,128 @@ function renderDetail(proposalNo) {
       </dl>
     </section>
   `;
+}
+
+
+function renderPrintImages(images, label) {
+  if (!images.length) {
+    return `<div class="print-image-empty">${escapeHtml(label)} 미등록</div>`;
+  }
+  return `
+    <div class="print-image-grid ${images.length === 1 ? "single" : ""}">
+      ${images.map((url, index) => `
+        <figure class="print-image-item">
+          <img src="${escapeHtml(url)}" alt="${escapeHtml(label)} ${index + 1}">
+          <figcaption>${escapeHtml(label)} ${index + 1}</figcaption>
+        </figure>`).join("")}
+    </div>`;
+}
+
+function renderPrint(proposalNo) {
+  const proposal = state.proposals.find((item) => item.proposal_no === proposalNo);
+  if (!proposal) {
+    main.innerHTML = `<div class="empty-state"><h2>제안을 찾지 못했습니다.</h2><button class="button button-primary" data-route="list">목록으로</button></div>`;
+    return;
+  }
+
+  const model = buildPrintModel(proposal);
+  const approvalCells = PRINT_APPROVAL_ROLES.map((role) => `
+    <th>${escapeHtml(role)}</th>`).join("");
+  const approvalSignatures = PRINT_APPROVAL_ROLES.map(() => `<td></td>`).join("");
+  const categoryMark = (checked) => `<span class="print-checkbox ${checked ? "checked" : ""}">${checked ? "✓" : ""}</span>`;
+
+  main.innerHTML = `
+    <section class="proposal-print-screen">
+      <div class="print-toolbar">
+        <div>
+          <strong>${escapeHtml(model.proposalNo)} 제안서 인쇄</strong>
+          <span>내용이 길거나 사진이 많으면 다음 페이지로 자연스럽게 이어집니다.</span>
+        </div>
+        <div class="print-toolbar-actions">
+          <button class="button button-ghost" data-route="detail/${escapeHtml(model.proposalNo)}">상세화면</button>
+          <button class="button button-primary" data-action="trigger-print">인쇄 / PDF 저장</button>
+        </div>
+      </div>
+
+      <article class="proposal-print-document">
+        <div class="print-form-reference">[별지 제 1 호] 제안서</div>
+        <header class="print-document-header">
+          <div class="print-logo-cell"><img src="./assets/hana-metal-logo.png" alt="HANA METAL"></div>
+          <h1>제 안 서</h1>
+          <table class="print-approval-table" aria-label="결재란">
+            <tbody>
+              <tr><td class="approval-side" rowspan="2">결<br>재</td>${approvalCells}</tr>
+              <tr>${approvalSignatures}</tr>
+            </tbody>
+          </table>
+        </header>
+
+        <table class="print-info-table">
+          <tbody>
+            <tr><th>제 목</th><td colspan="3" class="print-title-cell">${escapeHtml(model.title)}</td></tr>
+            <tr><th>제 안 일</th><td>${escapeHtml(model.proposalDate)}</td><th>접수번호</th><td>${escapeHtml(model.proposalNo)}</td></tr>
+            <tr><th>제 안 자</th><td>${escapeHtml(model.proposerName)} (${escapeHtml(model.department)})</td><th>심사결과</th><td>${escapeHtml(model.reviewResult)}</td></tr>
+            <tr><th>시행부서</th><td>${escapeHtml(model.implementingDepartment)}</td><th>제안점수</th><td>${escapeHtml(model.scoreText)}</td></tr>
+            <tr><th>실시일/예정일</th><td>${escapeHtml(model.implementedDate)}</td><th>실시여부</th><td>${escapeHtml(model.implementationStatus)}</td></tr>
+          </tbody>
+        </table>
+
+        <section class="print-category-section">
+          <div class="print-category-label">제안<br>분류</div>
+          <div class="print-category-content">
+            <div class="print-category-line">
+              <strong>${categoryMark(model.categoryImprovement)} 개선</strong>
+              <span>1. 아이디어　2. 코스트　3. 에너지 절약　4. 품질　5. 관리　6. 작업　7. 기계　8. 공구　9. 환경　10. 설계　11. 인테리어　12. 서비스　13. 고객　14. 작품출원　15. 기타</span>
+            </div>
+            <div class="print-category-line">
+              <strong>${categoryMark(model.categorySafety)} 안전</strong>
+              <span>1. 안전</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="print-comparison-section">
+          <article class="print-comparison-column">
+            <div class="print-section-label">현재의 방법(문제점)</div>
+            <h2>개선 전</h2>
+            <div class="print-long-text">${escapeHtml(model.currentProblem)}</div>
+            ${renderPrintImages(model.beforeImages, "개선 전 사진")}
+          </article>
+          <article class="print-comparison-column">
+            <div class="print-section-label">개 선 책</div>
+            <h2>개선 후</h2>
+            <div class="print-long-text">${escapeHtml(model.improvementPlan)}</div>
+            ${renderPrintImages(model.afterImages, "개선 후 사진")}
+          </article>
+        </section>
+
+        <section class="print-effect-section print-page-break-candidate">
+          <div class="print-section-label">개선효과</div>
+          <div class="print-long-text">${escapeHtml(model.expectedEffect)}</div>
+          <dl class="print-money-grid">
+            <div><dt>예상 투입비용</dt><dd>${escapeHtml(model.costText)}</dd></div>
+            <div><dt>포상금</dt><dd>${escapeHtml(model.awardText)}</dd></div>
+            <div><dt>효과금액</dt><dd>${escapeHtml(model.effectText)}</dd></div>
+            <div><dt>지급상태</dt><dd>${escapeHtml(model.paymentStatus)}</dd></div>
+          </dl>
+        </section>
+
+        <section class="print-review-section">
+          <div class="print-section-label">심사평가 (검토 의견)</div>
+          <div class="print-review-meta">
+            <span>업무상태: <strong>${escapeHtml(model.workflowStatus)}</strong></span>
+            <span>심사결과: <strong>${escapeHtml(model.reviewResult)}</strong></span>
+            <span>실시상태: <strong>${escapeHtml(model.implementationStatus)}</strong></span>
+          </div>
+          <div class="print-long-text review-text">${escapeHtml(model.reviewComment)}</div>
+        </section>
+
+        <footer class="print-document-footer">
+          <img src="./assets/hana-metal-logo.png" alt="HANA METAL">
+          <span>${escapeHtml(model.proposalNo)}</span>
+        </footer>
+      </article>
+    </section>`;
 }
 
 function renderAdmin(action = "", id = "") {
@@ -821,7 +947,10 @@ function renderAdminEdit(id) {
   main.innerHTML = `
     <section class="page-header">
       <div><button class="back-link" data-route="admin">← 관리자 목록</button><span class="eyebrow">ADMIN REVIEW</span><h1>${escapeHtml(proposal.proposal_no)} 심사</h1><p>${escapeHtml(proposal.title)}</p></div>
-      <button class="button button-ghost" data-route="detail/${escapeHtml(proposal.proposal_no)}">공개 상세보기</button>
+      <div class="header-buttons">
+        <button class="button button-ghost" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
+        <button class="button button-ghost" data-route="detail/${escapeHtml(proposal.proposal_no)}">공개 상세보기</button>
+      </div>
     </section>
 
     <form id="adminReviewForm" class="admin-review-form" data-id="${escapeHtml(proposal.id)}">
@@ -1032,6 +1161,11 @@ document.addEventListener("click", async (event) => {
   try {
     if (action === "detail") {
       go(`detail/${actionButton.dataset.no}`);
+    } else if (action === "print-proposal") {
+      const printUrl = `${location.href.split("#")[0]}#print/${encodeURIComponent(actionButton.dataset.no)}`;
+      window.open(printUrl, "_blank", "noopener");
+    } else if (action === "trigger-print") {
+      window.print();
     } else if (action === "clear-filter") {
       go("list");
     } else if (action === "open-image") {
