@@ -180,17 +180,17 @@ function renderDashboard() {
 
   main.innerHTML = `
     <section class="hero">
-      <div>
+      <div class="hero-copy">
         <span class="eyebrow">HANA METAL IDEA HUB</span>
         <h1>작은 개선이<br><em>큰 변화를 만듭니다.</em></h1>
         <p>기존 제안을 검색하고, 개선 전·후 사진과 함께 새로운 아이디어를 바로 접수하세요.</p>
         <div class="hero-actions">
-          <button class="button button-primary" data-route="new">새 제안 작성</button>
-          <button class="button button-secondary" data-route="list">유사 제안 검색</button>
+          <button class="button button-primary" data-route="new"><span class="button-icon" aria-hidden="true">＋</span>새 제안 작성</button>
+          <button class="button button-secondary" data-route="list"><span class="button-icon search-icon" aria-hidden="true"></span>유사 제안 검색</button>
         </div>
       </div>
-      <div class="hero-panel">
-        <div class="hero-orb">IDEA</div>
+      <div class="hero-panel" aria-hidden="true">
+        <div class="hero-brand-mark"><img src="./assets/hana-metal-mark.png" alt=""></div>
         <div class="hero-mini-card">
           <span>올해 누적 제안</span>
           <strong>${metrics.total.toLocaleString("ko-KR")}건</strong>
@@ -200,30 +200,35 @@ function renderDashboard() {
     </section>
 
     <section class="metric-grid" aria-label="제안 현황 요약">
-      <div class="metric-card"><span class="metric-icon">💡</span><div><small>전체 제안</small><strong>${metrics.total}</strong></div></div>
-      <div class="metric-card"><span class="metric-icon">🕒</span><div><small>심사 대기</small><strong>${metrics.pending}</strong></div></div>
-      <div class="metric-card"><span class="metric-icon">✅</span><div><small>채택</small><strong>${metrics.adopted}</strong></div></div>
-      <div class="metric-card"><span class="metric-icon">🏁</span><div><small>실시 완료</small><strong>${metrics.completed}</strong></div></div>
+      <div class="metric-card metric-red"><span class="metric-icon" aria-hidden="true">♧</span><div><small>전체 제안</small><strong>${metrics.total}</strong></div><span class="metric-chevron">›</span></div>
+      <div class="metric-card metric-orange"><span class="metric-icon" aria-hidden="true">◷</span><div><small>심사 대기</small><strong>${metrics.pending}</strong></div><span class="metric-chevron">›</span></div>
+      <div class="metric-card metric-gold"><span class="metric-icon" aria-hidden="true">✓</span><div><small>채택</small><strong>${metrics.adopted}</strong></div><span class="metric-chevron">›</span></div>
+      <div class="metric-card metric-dark"><span class="metric-icon" aria-hidden="true">⚑</span><div><small>실시 완료</small><strong>${metrics.completed}</strong></div><span class="metric-chevron">›</span></div>
     </section>
 
     <section class="quick-search">
-      <div>
-        <span class="eyebrow">DUPLICATE CHECK</span>
-        <h2>제안하기 전에 비슷한 아이디어가 있는지 검색하세요.</h2>
+      <div class="quick-search-heading">
+        <span class="quick-search-icon" aria-hidden="true">✓</span>
+        <div>
+          <span class="eyebrow">DUPLICATE CHECK</span>
+          <h2>제안하기 전에 비슷한 아이디어가 있는지 검색하세요.</h2>
+        </div>
       </div>
       <form id="quickSearchForm" class="search-box">
         <input name="query" placeholder="예: 에어건, 절단기, 안전장치, 작업시간 단축" aria-label="유사 제안 검색어">
-        <button class="button button-primary" type="submit">검색</button>
+        <button class="button button-primary" type="submit"><span class="button-icon search-icon" aria-hidden="true"></span>검색</button>
       </form>
       <div class="keyword-row">
+        <span class="keyword-label">추천 검색어</span>
         ${departments.map((department) => `<button class="keyword" data-search="${escapeHtml(department)}">${escapeHtml(department)}</button>`).join("")}
+        ${["안전", "품질", "설비", "생산성"].filter((word) => !departments.includes(word)).map((word) => `<button class="keyword" data-search="${word}">${word}</button>`).join("")}
       </div>
     </section>
 
-    <section class="section">
+    <section class="section recent-section">
       <div class="section-heading">
-        <div><span class="eyebrow">RECENT IDEAS</span><h2>최근 접수된 제안</h2></div>
-        <button class="button button-ghost" data-route="list">전체보기</button>
+        <div class="recent-heading"><span class="recent-flame" aria-hidden="true">◆</span><div><span class="eyebrow">RECENT IDEAS</span><h2>최근 접수된 제안</h2></div></div>
+        <button class="button button-ghost" data-route="list">전체보기 <span aria-hidden="true">›</span></button>
       </div>
       <div class="proposal-grid">${recent.map(proposalCard).join("")}</div>
     </section>
