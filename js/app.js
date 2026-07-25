@@ -851,7 +851,7 @@ document.addEventListener("click", async (event) => {
       await store.deleteProposal(actionButton.dataset.id);
       await refreshData();
       go("admin");
-      showToast("제안을 삭제했습니다.");
+      showToast("제안과 첨부 사진을 삭제했습니다.");
     } else if (action === "reset-demo") {
       if (!confirm("데모 데이터를 최초 상태로 되돌리시겠습니까?")) return;
       await store.resetDemo();

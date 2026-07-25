@@ -96,6 +96,39 @@ export async function sha256(value) {
     .join("");
 }
 
+
+export function collectProposalImagePaths(proposal, storageBucket) {
+  const paths = new Set();
+  const images = [
+    ...(Array.isArray(proposal?.before_images) ? proposal.before_images : []),
+    ...(Array.isArray(proposal?.after_images) ? proposal.after_images : []),
+  ];
+  const publicMarker = `/storage/v1/object/public/${storageBucket}/`;
+
+  for (const image of images) {
+    const explicitPath = typeof image?.path === "string" ? image.path.trim() : "";
+    if (explicitPath && !explicitPath.startsWith("http")) {
+      paths.add(explicitPath.replace(/^\/+/, ""));
+      continue;
+    }
+
+    const url = typeof image?.url === "string" ? image.url : "";
+    if (!url.startsWith("http")) continue;
+
+    try {
+      const pathname = new URL(url).pathname;
+      const markerIndex = pathname.indexOf(publicMarker);
+      if (markerIndex < 0) continue;
+      const encodedPath = pathname.slice(markerIndex + publicMarker.length);
+      if (encodedPath) paths.add(decodeURIComponent(encodedPath));
+    } catch {
+      // Ignore malformed or non-Supabase URLs.
+    }
+  }
+
+  return Array.from(paths);
+}
+
 export function formatCurrency(value) {
   return `${Number(value || 0).toLocaleString("ko-KR")}원`;
 }

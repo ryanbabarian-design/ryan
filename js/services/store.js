@@ -1,5 +1,5 @@
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
-import { isEmployeeEditable, nextProposalNo, sha256 } from "../core.js";
+import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, sha256 } from "../core.js";
 
 const PROPOSAL_KEY = "proposal-system:v1:proposals";
 const EMPLOYEE_KEY = "proposal-system:v1:employees";
@@ -57,6 +57,33 @@ async function filesToDataUrls(files) {
         }),
     ),
   );
+}
+
+
+export async function deleteProposalAndImages(client, storageBucket, id) {
+  const { data: proposal, error: readError } = await client
+    .from("proposals")
+    .select("before_images,after_images")
+    .eq("id", id)
+    .single();
+  if (readError) throw readError;
+  if (!proposal) throw new Error("삭제할 제안을 찾지 못했습니다.");
+
+  const imagePaths = collectProposalImagePaths(proposal, storageBucket);
+  if (imagePaths.length) {
+    const { error: storageError } = await client.storage
+      .from(storageBucket)
+      .remove(imagePaths);
+    if (storageError) throw storageError;
+  }
+
+  const { error: deleteError } = await client
+    .from("proposals")
+    .delete()
+    .eq("id", id);
+  if (deleteError) throw deleteError;
+
+  return { deletedImageCount: imagePaths.length };
 }
 
 class DemoStore {
@@ -364,8 +391,11 @@ class SupabaseStore {
   }
 
   async deleteProposal(id) {
-    const { error } = await this.client.from("proposals").delete().eq("id", id);
-    if (error) throw error;
+    return deleteProposalAndImages(
+      this.client,
+      this.config.storageBucket,
+      id,
+    );
   }
 
   async importEmployees(rows) {
