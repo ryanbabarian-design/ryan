@@ -237,87 +237,150 @@ function analyticsTable(rows, labelHeading) {
 }
 
 function renderDashboard() {
+  const metrics = dashboardMetrics(state.proposals);
   const report = dashboardBreakdown(state.proposals, getDashboardYearFromUrl());
   const recent = filterProposals(state.proposals).slice(0, 3);
+  const departments = [...new Set(state.proposals.map((item) => item.department).filter(Boolean))].sort();
   const selectedLabel = report.selectedYear === "all" ? "전체 연도" : `${report.selectedYear}년`;
+  const seededCount = state.proposals.filter((proposal) => proposal.id?.startsWith("seed-")).length;
 
   main.innerHTML = `
-    <section class="dashboard-header">
+    <section class="hero brand-hero">
+      <div class="hero-copy">
+        <span class="eyebrow">HANA METAL IDEA HUB</span>
+        <h1>작은 개선이<br><em>큰 변화를 만듭니다.</em></h1>
+        <p>기존 제안을 검색하고, 개선 전·후 사진과 함께 새로운 아이디어를 바로 접수하세요.</p>
+        <div class="hero-actions">
+          <button class="button button-primary" data-route="new"><span aria-hidden="true">＋</span> 새 제안 작성</button>
+          <button class="button button-secondary" data-route="list"><span aria-hidden="true">⌕</span> 유사 제안 검색</button>
+        </div>
+      </div>
+      <div class="hero-panel brand-hero-panel" aria-hidden="true">
+        <div class="hero-metal-lines"></div>
+        <div class="hero-metal-symbol">H</div>
+        <div class="hero-mini-card">
+          <span>올해 누적 제안</span>
+          <strong>${metrics.total.toLocaleString("ko-KR")}건</strong>
+          <small>기존 엑셀 ${seededCount.toLocaleString("ko-KR")}건 포함</small>
+        </div>
+      </div>
+    </section>
+
+    <section class="metric-grid workflow-metric-grid" aria-label="제안 현황 요약">
+      <button class="metric-card workflow-card total" data-route="list">
+        <span class="metric-icon" aria-hidden="true">♢</span>
+        <div><small>전체 제안</small><strong>${metrics.total.toLocaleString("ko-KR")}</strong></div>
+        <span class="metric-arrow">›</span>
+      </button>
+      <button class="metric-card workflow-card pending" data-route="list">
+        <span class="metric-icon" aria-hidden="true">◷</span>
+        <div><small>심사 대기</small><strong>${metrics.pending.toLocaleString("ko-KR")}</strong></div>
+        <span class="metric-arrow">›</span>
+      </button>
+      <button class="metric-card workflow-card adopted" data-route="list">
+        <span class="metric-icon" aria-hidden="true">✓</span>
+        <div><small>채택</small><strong>${metrics.adopted.toLocaleString("ko-KR")}</strong></div>
+        <span class="metric-arrow">›</span>
+      </button>
+      <button class="metric-card workflow-card completed" data-route="list">
+        <span class="metric-icon" aria-hidden="true">⚑</span>
+        <div><small>실시 완료</small><strong>${metrics.completed.toLocaleString("ko-KR")}</strong></div>
+        <span class="metric-arrow">›</span>
+      </button>
+    </section>
+
+    <section class="quick-search brand-quick-search">
       <div>
-        <span class="eyebrow">ANALYTICS DASHBOARD</span>
-        <h1>제안실적 대시보드</h1>
-        <p>제안건수와 예상 투입비용·포상금·효과금액을 연도별, 월별, 부서별로 확인합니다.</p>
+        <span class="eyebrow">DUPLICATE CHECK</span>
+        <h2>제안하기 전에 비슷한 아이디어가 있는지 검색하세요.</h2>
       </div>
-      <div class="dashboard-controls">
-        <label>조회 연도
-          <select id="dashboardYearFilter">
-            <option value="all" ${report.selectedYear === "all" ? "selected" : ""}>전체 연도</option>
-            ${report.years.map((year) => `<option value="${year}" ${report.selectedYear === year ? "selected" : ""}>${year}년</option>`).join("")}
-          </select>
-        </label>
-        <button class="button button-primary" data-route="new">새 제안 작성</button>
-        <button class="button button-ghost" data-route="list">접수현황</button>
+      <form id="quickSearchForm" class="search-box">
+        <input name="query" placeholder="예: 에어건, 절단기, 안전장치, 작업시간 단축" aria-label="유사 제안 검색어">
+        <button class="button button-primary" type="submit">⌕ 검색</button>
+      </form>
+      <div class="keyword-row">
+        <span class="keyword-label">추천 검색어</span>
+        ${departments.slice(0, 8).map((department) => `<button class="keyword" data-search="${escapeHtml(department)}">${escapeHtml(department)}</button>`).join("")}
       </div>
     </section>
 
-    <section class="dashboard-period-banner">
-      <div><span>현재 조회</span><strong>${escapeHtml(selectedLabel)}</strong></div>
-      <p>${report.selectedYear === "all" ? "등록된 전체 기간을 합산했습니다." : `${report.selectedYear}년 1월부터 12월까지의 실적입니다.`}</p>
-    </section>
-
-    <section class="metric-grid dashboard-money-grid" aria-label="선택 기간 제안 현황 요약">
-      <div class="metric-card analytics-kpi"><span class="metric-icon">💡</span><div><small>제안건수</small><strong>${report.totals.count.toLocaleString("ko-KR")}건</strong></div></div>
-      <div class="metric-card analytics-kpi cost"><span class="metric-icon">🧾</span><div><small>예상 투입비용</small><strong class="metric-money">${formatCurrency(report.totals.costTotal)}</strong></div></div>
-      <div class="metric-card analytics-kpi award"><span class="metric-icon">🏆</span><div><small>포상금</small><strong class="metric-money">${formatCurrency(report.totals.awardTotal)}</strong></div></div>
-      <div class="metric-card analytics-kpi effect"><span class="metric-icon">📈</span><div><small>효과금액</small><strong class="metric-money">${formatCurrency(report.totals.effectTotal)}</strong></div></div>
-    </section>
-
-    <section class="analytics-layout">
-      <article class="analytics-panel monthly-panel">
-        <div class="analytics-panel-head">
-          <div><span class="eyebrow">MONTHLY</span><h2>월별 제안실적</h2><p>월별 건수와 세 가지 금액을 함께 비교합니다.</p></div>
-          <span class="analytics-count">${report.monthly.reduce((sum, row) => sum + row.count, 0).toLocaleString("ko-KR")}건</span>
-        </div>
-        <div class="analytics-list monthly-list">
-          ${analyticsRows(report.monthly, "월별 집계자료가 없습니다.")}
-        </div>
-      </article>
-
-      <article class="analytics-panel department-panel">
-        <div class="analytics-panel-head">
-          <div><span class="eyebrow">DEPARTMENT</span><h2>부서별 제안실적</h2><p>제안건수가 많은 부서 순으로 표시합니다.</p></div>
-          <span class="analytics-count">${report.departments.length.toLocaleString("ko-KR")}개 부서</span>
-        </div>
-        <div class="analytics-list department-list">
-          ${analyticsRows(report.departments, "부서별 집계자료가 없습니다.")}
-        </div>
-      </article>
-    </section>
-
-    <section class="analytics-panel yearly-panel">
-      <div class="analytics-panel-head">
-        <div><span class="eyebrow">YEARLY</span><h2>연도별 종합현황</h2><p>전체 연도의 제안건수와 금액 합계를 비교합니다.</p></div>
-      </div>
-      ${analyticsTable(report.yearly, "연도")}
-    </section>
-
-    <section class="analytics-panel department-table-panel">
-      <div class="analytics-panel-head">
-        <div><span class="eyebrow">DETAIL TABLE</span><h2>${escapeHtml(selectedLabel)} 부서별 상세표</h2><p>표 형태로 정확한 건수와 금액을 확인합니다.</p></div>
-      </div>
-      ${analyticsTable(report.departments, "부서")}
-    </section>
-
-    <section class="section dashboard-recent">
+    <section class="section dashboard-recent brand-recent">
       <div class="section-heading">
         <div><span class="eyebrow">RECENT IDEAS</span><h2>최근 접수된 제안</h2></div>
-        <button class="button button-ghost" data-route="list">전체보기</button>
+        <button class="button button-ghost" data-route="list">전체보기 ›</button>
       </div>
-      ${recent.length ? `<div class="proposal-grid">${recent.map(proposalCard).join("")}</div>` : `<div class="analytics-empty">등록된 제안이 없습니다.</div>`}
+      ${recent.length
+        ? `<div class="proposal-grid">${recent.map(proposalCard).join("")}</div>`
+        : `<div class="analytics-empty">등록된 제안이 없습니다.</div>`}
+    </section>
+
+    <section class="analytics-dashboard" id="analytics">
+      <div class="analytics-dashboard-head">
+        <div>
+          <span class="eyebrow">PERFORMANCE ANALYTICS</span>
+          <h2>제안실적 종합 대시보드</h2>
+          <p>제안건수·예상 투입비용·포상금·효과금액을 연도별, 월별, 부서별로 확인합니다.</p>
+        </div>
+        <div class="dashboard-controls">
+          <label>조회 연도
+            <select id="dashboardYearFilter">
+              <option value="all" ${report.selectedYear === "all" ? "selected" : ""}>전체 연도</option>
+              ${report.years.map((year) => `<option value="${year}" ${report.selectedYear === year ? "selected" : ""}>${year}년</option>`).join("")}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="dashboard-period-banner">
+        <div><span>현재 조회</span><strong>${escapeHtml(selectedLabel)}</strong></div>
+        <p>${report.selectedYear === "all" ? "등록된 전체 기간을 합산했습니다." : `${report.selectedYear}년 1월부터 12월까지의 실적입니다.`}</p>
+      </div>
+
+      <section class="metric-grid dashboard-money-grid" aria-label="선택 기간 금액 현황">
+        <div class="metric-card analytics-kpi count"><span class="metric-icon">件</span><div><small>제안건수</small><strong>${report.totals.count.toLocaleString("ko-KR")}건</strong></div></div>
+        <div class="metric-card analytics-kpi cost"><span class="metric-icon">₩</span><div><small>예상 투입비용</small><strong class="metric-money">${formatCurrency(report.totals.costTotal)}</strong></div></div>
+        <div class="metric-card analytics-kpi award"><span class="metric-icon">賞</span><div><small>포상금</small><strong class="metric-money">${formatCurrency(report.totals.awardTotal)}</strong></div></div>
+        <div class="metric-card analytics-kpi effect"><span class="metric-icon">↗</span><div><small>효과금액</small><strong class="metric-money">${formatCurrency(report.totals.effectTotal)}</strong></div></div>
+      </section>
+
+      <section class="analytics-layout">
+        <article class="analytics-panel monthly-panel">
+          <div class="analytics-panel-head">
+            <div><span class="eyebrow">MONTHLY</span><h2>월별 제안실적</h2><p>월별 건수와 세 가지 금액을 함께 비교합니다.</p></div>
+            <span class="analytics-count">${report.monthly.reduce((sum, row) => sum + row.count, 0).toLocaleString("ko-KR")}건</span>
+          </div>
+          <div class="analytics-list monthly-list">
+            ${analyticsRows(report.monthly, "월별 집계자료가 없습니다.")}
+          </div>
+        </article>
+
+        <article class="analytics-panel department-panel">
+          <div class="analytics-panel-head">
+            <div><span class="eyebrow">DEPARTMENT</span><h2>부서별 제안실적</h2><p>제안건수가 많은 부서 순으로 표시합니다.</p></div>
+            <span class="analytics-count">${report.departments.length.toLocaleString("ko-KR")}개 부서</span>
+          </div>
+          <div class="analytics-list department-list">
+            ${analyticsRows(report.departments, "부서별 집계자료가 없습니다.")}
+          </div>
+        </article>
+      </section>
+
+      <section class="analytics-panel yearly-panel">
+        <div class="analytics-panel-head">
+          <div><span class="eyebrow">YEARLY</span><h2>연도별 종합현황</h2><p>전체 연도의 제안건수와 금액 합계를 비교합니다.</p></div>
+        </div>
+        ${analyticsTable(report.yearly, "연도")}
+      </section>
+
+      <section class="analytics-panel department-table-panel">
+        <div class="analytics-panel-head">
+          <div><span class="eyebrow">DETAIL TABLE</span><h2>${escapeHtml(selectedLabel)} 부서별 상세표</h2><p>표 형태로 정확한 건수와 금액을 확인합니다.</p></div>
+        </div>
+        ${analyticsTable(report.departments, "부서")}
+      </section>
     </section>
   `;
 }
-
 function getFiltersFromUrl() {
   const params = new URLSearchParams(location.hash.split("?")[1] || "");
   return {
