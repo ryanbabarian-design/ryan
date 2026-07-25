@@ -1,5 +1,6 @@
 import {
   calculateAward,
+  dashboardBreakdown,
   dashboardMetrics,
   filterProposals,
   formatCurrency,
@@ -173,64 +174,146 @@ function proposalCard(proposal) {
     </article>`;
 }
 
+function getDashboardYearFromUrl() {
+  const params = new URLSearchParams(location.hash.split("?")[1] || "");
+  return params.get("year") || "";
+}
+
+function analyticsRows(rows, emptyMessage) {
+  if (!rows.length) {
+    return `<div class="analytics-empty">${escapeHtml(emptyMessage)}</div>`;
+  }
+  const maxCount = Math.max(1, ...rows.map((row) => row.count));
+  return rows.map((row) => {
+    const width = row.count ? Math.max(7, Math.round((row.count / maxCount) * 100)) : 0;
+    return `
+      <article class="analytics-row">
+        <div class="analytics-row-main">
+          <div class="analytics-row-title">
+            <strong>${escapeHtml(row.label)}</strong>
+            <span>${row.count.toLocaleString("ko-KR")}건</span>
+          </div>
+          <div class="analytics-bar-track" aria-hidden="true">
+            <span style="width:${width}%"></span>
+          </div>
+        </div>
+        <dl class="analytics-amounts">
+          <div><dt>예상 투입비용</dt><dd>${formatCurrency(row.costTotal)}</dd></div>
+          <div><dt>포상금</dt><dd>${formatCurrency(row.awardTotal)}</dd></div>
+          <div><dt>효과금액</dt><dd>${formatCurrency(row.effectTotal)}</dd></div>
+        </dl>
+      </article>`;
+  }).join("");
+}
+
+function analyticsTable(rows, labelHeading) {
+  if (!rows.length) {
+    return `<div class="analytics-empty">집계할 데이터가 없습니다.</div>`;
+  }
+  return `
+    <div class="analytics-table-wrap">
+      <table class="analytics-table">
+        <thead>
+          <tr>
+            <th>${escapeHtml(labelHeading)}</th>
+            <th>제안건수</th>
+            <th>예상 투입비용</th>
+            <th>포상금</th>
+            <th>효과금액</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr>
+              <td><strong>${escapeHtml(row.label)}</strong></td>
+              <td>${row.count.toLocaleString("ko-KR")}건</td>
+              <td>${formatCurrency(row.costTotal)}</td>
+              <td>${formatCurrency(row.awardTotal)}</td>
+              <td class="effect-money">${formatCurrency(row.effectTotal)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
 function renderDashboard() {
-  const metrics = dashboardMetrics(state.proposals);
-  const recent = filterProposals(state.proposals).slice(0, 6);
-  const departments = [...new Set(state.proposals.map((item) => item.department))].sort();
+  const report = dashboardBreakdown(state.proposals, getDashboardYearFromUrl());
+  const recent = filterProposals(state.proposals).slice(0, 3);
+  const selectedLabel = report.selectedYear === "all" ? "전체 연도" : `${report.selectedYear}년`;
 
   main.innerHTML = `
-    <section class="hero">
-      <div class="hero-copy">
-        <span class="eyebrow">HANA METAL IDEA HUB</span>
-        <h1>작은 개선이<br><em>큰 변화를 만듭니다.</em></h1>
-        <p>기존 제안을 검색하고, 개선 전·후 사진과 함께 새로운 아이디어를 바로 접수하세요.</p>
-        <div class="hero-actions">
-          <button class="button button-primary" data-route="new"><span class="button-icon" aria-hidden="true">＋</span>새 제안 작성</button>
-          <button class="button button-secondary" data-route="list"><span class="button-icon search-icon" aria-hidden="true"></span>유사 제안 검색</button>
-        </div>
+    <section class="dashboard-header">
+      <div>
+        <span class="eyebrow">ANALYTICS DASHBOARD</span>
+        <h1>제안실적 대시보드</h1>
+        <p>제안건수와 예상 투입비용·포상금·효과금액을 연도별, 월별, 부서별로 확인합니다.</p>
       </div>
-      <div class="hero-panel" aria-hidden="true">
-        <div class="hero-brand-mark"><img src="./assets/hana-metal-mark.png" alt=""></div>
-        <div class="hero-mini-card">
-          <span>올해 누적 제안</span>
-          <strong>${metrics.total.toLocaleString("ko-KR")}건</strong>
-          <small>기존 엑셀 ${state.proposals.filter((p) => p.id?.startsWith("seed-")).length}건 포함</small>
-        </div>
+      <div class="dashboard-controls">
+        <label>조회 연도
+          <select id="dashboardYearFilter">
+            <option value="all" ${report.selectedYear === "all" ? "selected" : ""}>전체 연도</option>
+            ${report.years.map((year) => `<option value="${year}" ${report.selectedYear === year ? "selected" : ""}>${year}년</option>`).join("")}
+          </select>
+        </label>
+        <button class="button button-primary" data-route="new">새 제안 작성</button>
+        <button class="button button-ghost" data-route="list">접수현황</button>
       </div>
     </section>
 
-    <section class="metric-grid" aria-label="제안 현황 요약">
-      <div class="metric-card metric-red"><span class="metric-icon" aria-hidden="true">♧</span><div><small>전체 제안</small><strong>${metrics.total}</strong></div><span class="metric-chevron">›</span></div>
-      <div class="metric-card metric-orange"><span class="metric-icon" aria-hidden="true">◷</span><div><small>심사 대기</small><strong>${metrics.pending}</strong></div><span class="metric-chevron">›</span></div>
-      <div class="metric-card metric-gold"><span class="metric-icon" aria-hidden="true">✓</span><div><small>채택</small><strong>${metrics.adopted}</strong></div><span class="metric-chevron">›</span></div>
-      <div class="metric-card metric-dark"><span class="metric-icon" aria-hidden="true">⚑</span><div><small>실시 완료</small><strong>${metrics.completed}</strong></div><span class="metric-chevron">›</span></div>
+    <section class="dashboard-period-banner">
+      <div><span>현재 조회</span><strong>${escapeHtml(selectedLabel)}</strong></div>
+      <p>${report.selectedYear === "all" ? "등록된 전체 기간을 합산했습니다." : `${report.selectedYear}년 1월부터 12월까지의 실적입니다.`}</p>
     </section>
 
-    <section class="quick-search">
-      <div class="quick-search-heading">
-        <span class="quick-search-icon" aria-hidden="true">✓</span>
-        <div>
-          <span class="eyebrow">DUPLICATE CHECK</span>
-          <h2>제안하기 전에 비슷한 아이디어가 있는지 검색하세요.</h2>
+    <section class="metric-grid dashboard-money-grid" aria-label="선택 기간 제안 현황 요약">
+      <div class="metric-card analytics-kpi"><span class="metric-icon">💡</span><div><small>제안건수</small><strong>${report.totals.count.toLocaleString("ko-KR")}건</strong></div></div>
+      <div class="metric-card analytics-kpi cost"><span class="metric-icon">🧾</span><div><small>예상 투입비용</small><strong class="metric-money">${formatCurrency(report.totals.costTotal)}</strong></div></div>
+      <div class="metric-card analytics-kpi award"><span class="metric-icon">🏆</span><div><small>포상금</small><strong class="metric-money">${formatCurrency(report.totals.awardTotal)}</strong></div></div>
+      <div class="metric-card analytics-kpi effect"><span class="metric-icon">📈</span><div><small>효과금액</small><strong class="metric-money">${formatCurrency(report.totals.effectTotal)}</strong></div></div>
+    </section>
+
+    <section class="analytics-layout">
+      <article class="analytics-panel monthly-panel">
+        <div class="analytics-panel-head">
+          <div><span class="eyebrow">MONTHLY</span><h2>월별 제안실적</h2><p>월별 건수와 세 가지 금액을 함께 비교합니다.</p></div>
+          <span class="analytics-count">${report.monthly.reduce((sum, row) => sum + row.count, 0).toLocaleString("ko-KR")}건</span>
         </div>
-      </div>
-      <form id="quickSearchForm" class="search-box">
-        <input name="query" placeholder="예: 에어건, 절단기, 안전장치, 작업시간 단축" aria-label="유사 제안 검색어">
-        <button class="button button-primary" type="submit"><span class="button-icon search-icon" aria-hidden="true"></span>검색</button>
-      </form>
-      <div class="keyword-row">
-        <span class="keyword-label">추천 검색어</span>
-        ${departments.map((department) => `<button class="keyword" data-search="${escapeHtml(department)}">${escapeHtml(department)}</button>`).join("")}
-        ${["안전", "품질", "설비", "생산성"].filter((word) => !departments.includes(word)).map((word) => `<button class="keyword" data-search="${word}">${word}</button>`).join("")}
-      </div>
+        <div class="analytics-list monthly-list">
+          ${analyticsRows(report.monthly, "월별 집계자료가 없습니다.")}
+        </div>
+      </article>
+
+      <article class="analytics-panel department-panel">
+        <div class="analytics-panel-head">
+          <div><span class="eyebrow">DEPARTMENT</span><h2>부서별 제안실적</h2><p>제안건수가 많은 부서 순으로 표시합니다.</p></div>
+          <span class="analytics-count">${report.departments.length.toLocaleString("ko-KR")}개 부서</span>
+        </div>
+        <div class="analytics-list department-list">
+          ${analyticsRows(report.departments, "부서별 집계자료가 없습니다.")}
+        </div>
+      </article>
     </section>
 
-    <section class="section recent-section">
+    <section class="analytics-panel yearly-panel">
+      <div class="analytics-panel-head">
+        <div><span class="eyebrow">YEARLY</span><h2>연도별 종합현황</h2><p>전체 연도의 제안건수와 금액 합계를 비교합니다.</p></div>
+      </div>
+      ${analyticsTable(report.yearly, "연도")}
+    </section>
+
+    <section class="analytics-panel department-table-panel">
+      <div class="analytics-panel-head">
+        <div><span class="eyebrow">DETAIL TABLE</span><h2>${escapeHtml(selectedLabel)} 부서별 상세표</h2><p>표 형태로 정확한 건수와 금액을 확인합니다.</p></div>
+      </div>
+      ${analyticsTable(report.departments, "부서")}
+    </section>
+
+    <section class="section dashboard-recent">
       <div class="section-heading">
-        <div class="recent-heading"><span class="recent-flame" aria-hidden="true">◆</span><div><span class="eyebrow">RECENT IDEAS</span><h2>최근 접수된 제안</h2></div></div>
-        <button class="button button-ghost" data-route="list">전체보기 <span aria-hidden="true">›</span></button>
+        <div><span class="eyebrow">RECENT IDEAS</span><h2>최근 접수된 제안</h2></div>
+        <button class="button button-ghost" data-route="list">전체보기</button>
       </div>
-      <div class="proposal-grid">${recent.map(proposalCard).join("")}</div>
+      ${recent.length ? `<div class="proposal-grid">${recent.map(proposalCard).join("")}</div>` : `<div class="analytics-empty">등록된 제안이 없습니다.</div>`}
     </section>
   `;
 }
@@ -922,6 +1005,12 @@ document.addEventListener("submit", async (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  if (event.target.id === "dashboardYearFilter") {
+    const year = event.target.value || "all";
+    location.hash = `#dashboard?year=${encodeURIComponent(year)}`;
+    render();
+    return;
+  }
   if (event.target.id === "employeeSelect") {
     const option = event.target.selectedOptions[0];
     $("#departmentInput").value = option?.dataset.department || "";

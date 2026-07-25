@@ -90,3 +90,118 @@ test("toProposalCsv includes BOM and escaped Korean headers", () => {
   assert.match(csv, /"접수번호"/);
   assert.match(csv, /"Q26-001"/);
 });
+
+import { dashboardBreakdown } from "../js/core.js";
+
+const analyticsProposals = [
+  {
+    proposal_no: "Q25-001",
+    received_date: "2025-12-15",
+    department: "압연",
+    cost_amount: 10000,
+    award_amount: 5000,
+    effect_amount: 100000,
+  },
+  {
+    proposal_no: "Q26-001",
+    received_date: "2026-01-10",
+    department: "압연",
+    cost_amount: 20000,
+    award_amount: 10000,
+    effect_amount: 300000,
+  },
+  {
+    proposal_no: "Q26-002",
+    received_date: "2026-01-20",
+    department: "가공",
+    cost_amount: 30000,
+    award_amount: 50000,
+    effect_amount: 500000,
+  },
+  {
+    proposal_no: "Q26-003",
+    received_date: "2026-03-01",
+    department: "가공",
+    cost_amount: "invalid",
+    award_amount: null,
+    effect_amount: 200000,
+  },
+];
+
+test("dashboardBreakdown aggregates year, month, department, and every amount", () => {
+  const report = dashboardBreakdown(analyticsProposals, "2026");
+
+  assert.deepEqual(report.years, ["2026", "2025"]);
+  assert.equal(report.selectedYear, "2026");
+  assert.deepEqual(report.totals, {
+    count: 3,
+    costTotal: 50000,
+    awardTotal: 60000,
+    effectTotal: 1000000,
+  });
+
+  assert.deepEqual(report.monthly[0], {
+    key: "2026-01",
+    label: "1월",
+    count: 2,
+    costTotal: 50000,
+    awardTotal: 60000,
+    effectTotal: 800000,
+  });
+  assert.equal(report.monthly.length, 12);
+  assert.equal(report.monthly[1].count, 0);
+  assert.equal(report.monthly[2].effectTotal, 200000);
+
+  assert.deepEqual(report.departments, [
+    {
+      key: "가공",
+      label: "가공",
+      count: 2,
+      costTotal: 30000,
+      awardTotal: 50000,
+      effectTotal: 700000,
+    },
+    {
+      key: "압연",
+      label: "압연",
+      count: 1,
+      costTotal: 20000,
+      awardTotal: 10000,
+      effectTotal: 300000,
+    },
+  ]);
+});
+
+test("dashboardBreakdown shows all-year monthly rows and yearly totals", () => {
+  const report = dashboardBreakdown(analyticsProposals, "all");
+
+  assert.equal(report.selectedYear, "all");
+  assert.equal(report.totals.count, 4);
+  assert.deepEqual(report.yearly, [
+    {
+      key: "2026",
+      label: "2026년",
+      count: 3,
+      costTotal: 50000,
+      awardTotal: 60000,
+      effectTotal: 1000000,
+    },
+    {
+      key: "2025",
+      label: "2025년",
+      count: 1,
+      costTotal: 10000,
+      awardTotal: 5000,
+      effectTotal: 100000,
+    },
+  ]);
+  assert.equal(report.monthly[0].key, "2025-12");
+  assert.equal(report.monthly[1].key, "2026-01");
+  assert.equal(report.monthly[2].key, "2026-03");
+});
+
+test("dashboardBreakdown defaults to the latest available year", () => {
+  const report = dashboardBreakdown(analyticsProposals, "2099");
+  assert.equal(report.selectedYear, "2026");
+  assert.equal(report.totals.count, 3);
+});
