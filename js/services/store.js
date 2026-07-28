@@ -1,5 +1,6 @@
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
 import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, sha256 } from "../core.js";
+import { mergeRetainedWithUploaded } from "../image-manager.js?v=1.7";
 
 const PROPOSAL_KEY = "proposal-system:v1:proposals";
 const EMPLOYEE_KEY = "proposal-system:v1:employees";
@@ -164,11 +165,18 @@ class DemoStore {
       filesToDataUrls(afterFiles),
     ]);
 
+    const retainedBefore = Array.isArray(patch.before_images)
+      ? patch.before_images
+      : current.before_images;
+    const retainedAfter = Array.isArray(patch.after_images)
+      ? patch.after_images
+      : current.after_images;
+
     proposals[index] = normalizeProposal({
       ...current,
       ...patch,
-      before_images: newBefore.length ? newBefore : current.before_images,
-      after_images: newAfter.length ? newAfter : current.after_images,
+      before_images: mergeRetainedWithUploaded(retainedBefore, newBefore),
+      after_images: mergeRetainedWithUploaded(retainedAfter, newAfter),
       updated_at: new Date().toISOString(),
     });
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
@@ -332,8 +340,12 @@ class SupabaseStore {
     ]);
 
     const payload = { ...patch };
-    if (beforeImages.length) payload.before_images = beforeImages;
-    if (afterImages.length) payload.after_images = afterImages;
+    if (Array.isArray(patch.before_images) || beforeImages.length) {
+      payload.before_images = mergeRetainedWithUploaded(patch.before_images, beforeImages);
+    }
+    if (Array.isArray(patch.after_images) || afterImages.length) {
+      payload.after_images = mergeRetainedWithUploaded(patch.after_images, afterImages);
+    }
 
     const { data, error } = await this.client.rpc("edit_proposal_with_pin", {
       p_proposal_no: proposalNo,
@@ -342,6 +354,35 @@ class SupabaseStore {
     });
     if (error) throw error;
     return normalizeProposal(Array.isArray(data) ? data[0] : data);
+  }
+
+  async cleanupRemovedImages() {
+    const { data: queued, error: queueError } = await this.client
+      .from("proposal_image_cleanup")
+      .select("id,image_path")
+      .order("id")
+      .limit(100);
+
+    if (queueError) {
+      if (queueError.code === "42P01") return 0;
+      throw queueError;
+    }
+    if (!queued?.length) return 0;
+
+    const paths = queued.map((row) => row.image_path).filter(Boolean);
+    if (paths.length) {
+      const { error: storageError } = await this.client.storage
+        .from(this.config.storageBucket)
+        .remove(paths);
+      if (storageError) throw storageError;
+    }
+
+    const { error: deleteError } = await this.client
+      .from("proposal_image_cleanup")
+      .delete()
+      .in("id", queued.map((row) => row.id));
+    if (deleteError) throw deleteError;
+    return paths.length;
   }
 
   async loginAdmin(email, password) {
@@ -357,6 +398,11 @@ class SupabaseStore {
     if (!admin) {
       await this.client.auth.signOut();
       throw new Error("관리자 권한이 없는 계정입니다.");
+    }
+    try {
+      await this.cleanupRemovedImages();
+    } catch (cleanupError) {
+      console.warn("삭제 예약 사진 정리에 실패했습니다.", cleanupError);
     }
     return { email: data.user.email, displayName: admin.display_name };
   }

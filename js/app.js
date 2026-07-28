@@ -12,7 +12,16 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js";
-import { createStore } from "./services/store.js";
+import { createStore } from "./services/store.js?v=1.7";
+import {
+  appendImageFiles,
+  createImageSelection,
+  getNewFiles,
+  getRetainedImages,
+  MAX_IMAGES_PER_SECTION,
+  removeSelectedImage,
+  totalSelectedImages,
+} from "./image-manager.js?v=1.7";
 import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js";
 
 const store = createStore();
@@ -28,6 +37,87 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const main = $("#app");
 const toast = $("#toast");
+
+let formImageSelections = null;
+const filePreviewUrls = new WeakMap();
+
+function ensureImageEditorStyles() {
+  if (document.querySelector('link[data-image-editor-style]')) return;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "./css/image-editor.css?v=1.7";
+  link.dataset.imageEditorStyle = "true";
+  document.head.append(link);
+}
+
+function initializeFormImageSelections(proposal) {
+  formImageSelections = {
+    before: createImageSelection(proposal?.before_images || []),
+    after: createImageSelection(proposal?.after_images || []),
+  };
+}
+
+function imageSectionLabel(section) {
+  return section === "before" ? "개선 전" : "개선 후";
+}
+
+function filePreviewUrl(file) {
+  if (!filePreviewUrls.has(file)) {
+    filePreviewUrls.set(file, URL.createObjectURL(file));
+  }
+  return filePreviewUrls.get(file);
+}
+
+function renderFormImagePreview(section) {
+  const selection = formImageSelections?.[section];
+  const preview = $(`#${section}Preview`);
+  const count = $(`#${section}ImageCount`);
+  if (!selection || !preview) return;
+
+  const existing = selection.existing.map((image, index) => `
+    <div class="preview-item editable-preview-item">
+      <img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || `${imageSectionLabel(section)} 사진`)}">
+      <span>${escapeHtml(image.name || "등록된 사진")}</span>
+      <em>기존</em>
+      <button type="button" class="preview-remove" data-action="remove-form-image" data-section="${section}" data-kind="existing" data-index="${index}" aria-label="사진 삭제">×</button>
+    </div>
+  `);
+
+  const added = selection.files.map((file, index) => `
+    <div class="preview-item editable-preview-item">
+      <img src="${escapeHtml(filePreviewUrl(file))}" alt="${escapeHtml(file.name)}">
+      <span>${escapeHtml(file.name)}</span>
+      <em class="new-image-tag">신규</em>
+      <button type="button" class="preview-remove" data-action="remove-form-image" data-section="${section}" data-kind="new" data-index="${index}" aria-label="사진 삭제">×</button>
+    </div>
+  `);
+
+  preview.innerHTML = [...existing, ...added].join("") || `
+    <div class="image-preview-empty">
+      <strong>등록된 사진 없음</strong>
+      <span>위 영역을 눌러 사진을 추가하세요.</span>
+    </div>
+  `;
+
+  if (count) {
+    const total = totalSelectedImages(selection);
+    count.textContent = `${total}/${MAX_IMAGES_PER_SECTION}장`;
+    count.classList.toggle("limit", total >= MAX_IMAGES_PER_SECTION);
+  }
+}
+
+function appendFormImages(section, files) {
+  const current = formImageSelections?.[section] || createImageSelection([]);
+  const result = appendImageFiles(current, files, MAX_IMAGES_PER_SECTION);
+  formImageSelections[section] = result.selection;
+  renderFormImagePreview(section);
+
+  if (result.rejected.length) {
+    showToast(`${imageSectionLabel(section)} 사진은 기존 사진과 합쳐 최대 ${MAX_IMAGES_PER_SECTION}장까지 등록할 수 있습니다.`, "error");
+  } else if (result.duplicates.length) {
+    showToast("이미 선택한 동일 사진은 중복으로 추가하지 않았습니다.", "error");
+  }
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -542,6 +632,7 @@ function renderProposalForm(proposalNo = "") {
   }
 
   const isEdit = Boolean(proposal);
+  initializeFormImageSelections(proposal);
   main.innerHTML = `
     <section class="page-header">
       <div>
@@ -602,11 +693,12 @@ function renderProposalForm(proposalNo = "") {
             <label class="field">현재 문제점 <b>*</b>
               <textarea name="current_problem" rows="8" required placeholder="어떤 문제가 있고, 왜 불편하거나 위험한지 작성">${escapeHtml(proposal?.current_problem || "")}</textarea>
             </label>
-            <label class="upload-box">개선 전 사진
-              <input id="beforeImages" type="file" name="before_images" accept="image/jpeg,image/png,image/webp" multiple>
-              <span>사진 선택 · 최대 4장 · 장당 5MB</span>
+            <label class="upload-box image-add-box">개선 전 사진 추가
+              <input id="beforeImages" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+              <span>한 장씩 여러 번 추가하거나 여러 장을 한꺼번에 선택할 수 있습니다.</span>
+              <small id="beforeImageCount" class="image-count">0/${MAX_IMAGES_PER_SECTION}장</small>
             </label>
-            <div id="beforePreview" class="preview-grid">${proposal ? renderImages(proposal.before_images, "개선 전 사진") : ""}</div>
+            <div id="beforePreview" class="preview-grid editable-preview-grid"></div>
           </div>
 
           <div class="comparison-arrow">→</div>
@@ -616,11 +708,12 @@ function renderProposalForm(proposalNo = "") {
             <label class="field">개선방안 <b>*</b>
               <textarea name="improvement_plan" rows="8" required placeholder="무엇을 어떻게 바꿀지 구체적으로 작성">${escapeHtml(proposal?.improvement_plan || "")}</textarea>
             </label>
-            <label class="upload-box">개선 후·참고 사진
-              <input id="afterImages" type="file" name="after_images" accept="image/jpeg,image/png,image/webp" multiple>
-              <span>실시 전이면 도면·예시 사진도 가능</span>
+            <label class="upload-box image-add-box">개선 후·참고 사진 추가
+              <input id="afterImages" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+              <span>한 장씩 여러 번 추가할 수 있으며, 실시 전이면 도면·예시 사진도 가능합니다.</span>
+              <small id="afterImageCount" class="image-count">0/${MAX_IMAGES_PER_SECTION}장</small>
             </label>
-            <div id="afterPreview" class="preview-grid">${proposal ? renderImages(proposal.after_images, "개선 후 사진") : ""}</div>
+            <div id="afterPreview" class="preview-grid editable-preview-grid"></div>
           </div>
         </div>
       </section>
@@ -652,6 +745,8 @@ function renderProposalForm(proposalNo = "") {
       </div>
     </form>
   `;
+  renderFormImagePreview("before");
+  renderFormImagePreview("after");
 }
 
 function renderDetail(proposalNo) {
@@ -1011,17 +1106,6 @@ function renderAdminEdit(id) {
   `;
 }
 
-function previewFiles(input, target) {
-  const files = Array.from(input.files || []).slice(0, 4);
-  if (input.files.length > 4) {
-    showToast("사진은 구분별 최대 4장까지 등록됩니다.", "error");
-  }
-  target.innerHTML = files.map((file) => {
-    const url = URL.createObjectURL(file);
-    return `<div class="preview-item"><img src="${url}" alt="${escapeHtml(file.name)}"><span>${escapeHtml(file.name)}</span></div>`;
-  }).join("");
-}
-
 function buildProposalPayload(form) {
   const data = new FormData(form);
   const select = form.querySelector("#employeeSelect");
@@ -1055,10 +1139,15 @@ async function handleProposalSubmit(form) {
     throw new Error("수정번호는 숫자 4자리로 입력하세요.");
   }
 
-  const beforeFiles = $("#beforeImages").files;
-  const afterFiles = $("#afterImages").files;
-  if (beforeFiles.length > 4 || afterFiles.length > 4) {
-    throw new Error("사진은 개선 전·후 각각 최대 4장까지 등록할 수 있습니다.");
+  const beforeSelection = formImageSelections?.before || createImageSelection([]);
+  const afterSelection = formImageSelections?.after || createImageSelection([]);
+  const beforeFiles = getNewFiles(beforeSelection);
+  const afterFiles = getNewFiles(afterSelection);
+  if (
+    totalSelectedImages(beforeSelection) > MAX_IMAGES_PER_SECTION
+    || totalSelectedImages(afterSelection) > MAX_IMAGES_PER_SECTION
+  ) {
+    throw new Error(`사진은 개선 전·후 각각 최대 ${MAX_IMAGES_PER_SECTION}장까지 등록할 수 있습니다.`);
   }
 
   const submitButton = form.querySelector('button[type="submit"]');
@@ -1068,7 +1157,11 @@ async function handleProposalSubmit(form) {
   try {
     let saved;
     if (isEdit) {
-      const patch = { ...payload };
+      const patch = {
+        ...payload,
+        before_images: getRetainedImages(beforeSelection),
+        after_images: getRetainedImages(afterSelection),
+      };
       delete patch.edit_pin;
       saved = await store.updateProposalWithPin(
         form.dataset.no,
@@ -1159,7 +1252,14 @@ document.addEventListener("click", async (event) => {
 
   const { action } = actionButton.dataset;
   try {
-    if (action === "detail") {
+    if (action === "remove-form-image") {
+      const section = actionButton.dataset.section;
+      const kind = actionButton.dataset.kind;
+      const index = Number(actionButton.dataset.index);
+      if (!formImageSelections?.[section]) return;
+      formImageSelections[section] = removeSelectedImage(formImageSelections[section], kind, index);
+      renderFormImagePreview(section);
+    } else if (action === "detail") {
       go(`detail/${actionButton.dataset.no}`);
     } else if (action === "print-proposal") {
       const printUrl = `${location.href.split("#")[0]}#print/${encodeURIComponent(actionButton.dataset.no)}`;
@@ -1267,8 +1367,14 @@ document.addEventListener("change", (event) => {
     const option = event.target.selectedOptions[0];
     $("#departmentInput").value = option?.dataset.department || "";
   }
-  if (event.target.id === "beforeImages") previewFiles(event.target, $("#beforePreview"));
-  if (event.target.id === "afterImages") previewFiles(event.target, $("#afterPreview"));
+  if (event.target.id === "beforeImages") {
+    appendFormImages("before", event.target.files);
+    event.target.value = "";
+  }
+  if (event.target.id === "afterImages") {
+    appendFormImages("after", event.target.files);
+    event.target.value = "";
+  }
 });
 
 document.addEventListener("input", (event) => {
@@ -1283,4 +1389,7 @@ document.addEventListener("input", (event) => {
 });
 
 window.addEventListener("hashchange", render);
-window.addEventListener("DOMContentLoaded", init);
+window.addEventListener("DOMContentLoaded", () => {
+  ensureImageEditorStyles();
+  init();
+});
