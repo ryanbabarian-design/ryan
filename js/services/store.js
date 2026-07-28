@@ -17,7 +17,211 @@ function todayIso() {
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
+// ==================================================
+// 사진 자동축소 및 WebP 압축 설정
+// ==================================================
 
+const IMAGE_MAX_EDGE = 1600;
+const IMAGE_WEBP_QUALITY = 0.78;
+const IMAGE_MAX_SOURCE_BYTES = 20 * 1024 * 1024;
+
+/**
+ * 브라우저에서 이미지 파일을 디코딩합니다.
+ */
+async function decodeImageFile(file) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bitmap = await createImageBitmap(file, {
+        imageOrientation: "from-image",
+      });
+
+      return {
+        source: bitmap,
+        width: bitmap.width,
+        height: bitmap.height,
+        cleanup() {
+          bitmap.close();
+        },
+      };
+    } catch (firstError) {
+      try {
+        const bitmap = await createImageBitmap(file);
+
+        return {
+          source: bitmap,
+          width: bitmap.width,
+          height: bitmap.height,
+          cleanup() {
+            bitmap.close();
+          },
+        };
+      } catch (secondError) {
+        // 아래의 Image 방식으로 다시 시도합니다.
+      }
+    }
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => {
+      resolve({
+        source: image,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        cleanup() {
+          URL.revokeObjectURL(objectUrl);
+        },
+      });
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(
+        new Error(
+          `${file.name}: 사진을 읽을 수 없습니다. JPG, PNG 또는 WebP 사진을 사용해주세요.`,
+        ),
+      );
+    };
+
+    image.src = objectUrl;
+  });
+}
+
+/**
+ * Canvas 이미지를 WebP Blob으로 변환합니다.
+ */
+function canvasToWebpBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error("사진 WebP 변환에 실패했습니다."));
+          return;
+        }
+
+        if (blob.type !== "image/webp") {
+          reject(
+            new Error(
+              "현재 브라우저에서 WebP 변환을 지원하지 않습니다. 최신 Chrome 또는 Edge를 사용해주세요.",
+            ),
+          );
+          return;
+        }
+
+        resolve(blob);
+      },
+      "image/webp",
+      IMAGE_WEBP_QUALITY,
+    );
+  });
+}
+
+/**
+ * 원본 사진을 최대 1600px로 축소하고 WebP로 압축합니다.
+ */
+async function compressImageToWebp(file) {
+  if (!(file instanceof File)) {
+    throw new Error("올바른 사진 파일이 아닙니다.");
+  }
+
+  if (!file.type?.startsWith("image/")) {
+    throw new Error(`${file.name}: 사진 파일만 등록할 수 있습니다.`);
+  }
+
+  if (file.size > IMAGE_MAX_SOURCE_BYTES) {
+    throw new Error(`${file.name}: 원본 사진은 파일당 20MB 이하만 가능합니다.`);
+  }
+
+  const decoded = await decodeImageFile(file);
+
+  try {
+    const sourceWidth = decoded.width;
+    const sourceHeight = decoded.height;
+
+    if (!sourceWidth || !sourceHeight) {
+      throw new Error(`${file.name}: 사진 크기를 확인할 수 없습니다.`);
+    }
+
+    const longestEdge = Math.max(sourceWidth, sourceHeight);
+    const scale = Math.min(1, IMAGE_MAX_EDGE / longestEdge);
+
+    const targetWidth = Math.max(1, Math.round(sourceWidth * scale));
+    const targetHeight = Math.max(1, Math.round(sourceHeight * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+
+    const context = canvas.getContext("2d", {
+      alpha: true,
+    });
+
+    if (!context) {
+      throw new Error(`${file.name}: 사진 압축 기능을 실행할 수 없습니다.`);
+    }
+
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+
+    context.drawImage(
+      decoded.source,
+      0,
+      0,
+      sourceWidth,
+      sourceHeight,
+      0,
+      0,
+      targetWidth,
+      targetHeight,
+    );
+
+    const webpBlob = await canvasToWebpBlob(canvas);
+
+    const originalBaseName =
+      file.name.replace(/\.[^/.]+$/, "") || "proposal-image";
+
+    const compressedFile = new File(
+      [webpBlob],
+      `${originalBaseName}.webp`,
+      {
+        type: "image/webp",
+        lastModified: Date.now(),
+      },
+    );
+
+    console.info(
+      `[사진 압축] ${file.name}: ` +
+        `${Math.round(file.size / 1024).toLocaleString("ko-KR")}KB → ` +
+        `${Math.round(compressedFile.size / 1024).toLocaleString("ko-KR")}KB ` +
+        `(${sourceWidth}×${sourceHeight} → ${targetWidth}×${targetHeight})`,
+    );
+
+    return compressedFile;
+  } finally {
+    decoded.cleanup();
+  }
+}
+
+/**
+ * File을 Data URL로 변환합니다.
+ * 데모 모드의 localStorage 저장에 사용합니다.
+ */
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => resolve(reader.result);
+
+    reader.onerror = () => {
+      reject(new Error(`${file.name} 파일을 읽지 못했습니다.`));
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
 function normalizeProposal(row) {
   return {
     before_images: [],
