@@ -17,10 +17,11 @@ function todayIso() {
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
+
+
 // ==================================================
 // 사진 자동축소 및 WebP 압축 설정
 // ==================================================
-
 const IMAGE_MAX_EDGE = 1600;
 const IMAGE_WEBP_QUALITY = 0.78;
 const IMAGE_MAX_SOURCE_BYTES = 20 * 1024 * 1024;
@@ -56,7 +57,7 @@ async function decodeImageFile(file) {
           },
         };
       } catch (secondError) {
-        // 아래의 Image 방식으로 다시 시도합니다.
+        // Image 방식으로 다시 시도합니다.
       }
     }
   }
@@ -147,7 +148,6 @@ async function compressImageToWebp(file) {
 
     const longestEdge = Math.max(sourceWidth, sourceHeight);
     const scale = Math.min(1, IMAGE_MAX_EDGE / longestEdge);
-
     const targetWidth = Math.max(1, Math.round(sourceWidth * scale));
     const targetHeight = Math.max(1, Math.round(sourceHeight * scale));
 
@@ -155,17 +155,13 @@ async function compressImageToWebp(file) {
     canvas.width = targetWidth;
     canvas.height = targetHeight;
 
-    const context = canvas.getContext("2d", {
-      alpha: true,
-    });
-
+    const context = canvas.getContext("2d", { alpha: true });
     if (!context) {
       throw new Error(`${file.name}: 사진 압축 기능을 실행할 수 없습니다.`);
     }
 
     context.imageSmoothingEnabled = true;
     context.imageSmoothingQuality = "high";
-
     context.drawImage(
       decoded.source,
       0,
@@ -179,18 +175,11 @@ async function compressImageToWebp(file) {
     );
 
     const webpBlob = await canvasToWebpBlob(canvas);
-
-    const originalBaseName =
-      file.name.replace(/\.[^/.]+$/, "") || "proposal-image";
-
-    const compressedFile = new File(
-      [webpBlob],
-      `${originalBaseName}.webp`,
-      {
-        type: "image/webp",
-        lastModified: Date.now(),
-      },
-    );
+    const originalBaseName = file.name.replace(/\.[^/.]+$/, "") || "proposal-image";
+    const compressedFile = new File([webpBlob], `${originalBaseName}.webp`, {
+      type: "image/webp",
+      lastModified: Date.now(),
+    });
 
     console.info(
       `[사진 압축] ${file.name}: ` +
@@ -214,14 +203,11 @@ function fileToDataUrl(file) {
     const reader = new FileReader();
 
     reader.onload = () => resolve(reader.result);
-
-    reader.onerror = () => {
-      reject(new Error(`${file.name} 파일을 읽지 못했습니다.`));
-    };
-
+    reader.onerror = () => reject(new Error(`${file.name} 파일을 읽지 못했습니다.`));
     reader.readAsDataURL(file);
   });
 }
+
 function normalizeProposal(row) {
   return {
     before_images: [],
@@ -242,26 +228,20 @@ function normalizeProposal(row) {
 }
 
 async function filesToDataUrls(files) {
-  return Promise.all(
-    Array.from(files ?? []).map(
-      (file) =>
-        new Promise((resolve, reject) => {
-          if (file.size > 5 * 1024 * 1024) {
-            reject(new Error(`${file.name}: 파일당 5MB 이하만 등록할 수 있습니다.`));
-            return;
-          }
-          const reader = new FileReader();
-          reader.onload = () =>
-            resolve({
-              url: reader.result,
-              name: file.name,
-              type: file.type,
-            });
-          reader.onerror = () => reject(new Error(`${file.name} 파일을 읽지 못했습니다.`));
-          reader.readAsDataURL(file);
-        }),
-    ),
-  );
+  const results = [];
+
+  for (const originalFile of Array.from(files ?? [])) {
+    const compressedFile = await compressImageToWebp(originalFile);
+    const dataUrl = await fileToDataUrl(compressedFile);
+
+    results.push({
+      url: dataUrl,
+      name: compressedFile.name,
+      type: compressedFile.type,
+    });
+  }
+
+  return results;
 }
 
 
@@ -497,24 +477,29 @@ class SupabaseStore {
     const uploaded = [];
     const submissionId = crypto.randomUUID();
 
-    for (const [index, file] of Array.from(files ?? []).entries()) {
-      if (file.size > 5 * 1024 * 1024) {
-        throw new Error(`${file.name}: 파일당 5MB 이하만 등록할 수 있습니다.`);
-      }
-      const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
-      const path = `submissions/${submissionId}/${section}-${index + 1}.${extension}`;
+    for (const [index, originalFile] of Array.from(files ?? []).entries()) {
+      const compressedFile = await compressImageToWebp(originalFile);
+      const path = `submissions/${submissionId}/${section}-${index + 1}.webp`;
+
       const { error } = await this.client.storage
         .from(this.config.storageBucket)
-        .upload(path, file, {
+        .upload(path, compressedFile, {
           cacheControl: "3600",
           upsert: false,
-          contentType: file.type,
+          contentType: "image/webp",
         });
+
       if (error) throw error;
+
       const { data } = this.client.storage
         .from(this.config.storageBucket)
         .getPublicUrl(path);
-      uploaded.push({ url: data.publicUrl, name: file.name, path });
+
+      uploaded.push({
+        url: data.publicUrl,
+        name: compressedFile.name,
+        path,
+      });
     }
 
     return uploaded;
