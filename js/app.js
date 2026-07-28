@@ -12,7 +12,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js";
-import { createStore } from "./services/store.js?v=1.7";
+import { createStore } from "./services/store.js?v=1.8";
 import {
   appendImageFiles,
   createImageSelection,
