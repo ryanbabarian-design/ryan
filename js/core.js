@@ -3,27 +3,27 @@ export const WORKFLOW_STATUSES = ["접수", "심사중", "심사완료"];
 export const IMPLEMENTATION_STATUSES = ["미실시", "진행중", "완료"];
 export const PAYMENT_STATUSES = ["미지급", "예정", "완료"];
 
-export function normalizeImplementationProgress(status = "미실시", implementedDate = "") {
-  const normalizedStatus = String(status || "").trim();
-  const normalizedDate = String(implementedDate || "").trim();
-
+export function normalizeImplementationDetails(status, implementedDate) {
+  const normalizedStatus = String(status ?? "").trim();
   if (!IMPLEMENTATION_STATUSES.includes(normalizedStatus)) {
-    throw new Error("실시상태는 미실시, 진행중, 완료 중에서 선택하세요.");
+    throw new Error("실시상태를 다시 선택하세요.");
   }
 
-  if (normalizedStatus === "완료") {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) {
-      throw new Error("실시 완료일을 입력하세요.");
-    }
+  if (normalizedStatus !== "완료") {
     return {
       implementation_status: normalizedStatus,
-      implemented_date: normalizedDate,
+      implemented_date: null,
     };
+  }
+
+  const normalizedDate = String(implementedDate ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) {
+    throw new Error("완료 상태는 실시일을 입력하세요.");
   }
 
   return {
     implementation_status: normalizedStatus,
-    implemented_date: null,
+    implemented_date: normalizedDate,
   };
 }
 
@@ -110,6 +110,176 @@ export function dashboardMetrics(proposals) {
     awardTotal: proposals.reduce((sum, item) => sum + Number(item.award_amount || 0), 0),
     effectTotal: proposals.reduce((sum, item) => sum + Number(item.effect_amount || 0), 0),
   };
+}
+
+function safeAmount(value) {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function proposalDateParts(proposal) {
+  const match = String(proposal?.received_date || "").match(/^(\d{4})-(\d{2})/);
+  if (!match) return null;
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return null;
+  return { year: match[1], month };
+}
+
+function createBreakdownRow(key, label) {
+  return {
+    key,
+    label,
+    count: 0,
+    costTotal: 0,
+    awardTotal: 0,
+    effectTotal: 0,
+  };
+}
+
+function addProposalToBreakdown(row, proposal) {
+  row.count += 1;
+  row.costTotal += safeAmount(proposal.cost_amount);
+  row.awardTotal += safeAmount(proposal.award_amount);
+  row.effectTotal += safeAmount(proposal.effect_amount);
+  return row;
+}
+
+export function dashboardBreakdown(proposals, requestedYear = "") {
+  const source = Array.isArray(proposals) ? proposals : [];
+  const dated = source
+    .map((proposal) => ({ proposal, date: proposalDateParts(proposal) }))
+    .filter((item) => item.date);
+  const years = [...new Set(dated.map((item) => item.date.year))]
+    .sort((a, b) => b.localeCompare(a));
+
+  const requested = String(requestedYear || "");
+  const selectedYear = requested === "all"
+    ? "all"
+    : years.includes(requested)
+      ? requested
+      : years[0] || "all";
+
+  const filtered = selectedYear === "all"
+    ? dated
+    : dated.filter((item) => item.date.year === selectedYear);
+
+  const totals = filtered.reduce(
+    (row, item) => addProposalToBreakdown(row, item.proposal),
+    createBreakdownRow("total", "합계"),
+  );
+  delete totals.key;
+  delete totals.label;
+
+  const yearlyMap = new Map();
+  for (const item of dated) {
+    const key = item.date.year;
+    const row = yearlyMap.get(key) || createBreakdownRow(key, `${key}년`);
+    yearlyMap.set(key, addProposalToBreakdown(row, item.proposal));
+  }
+  const yearly = Array.from(yearlyMap.values())
+    .sort((a, b) => b.key.localeCompare(a.key));
+
+  let monthly;
+  if (selectedYear === "all") {
+    const monthlyMap = new Map();
+    for (const item of filtered) {
+      const key = `${item.date.year}-${String(item.date.month).padStart(2, "0")}`;
+      const row = monthlyMap.get(key) || createBreakdownRow(key, `${item.date.year}년 ${item.date.month}월`);
+      monthlyMap.set(key, addProposalToBreakdown(row, item.proposal));
+    }
+    monthly = Array.from(monthlyMap.values()).sort((a, b) => a.key.localeCompare(b.key));
+  } else {
+    monthly = Array.from({ length: 12 }, (_, index) => {
+      const month = index + 1;
+      return createBreakdownRow(
+        `${selectedYear}-${String(month).padStart(2, "0")}`,
+        `${month}월`,
+      );
+    });
+    for (const item of filtered) {
+      addProposalToBreakdown(monthly[item.date.month - 1], item.proposal);
+    }
+  }
+
+  const departmentMap = new Map();
+  for (const item of filtered) {
+    const key = String(item.proposal.department || "미지정").trim() || "미지정";
+    const row = departmentMap.get(key) || createBreakdownRow(key, key);
+    departmentMap.set(key, addProposalToBreakdown(row, item.proposal));
+  }
+  const departments = Array.from(departmentMap.values()).sort((a, b) =>
+    b.count - a.count || b.effectTotal - a.effectTotal || a.label.localeCompare(b.label, "ko")
+  );
+
+  return {
+    years,
+    selectedYear,
+    totals,
+    yearly,
+    monthly,
+    departments,
+  };
+}
+
+
+export function dashboardHighlights(proposals, requestedYear = "") {
+  const source = Array.isArray(proposals) ? proposals : [];
+  const { selectedYear } = dashboardBreakdown(source, requestedYear);
+  const filtered = source.filter((proposal) => {
+    const date = proposalDateParts(proposal);
+    if (!date) return false;
+    return selectedYear === "all" || date.year === selectedYear;
+  });
+
+  const proposerMap = new Map();
+  for (const proposal of filtered) {
+    const name = String(proposal.proposer_name || "미지정").trim() || "미지정";
+    const department = String(proposal.department || "미지정").trim() || "미지정";
+    const key = `${name}\u0000${department}`;
+    const row = proposerMap.get(key) || {
+      name,
+      department,
+      count: 0,
+      adoptedCount: 0,
+      totalScore: 0,
+    };
+    row.count += 1;
+    if (proposal.review_result === "채택") row.adoptedCount += 1;
+    if (proposal.score !== null && proposal.score !== "" && Number.isFinite(Number(proposal.score))) {
+      row.totalScore += Number(proposal.score);
+    }
+    proposerMap.set(key, row);
+  }
+
+  const topProposer = Array.from(proposerMap.values()).sort((a, b) =>
+    b.count - a.count
+    || b.adoptedCount - a.adoptedCount
+    || b.totalScore - a.totalScore
+    || a.name.localeCompare(b.name, "ko")
+  )[0] || null;
+
+  const scored = filtered
+    .filter((proposal) => proposal.score !== null && proposal.score !== "" && Number.isFinite(Number(proposal.score)))
+    .sort((a, b) =>
+      Number(b.score) - Number(a.score)
+      || safeAmount(b.effect_amount) - safeAmount(a.effect_amount)
+      || safeAmount(b.award_amount) - safeAmount(a.award_amount)
+      || String(b.received_date || "").localeCompare(String(a.received_date || ""))
+      || String(b.proposal_no || "").localeCompare(String(a.proposal_no || ""))
+    );
+
+  const best = scored[0];
+  const bestProposal = best ? {
+    proposal_no: String(best.proposal_no || ""),
+    title: String(best.title || "제안명 없음"),
+    proposer_name: String(best.proposer_name || "미지정"),
+    department: String(best.department || "미지정"),
+    score: Number(best.score),
+    award_amount: safeAmount(best.award_amount),
+    effect_amount: safeAmount(best.effect_amount),
+  } : null;
+
+  return { selectedYear, topProposer, bestProposal };
 }
 
 export async function sha256(value) {

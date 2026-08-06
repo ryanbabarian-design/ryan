@@ -484,6 +484,20 @@ img { max-width: 100%; }
 .field input[readonly] { background: var(--gray-100); color: var(--gray-700); }
 .field textarea { resize: vertical; line-height: 1.65; }
 .field.compact { max-width: 330px; }
+.field-help {
+  color: var(--gray-500);
+  font-size: 11px;
+  font-weight: 650;
+}
+.implementation-section {
+  background: linear-gradient(135deg, #fff, #fffaf2);
+}
+.implementation-grid { align-items: start; }
+#implementedDateField.is-disabled { opacity: .55; }
+#implementedDateField.is-disabled input {
+  background: var(--gray-100);
+  cursor: not-allowed;
+}
 .similar-box {
   display: grid;
   grid-template-columns: 250px 1fr;

@@ -1,17 +1,29 @@
 import {
   calculateAward,
+  dashboardBreakdown,
+  dashboardHighlights,
   dashboardMetrics,
   filterProposals,
   formatCurrency,
   formatDate,
   IMPLEMENTATION_STATUSES,
-  normalizeImplementationProgress,
+  normalizeImplementationDetails,
   PAYMENT_STATUSES,
   REVIEW_RESULTS,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js";
-import { createStore } from "./services/store.js";
+} from "./core.js?v=1.8";
+import { createStore } from "./services/store.js?v=1.8";
+import {
+  appendImageFiles,
+  createImageSelection,
+  getNewFiles,
+  getRetainedImages,
+  MAX_IMAGES_PER_SECTION,
+  removeSelectedImage,
+  totalSelectedImages,
+} from "./image-manager.js?v=1.7";
+import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js";
 
 const store = createStore();
 const state = {
@@ -26,6 +38,87 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const main = $("#app");
 const toast = $("#toast");
+
+let formImageSelections = null;
+const filePreviewUrls = new WeakMap();
+
+function ensureImageEditorStyles() {
+  if (document.querySelector('link[data-image-editor-style]')) return;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "./css/image-editor.css?v=1.7";
+  link.dataset.imageEditorStyle = "true";
+  document.head.append(link);
+}
+
+function initializeFormImageSelections(proposal) {
+  formImageSelections = {
+    before: createImageSelection(proposal?.before_images || []),
+    after: createImageSelection(proposal?.after_images || []),
+  };
+}
+
+function imageSectionLabel(section) {
+  return section === "before" ? "개선 전" : "개선 후";
+}
+
+function filePreviewUrl(file) {
+  if (!filePreviewUrls.has(file)) {
+    filePreviewUrls.set(file, URL.createObjectURL(file));
+  }
+  return filePreviewUrls.get(file);
+}
+
+function renderFormImagePreview(section) {
+  const selection = formImageSelections?.[section];
+  const preview = $(`#${section}Preview`);
+  const count = $(`#${section}ImageCount`);
+  if (!selection || !preview) return;
+
+  const existing = selection.existing.map((image, index) => `
+    <div class="preview-item editable-preview-item">
+      <img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || `${imageSectionLabel(section)} 사진`)}">
+      <span>${escapeHtml(image.name || "등록된 사진")}</span>
+      <em>기존</em>
+      <button type="button" class="preview-remove" data-action="remove-form-image" data-section="${section}" data-kind="existing" data-index="${index}" aria-label="사진 삭제">×</button>
+    </div>
+  `);
+
+  const added = selection.files.map((file, index) => `
+    <div class="preview-item editable-preview-item">
+      <img src="${escapeHtml(filePreviewUrl(file))}" alt="${escapeHtml(file.name)}">
+      <span>${escapeHtml(file.name)}</span>
+      <em class="new-image-tag">신규</em>
+      <button type="button" class="preview-remove" data-action="remove-form-image" data-section="${section}" data-kind="new" data-index="${index}" aria-label="사진 삭제">×</button>
+    </div>
+  `);
+
+  preview.innerHTML = [...existing, ...added].join("") || `
+    <div class="image-preview-empty">
+      <strong>등록된 사진 없음</strong>
+      <span>위 영역을 눌러 사진을 추가하세요.</span>
+    </div>
+  `;
+
+  if (count) {
+    const total = totalSelectedImages(selection);
+    count.textContent = `${total}/${MAX_IMAGES_PER_SECTION}장`;
+    count.classList.toggle("limit", total >= MAX_IMAGES_PER_SECTION);
+  }
+}
+
+function appendFormImages(section, files) {
+  const current = formImageSelections?.[section] || createImageSelection([]);
+  const result = appendImageFiles(current, files, MAX_IMAGES_PER_SECTION);
+  formImageSelections[section] = result.selection;
+  renderFormImagePreview(section);
+
+  if (result.rejected.length) {
+    showToast(`${imageSectionLabel(section)} 사진은 기존 사진과 합쳐 최대 ${MAX_IMAGES_PER_SECTION}장까지 등록할 수 있습니다.`, "error");
+  } else if (result.duplicates.length) {
+    showToast("이미 선택한 동일 사진은 중복으로 추가하지 않았습니다.", "error");
+  }
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -127,7 +220,8 @@ async function init() {
 
 function render() {
   const [route = "dashboard"] = routeParts();
-  setActiveNav(route === "detail" || route === "edit" ? "list" : route);
+  document.body.classList.toggle("print-route", route === "print");
+  setActiveNav(route === "detail" || route === "edit" || route === "print" ? "list" : route);
   $("#modeBadge").textContent = store.mode === "demo" ? "데모 모드" : "Supabase 연결";
   $("#modeBadge").className = `mode-badge ${store.mode}`;
 
@@ -144,6 +238,7 @@ function render() {
   else if (route === "new") renderProposalForm();
   else if (route === "list") renderList();
   else if (route === "detail") renderDetail(routeParts()[1]);
+  else if (route === "print") renderPrint(routeParts()[1]);
   else if (route === "edit") renderProposalForm(routeParts()[1]);
   else if (route === "admin") renderAdmin(routeParts()[1], routeParts()[2]);
   else renderDashboard();
@@ -174,68 +269,267 @@ function proposalCard(proposal) {
     </article>`;
 }
 
+function getDashboardYearFromUrl() {
+  const params = new URLSearchParams(location.hash.split("?")[1] || "");
+  return params.get("year") || "";
+}
+
+function analyticsRows(rows, emptyMessage) {
+  if (!rows.length) {
+    return `<div class="analytics-empty">${escapeHtml(emptyMessage)}</div>`;
+  }
+  const maxCount = Math.max(1, ...rows.map((row) => row.count));
+  return rows.map((row) => {
+    const width = row.count ? Math.max(7, Math.round((row.count / maxCount) * 100)) : 0;
+    return `
+      <article class="analytics-row">
+        <div class="analytics-row-main">
+          <div class="analytics-row-title">
+            <strong>${escapeHtml(row.label)}</strong>
+            <span>${row.count.toLocaleString("ko-KR")}건</span>
+          </div>
+          <div class="analytics-bar-track" aria-hidden="true">
+            <span style="width:${width}%"></span>
+          </div>
+        </div>
+        <dl class="analytics-amounts">
+          <div><dt>예상 투입비용</dt><dd>${formatCurrency(row.costTotal)}</dd></div>
+          <div><dt>포상금</dt><dd>${formatCurrency(row.awardTotal)}</dd></div>
+          <div><dt>효과금액</dt><dd>${formatCurrency(row.effectTotal)}</dd></div>
+        </dl>
+      </article>`;
+  }).join("");
+}
+
+function analyticsTable(rows, labelHeading) {
+  if (!rows.length) {
+    return `<div class="analytics-empty">집계할 데이터가 없습니다.</div>`;
+  }
+  return `
+    <div class="analytics-table-wrap">
+      <table class="analytics-table">
+        <thead>
+          <tr>
+            <th>${escapeHtml(labelHeading)}</th>
+            <th>제안건수</th>
+            <th>예상 투입비용</th>
+            <th>포상금</th>
+            <th>효과금액</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr>
+              <td><strong>${escapeHtml(row.label)}</strong></td>
+              <td>${row.count.toLocaleString("ko-KR")}건</td>
+              <td>${formatCurrency(row.costTotal)}</td>
+              <td>${formatCurrency(row.awardTotal)}</td>
+              <td class="effect-money">${formatCurrency(row.effectTotal)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
 function renderDashboard() {
   const metrics = dashboardMetrics(state.proposals);
-  const recent = filterProposals(state.proposals).slice(0, 6);
-  const departments = [...new Set(state.proposals.map((item) => item.department))].sort();
+  const report = dashboardBreakdown(state.proposals, getDashboardYearFromUrl());
+  const highlights = dashboardHighlights(state.proposals, report.selectedYear);
+  const recent = filterProposals(state.proposals).slice(0, 3);
+  const departments = [...new Set(state.proposals.map((item) => item.department).filter(Boolean))].sort();
+  const selectedLabel = report.selectedYear === "all" ? "전체 연도" : `${report.selectedYear}년`;
+  const seededCount = state.proposals.filter((proposal) => proposal.id?.startsWith("seed-")).length;
 
   main.innerHTML = `
-    <section class="hero">
+    <section class="hero brand-hero">
       <div class="hero-copy">
         <span class="eyebrow">HANA METAL IDEA HUB</span>
         <h1>작은 개선이<br><em>큰 변화를 만듭니다.</em></h1>
         <p>기존 제안을 검색하고, 개선 전·후 사진과 함께 새로운 아이디어를 바로 접수하세요.</p>
         <div class="hero-actions">
-          <button class="button button-primary" data-route="new"><span class="button-icon" aria-hidden="true">＋</span>새 제안 작성</button>
-          <button class="button button-secondary" data-route="list"><span class="button-icon search-icon" aria-hidden="true"></span>유사 제안 검색</button>
+          <button class="button button-primary" data-route="new"><span aria-hidden="true">＋</span> 새 제안 작성</button>
+          <button class="button button-secondary" data-route="list"><span aria-hidden="true">⌕</span> 유사 제안 검색</button>
         </div>
       </div>
-      <div class="hero-panel" aria-hidden="true">
-        <div class="hero-brand-mark"><img src="./assets/hana-metal-mark.png" alt=""></div>
+      <div class="hero-panel brand-hero-panel" aria-hidden="true">
+        <div class="hero-metal-lines"></div>
+        <div class="hero-metal-symbol">H</div>
         <div class="hero-mini-card">
           <span>올해 누적 제안</span>
           <strong>${metrics.total.toLocaleString("ko-KR")}건</strong>
-          <small>기존 엑셀 ${state.proposals.filter((p) => p.id?.startsWith("seed-")).length}건 포함</small>
+          <small>기존 엑셀 ${seededCount.toLocaleString("ko-KR")}건 포함</small>
         </div>
       </div>
     </section>
 
-    <section class="metric-grid" aria-label="제안 현황 요약">
-      <div class="metric-card metric-red"><span class="metric-icon" aria-hidden="true">♧</span><div><small>전체 제안</small><strong>${metrics.total}</strong></div><span class="metric-chevron">›</span></div>
-      <div class="metric-card metric-orange"><span class="metric-icon" aria-hidden="true">◷</span><div><small>심사 대기</small><strong>${metrics.pending}</strong></div><span class="metric-chevron">›</span></div>
-      <div class="metric-card metric-gold"><span class="metric-icon" aria-hidden="true">✓</span><div><small>채택</small><strong>${metrics.adopted}</strong></div><span class="metric-chevron">›</span></div>
-      <div class="metric-card metric-dark"><span class="metric-icon" aria-hidden="true">⚑</span><div><small>실시 완료</small><strong>${metrics.completed}</strong></div><span class="metric-chevron">›</span></div>
+    <section class="metric-grid workflow-metric-grid" aria-label="제안 현황 요약">
+      <button class="metric-card workflow-card total" data-route="list">
+        <span class="metric-icon" aria-hidden="true">♢</span>
+        <div><small>전체 제안</small><strong>${metrics.total.toLocaleString("ko-KR")}</strong></div>
+        <span class="metric-arrow">›</span>
+      </button>
+      <button class="metric-card workflow-card pending" data-route="list">
+        <span class="metric-icon" aria-hidden="true">◷</span>
+        <div><small>심사 대기</small><strong>${metrics.pending.toLocaleString("ko-KR")}</strong></div>
+        <span class="metric-arrow">›</span>
+      </button>
+      <button class="metric-card workflow-card adopted" data-route="list">
+        <span class="metric-icon" aria-hidden="true">✓</span>
+        <div><small>채택</small><strong>${metrics.adopted.toLocaleString("ko-KR")}</strong></div>
+        <span class="metric-arrow">›</span>
+      </button>
+      <button class="metric-card workflow-card completed" data-route="list">
+        <span class="metric-icon" aria-hidden="true">⚑</span>
+        <div><small>실시 완료</small><strong>${metrics.completed.toLocaleString("ko-KR")}</strong></div>
+        <span class="metric-arrow">›</span>
+      </button>
     </section>
 
-    <section class="quick-search">
-      <div class="quick-search-heading">
-        <span class="quick-search-icon" aria-hidden="true">✓</span>
-        <div>
-          <span class="eyebrow">DUPLICATE CHECK</span>
-          <h2>제안하기 전에 비슷한 아이디어가 있는지 검색하세요.</h2>
-        </div>
+    <section class="quick-search brand-quick-search">
+      <div>
+        <span class="eyebrow">DUPLICATE CHECK</span>
+        <h2>제안하기 전에 비슷한 아이디어가 있는지 검색하세요.</h2>
       </div>
       <form id="quickSearchForm" class="search-box">
         <input name="query" placeholder="예: 에어건, 절단기, 안전장치, 작업시간 단축" aria-label="유사 제안 검색어">
-        <button class="button button-primary" type="submit"><span class="button-icon search-icon" aria-hidden="true"></span>검색</button>
+        <button class="button button-primary" type="submit">⌕ 검색</button>
       </form>
       <div class="keyword-row">
         <span class="keyword-label">추천 검색어</span>
-        ${departments.map((department) => `<button class="keyword" data-search="${escapeHtml(department)}">${escapeHtml(department)}</button>`).join("")}
-        ${["안전", "품질", "설비", "생산성"].filter((word) => !departments.includes(word)).map((word) => `<button class="keyword" data-search="${word}">${word}</button>`).join("")}
+        ${departments.slice(0, 8).map((department) => `<button class="keyword" data-search="${escapeHtml(department)}">${escapeHtml(department)}</button>`).join("")}
       </div>
     </section>
 
-    <section class="section recent-section">
+    <section class="section dashboard-recent brand-recent">
       <div class="section-heading">
-        <div class="recent-heading"><span class="recent-flame" aria-hidden="true">◆</span><div><span class="eyebrow">RECENT IDEAS</span><h2>최근 접수된 제안</h2></div></div>
-        <button class="button button-ghost" data-route="list">전체보기 <span aria-hidden="true">›</span></button>
+        <div><span class="eyebrow">RECENT IDEAS</span><h2>최근 접수된 제안</h2></div>
+        <button class="button button-ghost" data-route="list">전체보기 ›</button>
       </div>
-      <div class="proposal-grid">${recent.map(proposalCard).join("")}</div>
+      ${recent.length
+        ? `<div class="proposal-grid">${recent.map(proposalCard).join("")}</div>`
+        : `<div class="analytics-empty">등록된 제안이 없습니다.</div>`}
+    </section>
+
+    <section class="analytics-dashboard" id="analytics">
+      <div class="analytics-dashboard-head">
+        <div>
+          <span class="eyebrow">PERFORMANCE ANALYTICS</span>
+          <h2>제안실적 종합 대시보드</h2>
+          <p>제안건수·예상 투입비용·포상금·효과금액을 연도별, 월별, 부서별로 확인합니다.</p>
+        </div>
+        <div class="dashboard-controls">
+          <label>조회 연도
+            <select id="dashboardYearFilter">
+              <option value="all" ${report.selectedYear === "all" ? "selected" : ""}>전체 연도</option>
+              ${report.years.map((year) => `<option value="${year}" ${report.selectedYear === year ? "selected" : ""}>${year}년</option>`).join("")}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="dashboard-period-banner">
+        <div><span>현재 조회</span><strong>${escapeHtml(selectedLabel)}</strong></div>
+        <p>${report.selectedYear === "all" ? "등록된 전체 기간을 합산했습니다." : `${report.selectedYear}년 1월부터 12월까지의 실적입니다.`}</p>
+      </div>
+
+      <section class="metric-grid dashboard-money-grid" aria-label="선택 기간 금액 현황">
+        <div class="metric-card analytics-kpi count"><span class="metric-icon">件</span><div><small>제안건수</small><strong>${report.totals.count.toLocaleString("ko-KR")}건</strong></div></div>
+        <div class="metric-card analytics-kpi cost"><span class="metric-icon">₩</span><div><small>예상 투입비용</small><strong class="metric-money">${formatCurrency(report.totals.costTotal)}</strong></div></div>
+        <div class="metric-card analytics-kpi award"><span class="metric-icon">賞</span><div><small>포상금</small><strong class="metric-money">${formatCurrency(report.totals.awardTotal)}</strong></div></div>
+        <div class="metric-card analytics-kpi effect"><span class="metric-icon">↗</span><div><small>효과금액</small><strong class="metric-money">${formatCurrency(report.totals.effectTotal)}</strong></div></div>
+      </section>
+
+      <section class="analytics-layout">
+        <article class="analytics-panel monthly-panel">
+          <div class="analytics-panel-head">
+            <div><span class="eyebrow">MONTHLY</span><h2>월별 제안실적</h2><p>월별 건수와 세 가지 금액을 함께 비교합니다.</p></div>
+            <span class="analytics-count">${report.monthly.reduce((sum, row) => sum + row.count, 0).toLocaleString("ko-KR")}건</span>
+          </div>
+          <div class="analytics-list monthly-list">
+            ${analyticsRows(report.monthly, "월별 집계자료가 없습니다.")}
+          </div>
+        </article>
+
+        <div class="analytics-side-stack">
+          <article class="analytics-panel department-panel">
+            <div class="analytics-panel-head">
+              <div><span class="eyebrow">DEPARTMENT</span><h2>부서별 제안실적</h2><p>제안건수가 많은 부서 순으로 표시합니다.</p></div>
+              <span class="analytics-count">${report.departments.length.toLocaleString("ko-KR")}개 부서</span>
+            </div>
+            <div class="analytics-list department-list">
+              ${analyticsRows(report.departments, "부서별 집계자료가 없습니다.")}
+            </div>
+          </article>
+
+          <section class="dashboard-highlight-list" aria-label="우수 제안 하이라이트">
+            <article class="dashboard-highlight-card top-proposer-card">
+              <div class="highlight-card-icon" aria-hidden="true">★</div>
+              <div class="highlight-card-body">
+                <span class="eyebrow">MOST ACTIVE</span>
+                <h2>최다제안</h2>
+                ${highlights.topProposer ? `
+                  <div class="highlight-winner-row">
+                    <div>
+                      <strong>${escapeHtml(highlights.topProposer.name)}</strong>
+                      <span>${escapeHtml(highlights.topProposer.department)}</span>
+                    </div>
+                    <b>${highlights.topProposer.count.toLocaleString("ko-KR")}건</b>
+                  </div>
+                  <dl class="highlight-stats">
+                    <div><dt>채택</dt><dd>${highlights.topProposer.adoptedCount.toLocaleString("ko-KR")}건</dd></div>
+                    <div><dt>점수 합계</dt><dd>${highlights.topProposer.totalScore.toLocaleString("ko-KR")}점</dd></div>
+                  </dl>
+                  <button class="highlight-link" data-search="${escapeHtml(highlights.topProposer.name)}">제안내역 보기 ›</button>
+                ` : `
+                  <div class="highlight-empty">선택 기간에 등록된 제안자가 없습니다.</div>
+                `}
+                <p class="highlight-rule">제안건수 기준 · 동률 시 채택건수와 점수합계 순</p>
+              </div>
+            </article>
+
+            <article class="dashboard-highlight-card best-proposal-card">
+              <div class="highlight-card-icon" aria-hidden="true">♛</div>
+              <div class="highlight-card-body">
+                <span class="eyebrow">BEST IDEA</span>
+                <h2>최우수제안</h2>
+                ${highlights.bestProposal ? `
+                  <div class="best-proposal-title">
+                    <span>${escapeHtml(highlights.bestProposal.proposal_no)}</span>
+                    <strong>${escapeHtml(highlights.bestProposal.title)}</strong>
+                    <small>${escapeHtml(highlights.bestProposal.proposer_name)} · ${escapeHtml(highlights.bestProposal.department)}</small>
+                  </div>
+                  <dl class="highlight-stats best-stats">
+                    <div><dt>심사점수</dt><dd>${highlights.bestProposal.score.toLocaleString("ko-KR")}점</dd></div>
+                    <div><dt>포상금</dt><dd>${formatCurrency(highlights.bestProposal.award_amount)}</dd></div>
+                    <div><dt>효과금액</dt><dd>${formatCurrency(highlights.bestProposal.effect_amount)}</dd></div>
+                  </dl>
+                  <button class="highlight-link" data-action="detail" data-no="${escapeHtml(highlights.bestProposal.proposal_no)}">제안 상세보기 ›</button>
+                ` : `
+                  <div class="highlight-empty">심사점수가 입력된 제안이 없습니다.</div>
+                `}
+                <p class="highlight-rule">심사점수 기준 · 동률 시 효과금액과 포상금 순</p>
+              </div>
+            </article>
+          </section>
+        </div>
+      </section>
+
+      <section class="analytics-panel yearly-panel">
+        <div class="analytics-panel-head">
+          <div><span class="eyebrow">YEARLY</span><h2>연도별 종합현황</h2><p>전체 연도의 제안건수와 금액 합계를 비교합니다.</p></div>
+        </div>
+        ${analyticsTable(report.yearly, "연도")}
+      </section>
+
+      <section class="analytics-panel department-table-panel">
+        <div class="analytics-panel-head">
+          <div><span class="eyebrow">DETAIL TABLE</span><h2>${escapeHtml(selectedLabel)} 부서별 상세표</h2><p>표 형태로 정확한 건수와 금액을 확인합니다.</p></div>
+        </div>
+        ${analyticsTable(report.departments, "부서")}
+      </section>
     </section>
   `;
 }
-
 function getFiltersFromUrl() {
   const params = new URLSearchParams(location.hash.split("?")[1] || "");
   return {
@@ -331,6 +625,22 @@ function renderSimilar(title, excludeNo = "") {
   `).join("");
 }
 
+function syncImplementationDateField() {
+  const statusSelect = $("#implementationStatus");
+  const dateInput = $("#implementedDateInput");
+  const dateField = $("#implementedDateField");
+  if (!statusSelect || !dateInput || !dateField) return;
+
+  const isCompleted = statusSelect.value === "완료";
+  dateInput.disabled = !isCompleted;
+  dateInput.required = isCompleted;
+  dateField.classList.toggle("is-disabled", !isCompleted);
+
+  if (!isCompleted) {
+    dateInput.value = "";
+  }
+}
+
 function renderProposalForm(proposalNo = "") {
   const proposal = proposalNo ? state.proposals.find((item) => item.proposal_no === proposalNo) : null;
   if (proposalNo && !proposal) {
@@ -339,6 +649,7 @@ function renderProposalForm(proposalNo = "") {
   }
 
   const isEdit = Boolean(proposal);
+  initializeFormImageSelections(proposal);
   main.innerHTML = `
     <section class="page-header">
       <div>
@@ -399,11 +710,12 @@ function renderProposalForm(proposalNo = "") {
             <label class="field">현재 문제점 <b>*</b>
               <textarea name="current_problem" rows="8" required placeholder="어떤 문제가 있고, 왜 불편하거나 위험한지 작성">${escapeHtml(proposal?.current_problem || "")}</textarea>
             </label>
-            <label class="upload-box">개선 전 사진
-              <input id="beforeImages" type="file" name="before_images" accept="image/jpeg,image/png,image/webp" multiple>
-              <span>사진 선택 · 최대 4장 · 장당 5MB</span>
+            <label class="upload-box image-add-box">개선 전 사진 추가
+              <input id="beforeImages" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+              <span>한 장씩 여러 번 추가하거나 여러 장을 한꺼번에 선택할 수 있습니다.</span>
+              <small id="beforeImageCount" class="image-count">0/${MAX_IMAGES_PER_SECTION}장</small>
             </label>
-            <div id="beforePreview" class="preview-grid">${proposal ? renderImages(proposal.before_images, "개선 전 사진") : ""}</div>
+            <div id="beforePreview" class="preview-grid editable-preview-grid"></div>
           </div>
 
           <div class="comparison-arrow">→</div>
@@ -413,11 +725,12 @@ function renderProposalForm(proposalNo = "") {
             <label class="field">개선방안 <b>*</b>
               <textarea name="improvement_plan" rows="8" required placeholder="무엇을 어떻게 바꿀지 구체적으로 작성">${escapeHtml(proposal?.improvement_plan || "")}</textarea>
             </label>
-            <label class="upload-box">개선 후·참고 사진
-              <input id="afterImages" type="file" name="after_images" accept="image/jpeg,image/png,image/webp" multiple>
-              <span>실시 전이면 도면·예시 사진도 가능</span>
+            <label class="upload-box image-add-box">개선 후·참고 사진 추가
+              <input id="afterImages" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+              <span>한 장씩 여러 번 추가할 수 있으며, 실시 전이면 도면·예시 사진도 가능합니다.</span>
+              <small id="afterImageCount" class="image-count">0/${MAX_IMAGES_PER_SECTION}장</small>
             </label>
-            <div id="afterPreview" class="preview-grid">${proposal ? renderImages(proposal.after_images, "개선 후 사진") : ""}</div>
+            <div id="afterPreview" class="preview-grid editable-preview-grid"></div>
           </div>
         </div>
       </section>
@@ -432,16 +745,17 @@ function renderProposalForm(proposalNo = "") {
         </label>
       </section>
 
-      <section class="form-section">
-        <div class="form-section-title"><span>05</span><div><h2>제안 실시현황</h2><p>현재 제안이 어느 단계인지 선택하세요. 완료일 때만 실시일을 입력합니다.</p></div></div>
-        <div class="form-grid two">
+      <section class="form-section implementation-section">
+        <div class="form-section-title"><span>05</span><div><h2>제안 실시현황</h2><p>제안이 현재 어느 단계인지 선택하세요. 완료된 경우 실제 실시일을 입력합니다.</p></div></div>
+        <div class="form-grid two implementation-grid">
           <label class="field">실시상태 <b>*</b>
             <select id="implementationStatus" name="implementation_status" required>
-              ${IMPLEMENTATION_STATUSES.map((v) => `<option ${String(proposal?.implementation_status || "미실시") === v ? "selected" : ""}>${v}</option>`).join("")}
+              ${IMPLEMENTATION_STATUSES.map((status) => `<option value="${status}" ${(proposal?.implementation_status || "미실시") === status ? "selected" : ""}>${status}</option>`).join("")}
             </select>
           </label>
-          <label class="field">실시일
-            <input id="implementationDate" type="date" name="implemented_date" value="${escapeHtml(proposal?.implemented_date || "")}">
+          <label id="implementedDateField" class="field">실시일 <b>*</b>
+            <input id="implementedDateInput" name="implemented_date" type="date" value="${escapeHtml(proposal?.implemented_date || "")}">
+            <small class="field-help">‘완료’ 상태일 때만 실시일이 저장됩니다.</small>
           </label>
         </div>
       </section>
@@ -463,8 +777,9 @@ function renderProposalForm(proposalNo = "") {
       </div>
     </form>
   `;
-
-  syncImplementationDateField(main.querySelector("#proposalForm"));
+  renderFormImagePreview("before");
+  renderFormImagePreview("after");
+  syncImplementationDateField();
 }
 
 function renderDetail(proposalNo) {
@@ -490,6 +805,7 @@ function renderDetail(proposalNo) {
         <div class="detail-actions">
           ${statusBadge(proposal.status)}
           ${statusBadge(proposal.review_result)}
+          <button class="button button-ghost print-open-button" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
           ${!proposal.locked && proposal.status === "접수"
             ? `<button class="button button-secondary" data-route="edit/${escapeHtml(proposal.proposal_no)}">제안자 수정</button>`
             : ""}
@@ -538,6 +854,128 @@ function renderDetail(proposalNo) {
       </dl>
     </section>
   `;
+}
+
+
+function renderPrintImages(images, label) {
+  if (!images.length) {
+    return `<div class="print-image-empty">${escapeHtml(label)} 미등록</div>`;
+  }
+  return `
+    <div class="print-image-grid ${images.length === 1 ? "single" : ""}">
+      ${images.map((url, index) => `
+        <figure class="print-image-item">
+          <img src="${escapeHtml(url)}" alt="${escapeHtml(label)} ${index + 1}">
+          <figcaption>${escapeHtml(label)} ${index + 1}</figcaption>
+        </figure>`).join("")}
+    </div>`;
+}
+
+function renderPrint(proposalNo) {
+  const proposal = state.proposals.find((item) => item.proposal_no === proposalNo);
+  if (!proposal) {
+    main.innerHTML = `<div class="empty-state"><h2>제안을 찾지 못했습니다.</h2><button class="button button-primary" data-route="list">목록으로</button></div>`;
+    return;
+  }
+
+  const model = buildPrintModel(proposal);
+  const approvalCells = PRINT_APPROVAL_ROLES.map((role) => `
+    <th>${escapeHtml(role)}</th>`).join("");
+  const approvalSignatures = PRINT_APPROVAL_ROLES.map(() => `<td></td>`).join("");
+  const categoryMark = (checked) => `<span class="print-checkbox ${checked ? "checked" : ""}">${checked ? "✓" : ""}</span>`;
+
+  main.innerHTML = `
+    <section class="proposal-print-screen">
+      <div class="print-toolbar">
+        <div>
+          <strong>${escapeHtml(model.proposalNo)} 제안서 인쇄</strong>
+          <span>내용이 길거나 사진이 많으면 다음 페이지로 자연스럽게 이어집니다.</span>
+        </div>
+        <div class="print-toolbar-actions">
+          <button class="button button-ghost" data-route="detail/${escapeHtml(model.proposalNo)}">상세화면</button>
+          <button class="button button-primary" data-action="trigger-print">인쇄 / PDF 저장</button>
+        </div>
+      </div>
+
+      <article class="proposal-print-document">
+        <div class="print-form-reference">[별지 제 1 호] 제안서</div>
+        <header class="print-document-header">
+          <div class="print-logo-cell"><img src="./assets/hana-metal-logo.png" alt="HANA METAL"></div>
+          <h1>제 안 서</h1>
+          <table class="print-approval-table" aria-label="결재란">
+            <tbody>
+              <tr><td class="approval-side" rowspan="2">결<br>재</td>${approvalCells}</tr>
+              <tr>${approvalSignatures}</tr>
+            </tbody>
+          </table>
+        </header>
+
+        <table class="print-info-table">
+          <tbody>
+            <tr><th>제 목</th><td colspan="3" class="print-title-cell">${escapeHtml(model.title)}</td></tr>
+            <tr><th>제 안 일</th><td>${escapeHtml(model.proposalDate)}</td><th>접수번호</th><td>${escapeHtml(model.proposalNo)}</td></tr>
+            <tr><th>제 안 자</th><td>${escapeHtml(model.proposerName)} (${escapeHtml(model.department)})</td><th>심사결과</th><td>${escapeHtml(model.reviewResult)}</td></tr>
+            <tr><th>시행부서</th><td>${escapeHtml(model.implementingDepartment)}</td><th>제안점수</th><td>${escapeHtml(model.scoreText)}</td></tr>
+            <tr><th>실시일/예정일</th><td>${escapeHtml(model.implementedDate)}</td><th>실시여부</th><td>${escapeHtml(model.implementationStatus)}</td></tr>
+          </tbody>
+        </table>
+
+        <section class="print-category-section">
+          <div class="print-category-label">제안<br>분류</div>
+          <div class="print-category-content">
+            <div class="print-category-line">
+              <strong>${categoryMark(model.categoryImprovement)} 개선</strong>
+              <span>1. 아이디어　2. 코스트　3. 에너지 절약　4. 품질　5. 관리　6. 작업　7. 기계　8. 공구　9. 환경　10. 설계　11. 인테리어　12. 서비스　13. 고객　14. 작품출원　15. 기타</span>
+            </div>
+            <div class="print-category-line">
+              <strong>${categoryMark(model.categorySafety)} 안전</strong>
+              <span>1. 안전</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="print-comparison-section">
+          <article class="print-comparison-column">
+            <div class="print-section-label">현재의 방법(문제점)</div>
+            <h2>개선 전</h2>
+            <div class="print-long-text">${escapeHtml(model.currentProblem)}</div>
+            ${renderPrintImages(model.beforeImages, "개선 전 사진")}
+          </article>
+          <article class="print-comparison-column">
+            <div class="print-section-label">개 선 책</div>
+            <h2>개선 후</h2>
+            <div class="print-long-text">${escapeHtml(model.improvementPlan)}</div>
+            ${renderPrintImages(model.afterImages, "개선 후 사진")}
+          </article>
+        </section>
+
+        <section class="print-effect-section print-page-break-candidate">
+          <div class="print-section-label">개선효과</div>
+          <div class="print-long-text">${escapeHtml(model.expectedEffect)}</div>
+          <dl class="print-money-grid">
+            <div><dt>예상 투입비용</dt><dd>${escapeHtml(model.costText)}</dd></div>
+            <div><dt>포상금</dt><dd>${escapeHtml(model.awardText)}</dd></div>
+            <div><dt>효과금액</dt><dd>${escapeHtml(model.effectText)}</dd></div>
+            <div><dt>지급상태</dt><dd>${escapeHtml(model.paymentStatus)}</dd></div>
+          </dl>
+        </section>
+
+        <section class="print-review-section">
+          <div class="print-section-label">심사평가 (검토 의견)</div>
+          <div class="print-review-meta">
+            <span>업무상태: <strong>${escapeHtml(model.workflowStatus)}</strong></span>
+            <span>심사결과: <strong>${escapeHtml(model.reviewResult)}</strong></span>
+            <span>실시상태: <strong>${escapeHtml(model.implementationStatus)}</strong></span>
+          </div>
+          <div class="print-long-text review-text">${escapeHtml(model.reviewComment)}</div>
+        </section>
+
+        <footer class="print-document-footer">
+          <img src="./assets/hana-metal-logo.png" alt="HANA METAL">
+          <span>${escapeHtml(model.proposalNo)}</span>
+        </footer>
+      </article>
+    </section>`;
 }
 
 function renderAdmin(action = "", id = "") {
@@ -637,7 +1075,10 @@ function renderAdminEdit(id) {
   main.innerHTML = `
     <section class="page-header">
       <div><button class="back-link" data-route="admin">← 관리자 목록</button><span class="eyebrow">ADMIN REVIEW</span><h1>${escapeHtml(proposal.proposal_no)} 심사</h1><p>${escapeHtml(proposal.title)}</p></div>
-      <button class="button button-ghost" data-route="detail/${escapeHtml(proposal.proposal_no)}">공개 상세보기</button>
+      <div class="header-buttons">
+        <button class="button button-ghost" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
+        <button class="button button-ghost" data-route="detail/${escapeHtml(proposal.proposal_no)}">공개 상세보기</button>
+      </div>
     </section>
 
     <form id="adminReviewForm" class="admin-review-form" data-id="${escapeHtml(proposal.id)}">
@@ -698,28 +1139,6 @@ function renderAdminEdit(id) {
   `;
 }
 
-function previewFiles(input, target) {
-  const files = Array.from(input.files || []).slice(0, 4);
-  if (input.files.length > 4) {
-    showToast("사진은 구분별 최대 4장까지 등록됩니다.", "error");
-  }
-  target.innerHTML = files.map((file) => {
-    const url = URL.createObjectURL(file);
-    return `<div class="preview-item"><img src="${url}" alt="${escapeHtml(file.name)}"><span>${escapeHtml(file.name)}</span></div>`;
-  }).join("");
-}
-
-function syncImplementationDateField(form) {
-  const statusSelect = form?.querySelector('[name="implementation_status"]');
-  const dateInput = form?.querySelector('[name="implemented_date"]');
-  if (!statusSelect || !dateInput) return;
-
-  const isCompleted = statusSelect.value === "완료";
-  dateInput.disabled = !isCompleted;
-  dateInput.required = isCompleted;
-  if (!isCompleted) dateInput.value = "";
-}
-
 function buildProposalPayload(form) {
   const data = new FormData(form);
   const select = form.querySelector("#employeeSelect");
@@ -730,7 +1149,7 @@ function buildProposalPayload(form) {
     throw new Error("직원명단에서 제안자를 선택하세요.");
   }
 
-  const implementation = normalizeImplementationProgress(
+  const implementation = normalizeImplementationDetails(
     data.get("implementation_status"),
     data.get("implemented_date"),
   );
@@ -759,10 +1178,15 @@ async function handleProposalSubmit(form) {
     throw new Error("수정번호는 숫자 4자리로 입력하세요.");
   }
 
-  const beforeFiles = $("#beforeImages").files;
-  const afterFiles = $("#afterImages").files;
-  if (beforeFiles.length > 4 || afterFiles.length > 4) {
-    throw new Error("사진은 개선 전·후 각각 최대 4장까지 등록할 수 있습니다.");
+  const beforeSelection = formImageSelections?.before || createImageSelection([]);
+  const afterSelection = formImageSelections?.after || createImageSelection([]);
+  const beforeFiles = getNewFiles(beforeSelection);
+  const afterFiles = getNewFiles(afterSelection);
+  if (
+    totalSelectedImages(beforeSelection) > MAX_IMAGES_PER_SECTION
+    || totalSelectedImages(afterSelection) > MAX_IMAGES_PER_SECTION
+  ) {
+    throw new Error(`사진은 개선 전·후 각각 최대 ${MAX_IMAGES_PER_SECTION}장까지 등록할 수 있습니다.`);
   }
 
   const submitButton = form.querySelector('button[type="submit"]');
@@ -772,7 +1196,11 @@ async function handleProposalSubmit(form) {
   try {
     let saved;
     if (isEdit) {
-      const patch = { ...payload };
+      const patch = {
+        ...payload,
+        before_images: getRetainedImages(beforeSelection),
+        after_images: getRetainedImages(afterSelection),
+      };
       delete patch.edit_pin;
       saved = await store.updateProposalWithPin(
         form.dataset.no,
@@ -863,8 +1291,20 @@ document.addEventListener("click", async (event) => {
 
   const { action } = actionButton.dataset;
   try {
-    if (action === "detail") {
+    if (action === "remove-form-image") {
+      const section = actionButton.dataset.section;
+      const kind = actionButton.dataset.kind;
+      const index = Number(actionButton.dataset.index);
+      if (!formImageSelections?.[section]) return;
+      formImageSelections[section] = removeSelectedImage(formImageSelections[section], kind, index);
+      renderFormImagePreview(section);
+    } else if (action === "detail") {
       go(`detail/${actionButton.dataset.no}`);
+    } else if (action === "print-proposal") {
+      const printUrl = `${location.href.split("#")[0]}#print/${encodeURIComponent(actionButton.dataset.no)}`;
+      window.open(printUrl, "_blank", "noopener");
+    } else if (action === "trigger-print") {
+      window.print();
     } else if (action === "clear-filter") {
       go("list");
     } else if (action === "open-image") {
@@ -956,14 +1396,26 @@ document.addEventListener("submit", async (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  if (event.target.id === "dashboardYearFilter") {
+    const year = event.target.value || "all";
+    location.hash = `#dashboard?year=${encodeURIComponent(year)}`;
+    render();
+    return;
+  }
   if (event.target.id === "employeeSelect") {
     const option = event.target.selectedOptions[0];
     $("#departmentInput").value = option?.dataset.department || "";
   }
-  if (event.target.id === "beforeImages") previewFiles(event.target, $("#beforePreview"));
-  if (event.target.id === "afterImages") previewFiles(event.target, $("#afterPreview"));
   if (event.target.id === "implementationStatus") {
-    syncImplementationDateField(event.target.form);
+    syncImplementationDateField();
+  }
+  if (event.target.id === "beforeImages") {
+    appendFormImages("before", event.target.files);
+    event.target.value = "";
+  }
+  if (event.target.id === "afterImages") {
+    appendFormImages("after", event.target.files);
+    event.target.value = "";
   }
 });
 
@@ -979,4 +1431,7 @@ document.addEventListener("input", (event) => {
 });
 
 window.addEventListener("hashchange", render);
-window.addEventListener("DOMContentLoaded", init);
+window.addEventListener("DOMContentLoaded", () => {
+  ensureImageEditorStyles();
+  init();
+});
