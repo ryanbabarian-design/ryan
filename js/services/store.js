@@ -1,6 +1,5 @@
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
 import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, sha256 } from "../core.js";
-import { mergeRetainedWithUploaded } from "../image-manager.js?v=1.7";
 
 const PROPOSAL_KEY = "proposal-system:v1:proposals";
 const EMPLOYEE_KEY = "proposal-system:v1:employees";
@@ -18,196 +17,6 @@ function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-
-// ==================================================
-// 사진 자동축소 및 WebP 압축 설정
-// ==================================================
-const IMAGE_MAX_EDGE = 1600;
-const IMAGE_WEBP_QUALITY = 0.78;
-const IMAGE_MAX_SOURCE_BYTES = 20 * 1024 * 1024;
-
-/**
- * 브라우저에서 이미지 파일을 디코딩합니다.
- */
-async function decodeImageFile(file) {
-  if (typeof createImageBitmap === "function") {
-    try {
-      const bitmap = await createImageBitmap(file, {
-        imageOrientation: "from-image",
-      });
-
-      return {
-        source: bitmap,
-        width: bitmap.width,
-        height: bitmap.height,
-        cleanup() {
-          bitmap.close();
-        },
-      };
-    } catch (firstError) {
-      try {
-        const bitmap = await createImageBitmap(file);
-
-        return {
-          source: bitmap,
-          width: bitmap.width,
-          height: bitmap.height,
-          cleanup() {
-            bitmap.close();
-          },
-        };
-      } catch (secondError) {
-        // Image 방식으로 다시 시도합니다.
-      }
-    }
-  }
-
-  const objectUrl = URL.createObjectURL(file);
-
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-
-    image.onload = () => {
-      resolve({
-        source: image,
-        width: image.naturalWidth,
-        height: image.naturalHeight,
-        cleanup() {
-          URL.revokeObjectURL(objectUrl);
-        },
-      });
-    };
-
-    image.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(
-        new Error(
-          `${file.name}: 사진을 읽을 수 없습니다. JPG, PNG 또는 WebP 사진을 사용해주세요.`,
-        ),
-      );
-    };
-
-    image.src = objectUrl;
-  });
-}
-
-/**
- * Canvas 이미지를 WebP Blob으로 변환합니다.
- */
-function canvasToWebpBlob(canvas) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) {
-          reject(new Error("사진 WebP 변환에 실패했습니다."));
-          return;
-        }
-
-        if (blob.type !== "image/webp") {
-          reject(
-            new Error(
-              "현재 브라우저에서 WebP 변환을 지원하지 않습니다. 최신 Chrome 또는 Edge를 사용해주세요.",
-            ),
-          );
-          return;
-        }
-
-        resolve(blob);
-      },
-      "image/webp",
-      IMAGE_WEBP_QUALITY,
-    );
-  });
-}
-
-/**
- * 원본 사진을 최대 1600px로 축소하고 WebP로 압축합니다.
- */
-async function compressImageToWebp(file) {
-  if (!(file instanceof File)) {
-    throw new Error("올바른 사진 파일이 아닙니다.");
-  }
-
-  if (!file.type?.startsWith("image/")) {
-    throw new Error(`${file.name}: 사진 파일만 등록할 수 있습니다.`);
-  }
-
-  if (file.size > IMAGE_MAX_SOURCE_BYTES) {
-    throw new Error(`${file.name}: 원본 사진은 파일당 20MB 이하만 가능합니다.`);
-  }
-
-  const decoded = await decodeImageFile(file);
-
-  try {
-    const sourceWidth = decoded.width;
-    const sourceHeight = decoded.height;
-
-    if (!sourceWidth || !sourceHeight) {
-      throw new Error(`${file.name}: 사진 크기를 확인할 수 없습니다.`);
-    }
-
-    const longestEdge = Math.max(sourceWidth, sourceHeight);
-    const scale = Math.min(1, IMAGE_MAX_EDGE / longestEdge);
-    const targetWidth = Math.max(1, Math.round(sourceWidth * scale));
-    const targetHeight = Math.max(1, Math.round(sourceHeight * scale));
-
-    const canvas = document.createElement("canvas");
-    canvas.width = targetWidth;
-    canvas.height = targetHeight;
-
-    const context = canvas.getContext("2d", { alpha: true });
-    if (!context) {
-      throw new Error(`${file.name}: 사진 압축 기능을 실행할 수 없습니다.`);
-    }
-
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = "high";
-    context.drawImage(
-      decoded.source,
-      0,
-      0,
-      sourceWidth,
-      sourceHeight,
-      0,
-      0,
-      targetWidth,
-      targetHeight,
-    );
-
-    const webpBlob = await canvasToWebpBlob(canvas);
-    const originalBaseName = file.name.replace(/\.[^/.]+$/, "") || "proposal-image";
-    const compressedFile = new File([webpBlob], `${originalBaseName}.webp`, {
-      type: "image/webp",
-      lastModified: Date.now(),
-    });
-
-    console.info(
-      `[사진 압축] ${file.name}: ` +
-        `${Math.round(file.size / 1024).toLocaleString("ko-KR")}KB → ` +
-        `${Math.round(compressedFile.size / 1024).toLocaleString("ko-KR")}KB ` +
-        `(${sourceWidth}×${sourceHeight} → ${targetWidth}×${targetHeight})`,
-    );
-
-    return compressedFile;
-  } finally {
-    decoded.cleanup();
-  }
-}
-
-/**
- * File을 Data URL로 변환합니다.
- * 데모 모드의 localStorage 저장에 사용합니다.
- */
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error(`${file.name} 파일을 읽지 못했습니다.`));
-    reader.readAsDataURL(file);
-  });
-}
-
 function normalizeProposal(row) {
   return {
     before_images: [],
@@ -220,6 +29,7 @@ function normalizeProposal(row) {
     review_result: "미심사",
     status: "접수",
     implementation_status: "미실시",
+    implemented_date: null,
     payment_status: "미지급",
     ...row,
     before_images: asArray(row.before_images),
@@ -228,20 +38,26 @@ function normalizeProposal(row) {
 }
 
 async function filesToDataUrls(files) {
-  const results = [];
-
-  for (const originalFile of Array.from(files ?? [])) {
-    const compressedFile = await compressImageToWebp(originalFile);
-    const dataUrl = await fileToDataUrl(compressedFile);
-
-    results.push({
-      url: dataUrl,
-      name: compressedFile.name,
-      type: compressedFile.type,
-    });
-  }
-
-  return results;
+  return Promise.all(
+    Array.from(files ?? []).map(
+      (file) =>
+        new Promise((resolve, reject) => {
+          if (file.size > 5 * 1024 * 1024) {
+            reject(new Error(`${file.name}: 파일당 5MB 이하만 등록할 수 있습니다.`));
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = () =>
+            resolve({
+              url: reader.result,
+              name: file.name,
+              type: file.type,
+            });
+          reader.onerror = () => reject(new Error(`${file.name} 파일을 읽지 못했습니다.`));
+          reader.readAsDataURL(file);
+        }),
+    ),
+  );
 }
 
 
@@ -316,7 +132,8 @@ class DemoStore {
       edit_pin_hash: pinHash,
       status: "접수",
       review_result: "미심사",
-      implementation_status: "미실시",
+      implementation_status: payload.implementation_status || "미실시",
+      implemented_date: payload.implemented_date || null,
       payment_status: "미지급",
       locked: false,
       created_at: now,
@@ -349,18 +166,11 @@ class DemoStore {
       filesToDataUrls(afterFiles),
     ]);
 
-    const retainedBefore = Array.isArray(patch.before_images)
-      ? patch.before_images
-      : current.before_images;
-    const retainedAfter = Array.isArray(patch.after_images)
-      ? patch.after_images
-      : current.after_images;
-
     proposals[index] = normalizeProposal({
       ...current,
       ...patch,
-      before_images: mergeRetainedWithUploaded(retainedBefore, newBefore),
-      after_images: mergeRetainedWithUploaded(retainedAfter, newAfter),
+      before_images: newBefore.length ? newBefore : current.before_images,
+      after_images: newAfter.length ? newAfter : current.after_images,
       updated_at: new Date().toISOString(),
     });
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
@@ -477,29 +287,24 @@ class SupabaseStore {
     const uploaded = [];
     const submissionId = crypto.randomUUID();
 
-    for (const [index, originalFile] of Array.from(files ?? []).entries()) {
-      const compressedFile = await compressImageToWebp(originalFile);
-      const path = `submissions/${submissionId}/${section}-${index + 1}.webp`;
-
+    for (const [index, file] of Array.from(files ?? []).entries()) {
+      if (file.size > 5 * 1024 * 1024) {
+        throw new Error(`${file.name}: 파일당 5MB 이하만 등록할 수 있습니다.`);
+      }
+      const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const path = `submissions/${submissionId}/${section}-${index + 1}.${extension}`;
       const { error } = await this.client.storage
         .from(this.config.storageBucket)
-        .upload(path, compressedFile, {
+        .upload(path, file, {
           cacheControl: "3600",
           upsert: false,
-          contentType: "image/webp",
+          contentType: file.type,
         });
-
       if (error) throw error;
-
       const { data } = this.client.storage
         .from(this.config.storageBucket)
         .getPublicUrl(path);
-
-      uploaded.push({
-        url: data.publicUrl,
-        name: compressedFile.name,
-        path,
-      });
+      uploaded.push({ url: data.publicUrl, name: file.name, path });
     }
 
     return uploaded;
@@ -529,12 +334,8 @@ class SupabaseStore {
     ]);
 
     const payload = { ...patch };
-    if (Array.isArray(patch.before_images) || beforeImages.length) {
-      payload.before_images = mergeRetainedWithUploaded(patch.before_images, beforeImages);
-    }
-    if (Array.isArray(patch.after_images) || afterImages.length) {
-      payload.after_images = mergeRetainedWithUploaded(patch.after_images, afterImages);
-    }
+    if (beforeImages.length) payload.before_images = beforeImages;
+    if (afterImages.length) payload.after_images = afterImages;
 
     const { data, error } = await this.client.rpc("edit_proposal_with_pin", {
       p_proposal_no: proposalNo,
@@ -543,35 +344,6 @@ class SupabaseStore {
     });
     if (error) throw error;
     return normalizeProposal(Array.isArray(data) ? data[0] : data);
-  }
-
-  async cleanupRemovedImages() {
-    const { data: queued, error: queueError } = await this.client
-      .from("proposal_image_cleanup")
-      .select("id,image_path")
-      .order("id")
-      .limit(100);
-
-    if (queueError) {
-      if (queueError.code === "42P01") return 0;
-      throw queueError;
-    }
-    if (!queued?.length) return 0;
-
-    const paths = queued.map((row) => row.image_path).filter(Boolean);
-    if (paths.length) {
-      const { error: storageError } = await this.client.storage
-        .from(this.config.storageBucket)
-        .remove(paths);
-      if (storageError) throw storageError;
-    }
-
-    const { error: deleteError } = await this.client
-      .from("proposal_image_cleanup")
-      .delete()
-      .in("id", queued.map((row) => row.id));
-    if (deleteError) throw deleteError;
-    return paths.length;
   }
 
   async loginAdmin(email, password) {
@@ -587,11 +359,6 @@ class SupabaseStore {
     if (!admin) {
       await this.client.auth.signOut();
       throw new Error("관리자 권한이 없는 계정입니다.");
-    }
-    try {
-      await this.cleanupRemovedImages();
-    } catch (cleanupError) {
-      console.warn("삭제 예약 사진 정리에 실패했습니다.", cleanupError);
     }
     return { email: data.user.email, displayName: admin.display_name };
   }
