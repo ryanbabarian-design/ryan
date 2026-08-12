@@ -70,9 +70,16 @@ export function filterProposals(proposals, filters = {}) {
   const department = filters.department ?? "";
   const reviewResult = filters.reviewResult ?? "";
   const implementationStatus = filters.implementationStatus ?? "";
+  const year = String(filters.year ?? "").trim();
+  const workflow = String(filters.workflow ?? "").trim();
 
   return proposals
     .filter((proposal) => {
+      const date = proposalDateParts(proposal);
+      if (year && year !== "all" && date?.year !== year) return false;
+      if (workflow === "pending" && !(["접수", "심사중"].includes(proposal.status) && proposal.review_result === "미심사")) return false;
+      if (workflow === "adopted" && proposal.review_result !== "채택") return false;
+      if (workflow === "completed" && proposal.implementation_status !== "완료") return false;
       if (category && proposal.category !== category) return false;
       if (department && proposal.department !== department) return false;
       if (reviewResult && proposal.review_result !== reviewResult) return false;
@@ -99,6 +106,11 @@ export function filterProposals(proposals, filters = {}) {
       if (dateCompare !== 0) return dateCompare;
       return String(b.proposal_no).localeCompare(String(a.proposal_no));
     });
+}
+
+export function currentYearProposalCount(proposals, now = new Date()) {
+  const currentYear = String(now.getFullYear());
+  return (Array.isArray(proposals) ? proposals : []).filter((proposal) => proposalDateParts(proposal)?.year === currentYear).length;
 }
 
 export function dashboardMetrics(proposals) {
@@ -219,6 +231,31 @@ export function dashboardBreakdown(proposals, requestedYear = "") {
     monthly,
     departments,
   };
+}
+
+
+export function dashboardDepartmentMonthly(proposals, requestedYear = "") {
+  const source = Array.isArray(proposals) ? proposals : [];
+  const selectedYear = String(requestedYear || "all");
+  if (!selectedYear || selectedYear === "all") {
+    return { selectedYear: "all", available: false, departments: [] };
+  }
+
+  const departmentMap = new Map();
+  for (const proposal of source) {
+    const date = proposalDateParts(proposal);
+    if (!date || date.year !== selectedYear) continue;
+    const department = String(proposal.department || "미지정").trim() || "미지정";
+    const row = departmentMap.get(department) || { department, months: Array(12).fill(0), total: 0 };
+    row.months[date.month - 1] += 1;
+    row.total += 1;
+    departmentMap.set(department, row);
+  }
+
+  const departments = Array.from(departmentMap.values()).sort((a, b) =>
+    b.total - a.total || a.department.localeCompare(b.department, "ko")
+  );
+  return { selectedYear, available: true, departments };
 }
 
 

@@ -503,3 +503,87 @@ body {
   .highlight-card-icon { width: 48px; height: 48px; border-radius: 14px; font-size: 22px; }
   .highlight-stats.best-stats { grid-template-columns: 1fr; }
 }
+
+/* V1.9 - year/workflow filtering + department by month performance */
+.active-filter-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 1180px;
+  margin: 0 auto 12px;
+  padding: 11px 16px;
+  border: 1px solid #eadfda;
+  border-radius: 14px;
+  background: #fffaf7;
+  color: #7d7772;
+  font-size: 12px;
+  font-weight: 800;
+}
+.active-filter-summary span { color: #9a918a; }
+.active-filter-summary strong { color: var(--brand-red); }
+.active-filter-summary i { color: #c7bdb6; font-style: normal; }
+
+.department-month-panel { margin-top: 20px; }
+.department-month-matrix-wrap {
+  overflow-x: auto;
+  border: 1px solid #ece6e1;
+  border-radius: 16px;
+  background: #fff;
+}
+.department-month-matrix {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.department-month-matrix th,
+.department-month-matrix td {
+  border-bottom: 1px solid #eee8e3;
+  border-right: 1px solid #f2ede9;
+  padding: 12px 10px;
+  text-align: center;
+  white-space: nowrap;
+}
+.department-month-matrix th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f6f2ef;
+  color: #756e68;
+  font-size: 11px;
+  font-weight: 900;
+}
+.department-month-matrix th:first-child,
+.department-month-matrix td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 112px;
+  background: #fff;
+  text-align: left;
+}
+.department-month-matrix th:first-child { z-index: 3; background: #f6f2ef; }
+.department-month-matrix tbody tr:hover td { background: #fff9f5; }
+.department-month-matrix tbody tr:hover td:first-child { background: #fff9f5; }
+.department-month-matrix td.has-value { color: var(--brand-red); font-weight: 900; }
+.department-month-matrix .department-month-total {
+  background: #fff3ef;
+  color: var(--brand-red);
+  font-weight: 900;
+}
+.department-month-empty {
+  display: grid;
+  min-height: 130px;
+  place-items: center;
+  border: 1px dashed #e2d8d1;
+  border-radius: 15px;
+  background: #fcfaf8;
+  color: #8f867f;
+  font-weight: 800;
+}
+.department-month-empty strong { color: var(--brand-red); }
+
+@media (max-width: 760px) {
+  .active-filter-summary { margin-left: 0; margin-right: 0; }
+  .department-month-matrix { min-width: 900px; }
+}

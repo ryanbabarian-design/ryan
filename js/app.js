@@ -1,6 +1,8 @@
 import {
   calculateAward,
+  currentYearProposalCount,
   dashboardBreakdown,
+  dashboardDepartmentMonthly,
   dashboardHighlights,
   dashboardMetrics,
   filterProposals,
@@ -12,8 +14,8 @@ import {
   REVIEW_RESULTS,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=1.8";
-import { createStore } from "./services/store.js?v=1.8";
+} from "./core.js?v=1.9";
+import { createStore } from "./services/store.js?v=1.9";
 import {
   appendImageFiles,
   createImageSelection,
@@ -331,14 +333,43 @@ function analyticsTable(rows, labelHeading) {
     </div>`;
 }
 
+function departmentMonthlyTable(report) {
+  if (!report.available) {
+    return `<div class="department-month-empty">부서별 월 제안실적은 <strong>조회 연도</strong>를 선택하면 표시됩니다.</div>`;
+  }
+  if (!report.departments.length) {
+    return `<div class="analytics-empty">선택한 연도에 부서별 제안자료가 없습니다.</div>`;
+  }
+  return `
+    <div class="department-month-matrix-wrap">
+      <table class="department-month-matrix">
+        <thead>
+          <tr><th>부서</th>${Array.from({ length: 12 }, (_, index) => `<th>${index + 1}월</th>`).join("")}<th>합계</th></tr>
+        </thead>
+        <tbody>
+          ${report.departments.map((row) => `
+            <tr>
+              <td><strong>${escapeHtml(row.department)}</strong></td>
+              ${row.months.map((count) => `<td class="${count ? "has-value" : ""}">${count.toLocaleString("ko-KR")}</td>`).join("")}
+              <td class="department-month-total">${row.total.toLocaleString("ko-KR")}건</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
 function renderDashboard() {
-  const metrics = dashboardMetrics(state.proposals);
   const report = dashboardBreakdown(state.proposals, getDashboardYearFromUrl());
+  const scopedProposals = filterProposals(state.proposals, { year: report.selectedYear });
+  const metrics = dashboardMetrics(scopedProposals);
+  const currentYear = String(new Date().getFullYear());
+  const currentYearCount = currentYearProposalCount(state.proposals);
+  const departmentMonthly = dashboardDepartmentMonthly(state.proposals, report.selectedYear);
   const highlights = dashboardHighlights(state.proposals, report.selectedYear);
   const recent = filterProposals(state.proposals).slice(0, 3);
   const departments = [...new Set(state.proposals.map((item) => item.department).filter(Boolean))].sort();
   const selectedLabel = report.selectedYear === "all" ? "전체 연도" : `${report.selectedYear}년`;
-  const seededCount = state.proposals.filter((proposal) => proposal.id?.startsWith("seed-")).length;
+  const dashboardYearParam = encodeURIComponent(report.selectedYear);
 
   main.innerHTML = `
     <section class="hero brand-hero">
@@ -356,29 +387,29 @@ function renderDashboard() {
         <div class="hero-metal-symbol">H</div>
         <div class="hero-mini-card">
           <span>올해 누적 제안</span>
-          <strong>${metrics.total.toLocaleString("ko-KR")}건</strong>
-          <small>기존 엑셀 ${seededCount.toLocaleString("ko-KR")}건 포함</small>
+          <strong>${currentYearCount.toLocaleString("ko-KR")}건</strong>
+          <small>${currentYear}년 접수 기준 · 전체 DB ${state.proposals.length.toLocaleString("ko-KR")}건</small>
         </div>
       </div>
     </section>
 
     <section class="metric-grid workflow-metric-grid" aria-label="제안 현황 요약">
-      <button class="metric-card workflow-card total" data-route="list">
+      <button class="metric-card workflow-card total" data-route="list?year=${dashboardYearParam}&workflow=total">
         <span class="metric-icon" aria-hidden="true">♢</span>
         <div><small>전체 제안</small><strong>${metrics.total.toLocaleString("ko-KR")}</strong></div>
         <span class="metric-arrow">›</span>
       </button>
-      <button class="metric-card workflow-card pending" data-route="list">
+      <button class="metric-card workflow-card pending" data-route="list?year=${dashboardYearParam}&workflow=pending">
         <span class="metric-icon" aria-hidden="true">◷</span>
         <div><small>심사 대기</small><strong>${metrics.pending.toLocaleString("ko-KR")}</strong></div>
         <span class="metric-arrow">›</span>
       </button>
-      <button class="metric-card workflow-card adopted" data-route="list">
+      <button class="metric-card workflow-card adopted" data-route="list?year=${dashboardYearParam}&workflow=adopted">
         <span class="metric-icon" aria-hidden="true">✓</span>
         <div><small>채택</small><strong>${metrics.adopted.toLocaleString("ko-KR")}</strong></div>
         <span class="metric-arrow">›</span>
       </button>
-      <button class="metric-card workflow-card completed" data-route="list">
+      <button class="metric-card workflow-card completed" data-route="list?year=${dashboardYearParam}&workflow=completed">
         <span class="metric-icon" aria-hidden="true">⚑</span>
         <div><small>실시 완료</small><strong>${metrics.completed.toLocaleString("ko-KR")}</strong></div>
         <span class="metric-arrow">›</span>
@@ -514,6 +545,14 @@ function renderDashboard() {
         </div>
       </section>
 
+      <section class="analytics-panel department-month-panel">
+        <div class="analytics-panel-head">
+          <div><span class="eyebrow">DEPARTMENT × MONTH</span><h2>부서별 월 제안실적</h2><p>${report.selectedYear === "all" ? "연도를 선택하면 부서별 1~12월 제안건수를 비교할 수 있습니다." : `${report.selectedYear}년 부서별 월 제안건수와 연간 합계를 비교합니다.`}</p></div>
+          <span class="analytics-count">${report.selectedYear === "all" ? "연도 선택" : `${departmentMonthly.departments.length.toLocaleString("ko-KR")}개 부서`}</span>
+        </div>
+        ${departmentMonthlyTable(departmentMonthly)}
+      </section>
+
       <section class="analytics-panel yearly-panel">
         <div class="analytics-panel-head">
           <div><span class="eyebrow">YEARLY</span><h2>연도별 종합현황</h2><p>전체 연도의 제안건수와 금액 합계를 비교합니다.</p></div>
@@ -534,6 +573,8 @@ function getFiltersFromUrl() {
   const params = new URLSearchParams(location.hash.split("?")[1] || "");
   return {
     query: params.get("q") || "",
+    year: params.get("year") || "all",
+    workflow: params.get("workflow") || "total",
     category: params.get("category") || "",
     department: params.get("department") || "",
     reviewResult: params.get("review") || "",
@@ -545,12 +586,20 @@ function renderList() {
   const filters = getFiltersFromUrl();
   const proposals = filterProposals(state.proposals, filters);
   const departments = [...new Set(state.proposals.map((item) => item.department))].sort();
+  const years = dashboardBreakdown(state.proposals, "all").years;
+  const workflowLabels = { total: "전체 제안", pending: "심사 대기", adopted: "채택", completed: "실시 완료" };
+  const yearLabel = filters.year === "all" ? "전체 연도" : `${filters.year}년`;
+  const workflowLabel = workflowLabels[filters.workflow] || "전체 제안";
 
   main.innerHTML = `
     <section class="page-header">
       <div><span class="eyebrow">PUBLIC DATABASE</span><h1>제안 접수현황</h1><p>제안명·문제점·개선방안·효과·제안자·부서를 통합 검색합니다.</p></div>
       <button class="button button-primary" data-route="new">새 제안 작성</button>
     </section>
+
+    <div class="active-filter-summary">
+      <span>현재 조회</span><strong>${escapeHtml(yearLabel)}</strong><i>·</i><strong>${escapeHtml(workflowLabel)}</strong>
+    </div>
 
     <section class="filter-panel">
       <form id="filterForm">
@@ -562,6 +611,20 @@ function renderList() {
           </div>
         </div>
         <div class="filter-grid">
+          <label>조회연도
+            <select name="year">
+              <option value="all" ${filters.year === "all" ? "selected" : ""}>전체 연도</option>
+              ${years.map((year) => `<option value="${year}" ${filters.year === year ? "selected" : ""}>${year}년</option>`).join("")}
+            </select>
+          </label>
+          <label>현황
+            <select name="workflow">
+              <option value="total" ${filters.workflow === "total" ? "selected" : ""}>전체 제안</option>
+              <option value="pending" ${filters.workflow === "pending" ? "selected" : ""}>심사 대기</option>
+              <option value="adopted" ${filters.workflow === "adopted" ? "selected" : ""}>채택</option>
+              <option value="completed" ${filters.workflow === "completed" ? "selected" : ""}>실시 완료</option>
+            </select>
+          </label>
           <label>제안종류
             <select name="category">
               <option value="">전체</option>
@@ -1353,6 +1416,8 @@ document.addEventListener("submit", async (event) => {
       const data = new FormData(event.target);
       const params = new URLSearchParams();
       if (data.get("query")) params.set("q", data.get("query"));
+      if (data.get("year")) params.set("year", data.get("year"));
+      if (data.get("workflow")) params.set("workflow", data.get("workflow"));
       if (data.get("category")) params.set("category", data.get("category"));
       if (data.get("department")) params.set("department", data.get("department"));
       if (data.get("reviewResult")) params.set("review", data.get("reviewResult"));
