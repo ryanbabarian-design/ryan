@@ -1,6 +1,6 @@
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
-import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.2";
-import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.2";
+import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.3";
+import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3";
 
 const PROPOSAL_KEY = "proposal-system:v1:proposals";
 const EMPLOYEE_KEY = "proposal-system:v1:employees";
@@ -11,10 +11,11 @@ const APPROVAL_STEPS_KEY = "proposal-system:v2:approval-steps";
 const APPROVAL_RECORDS_KEY = "proposal-system:v2:approval-records";
 const AUDIT_KEY = "proposal-system:v2:audit-logs";
 const APPROVAL_ASSIGNMENTS_KEY = "proposal-system:v21:approval-assignments";
+const NOTIFICATION_LOG_KEY = "proposal-system:v23:notification-logs";
 const DEFAULT_APPROVAL_STEPS = [
   { id: 1, step_order: 1, role_name: "담당", description: "제안 제출 시 제안자 자동작성", auto_author: true, active: true },
   { id: 2, step_order: 2, role_name: "부서장", description: "해당 부서 검토 및 승인", auto_author: false, active: true },
-  { id: 3, step_order: 3, role_name: "공장장", description: "실시·효과 검토", auto_author: false, active: true },
+  { id: 3, step_order: 3, role_name: "주관부서", description: "제안제도 주관부서 검토 및 승인", auto_author: false, active: true },
   { id: 4, step_order: 4, role_name: "대표이사", description: "최종 승인", auto_author: false, active: true },
 ];
 
@@ -43,6 +44,7 @@ function normalizeProposal(row) {
     status: "접수",
     implementation_status: "미실시",
     payment_status: "미지급",
+    approval_required: false,
     ...row,
     before_images: asArray(row.before_images),
     after_images: asArray(row.after_images),
@@ -114,6 +116,7 @@ class DemoStore {
     if (!localStorage.getItem(APPROVAL_RECORDS_KEY)) localStorage.setItem(APPROVAL_RECORDS_KEY, "[]");
     if (!localStorage.getItem(AUDIT_KEY)) localStorage.setItem(AUDIT_KEY, "[]");
     if (!localStorage.getItem(APPROVAL_ASSIGNMENTS_KEY)) localStorage.setItem(APPROVAL_ASSIGNMENTS_KEY, "[]");
+    if (!localStorage.getItem(NOTIFICATION_LOG_KEY)) localStorage.setItem(NOTIFICATION_LOG_KEY, "[]");
   }
 
   get mode() {
@@ -157,6 +160,7 @@ class DemoStore {
       review_result: "미심사",
       payment_status: "미지급",
       locked: false,
+      approval_required: true,
       created_at: now,
       updated_at: now,
     });
@@ -178,7 +182,7 @@ class DemoStore {
         assigned_name: autoAuthor ? proposal.proposer_name : null,
         approver_name: autoAuthor ? proposal.proposer_name : null,
         comment: autoAuthor ? "제안 제출 시 자동작성" : null,
-        acted_at: autoAuthor ? now : null, created_at: now, updated_at: now,
+        acted_at: autoAuthor ? now : null, actionable_at: !autoAuthor && Number(step.step_order) === 2 ? now : null, created_at: now, updated_at: now,
       });
     }
     localStorage.setItem(APPROVAL_RECORDS_KEY, JSON.stringify(records));
@@ -387,6 +391,9 @@ class DemoStore {
         proposer_name: proposal.proposer_name, received_date: proposal.received_date, step_id: permission.step.id,
         step_order: permission.step.step_order, role_name: permission.step.role_name, approval_status: permission.record?.status || "대기",
         can_act: permission.canAct, block_reason: permission.reason,
+        actionable_at: permission.record?.actionable_at || null,
+        pending_days: permission.record?.actionable_at ? Math.max(0, Math.floor((Date.now() - new Date(permission.record.actionable_at).getTime()) / 86400000)) : 0,
+        overdue_level: permission.record?.actionable_at ? (Math.floor((Date.now() - new Date(permission.record.actionable_at).getTime()) / 86400000) >= 7 ? 7 : Math.floor((Date.now() - new Date(permission.record.actionable_at).getTime()) / 86400000) >= 3 ? 3 : Math.floor((Date.now() - new Date(permission.record.actionable_at).getTime()) / 86400000) >= 1 ? 1 : 0) : 0,
       });
     }
     return result;
@@ -427,7 +434,30 @@ class DemoStore {
     if (!permission.canAct || String(permission.step?.id) !== String(stepId)) throw new Error(permission.reason || "본인 결재단계만 처리할 수 있습니다.");
     const now = new Date().toISOString();
     Object.assign(row, { status, comment, assigned_name: permission.assignment.display_name, approver_name: permission.assignment.display_name, acted_at: now, updated_at: now });
+    if (status === "승인") {
+      const nextStep = steps.filter((step) => step.active !== false && step.auto_author !== true && Number(step.step_order) > Number(permission.step.step_order)).sort((a,b)=>Number(a.step_order)-Number(b.step_order))[0];
+      const nextRecord = nextStep ? rows.find((item) => item.proposal_id === proposalId && String(item.step_id) === String(nextStep.id)) : null;
+      if (nextRecord && nextRecord.status === "대기" && !nextRecord.actionable_at) nextRecord.actionable_at = now;
+    }
     localStorage.setItem(APPROVAL_RECORDS_KEY, JSON.stringify(rows));
+    return row;
+  }
+
+  async getApprovalOverdueSummary() {
+    const rows = await this.getMyApprovalInbox();
+    const actionable = rows.filter((row) => row.can_act && row.approval_status === "대기");
+    return { pending_total: actionable.length, overdue_1: actionable.filter(r=>Number(r.pending_days)>=1).length, overdue_3: actionable.filter(r=>Number(r.pending_days)>=3).length, overdue_7: actionable.filter(r=>Number(r.pending_days)>=7).length };
+  }
+
+  async getNotificationLogs(limit = 100) {
+    return JSON.parse(localStorage.getItem(NOTIFICATION_LOG_KEY) || "[]").slice(-limit).reverse();
+  }
+
+  async retryNotification(id) {
+    const rows = JSON.parse(localStorage.getItem(NOTIFICATION_LOG_KEY) || "[]");
+    const row = rows.find((item) => String(item.id) === String(id));
+    if (row) Object.assign(row, { status: "pending", last_error: null, available_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+    localStorage.setItem(NOTIFICATION_LOG_KEY, JSON.stringify(rows));
     return row;
   }
 
@@ -445,6 +475,7 @@ class DemoStore {
     localStorage.setItem(APPROVAL_RECORDS_KEY, "[]");
     localStorage.setItem(AUDIT_KEY, "[]");
     localStorage.setItem(APPROVAL_ASSIGNMENTS_KEY, "[]");
+    localStorage.setItem(NOTIFICATION_LOG_KEY, "[]");
     sessionStorage.removeItem(ADMIN_KEY);
   }
 }
@@ -732,6 +763,26 @@ class SupabaseStore {
     return data || [];
   }
 
+  async getApprovalOverdueSummary() {
+    const { data, error } = await this.client.rpc("get_approval_overdue_summary");
+    if (error) throw error;
+    return Array.isArray(data) ? (data[0] || {}) : (data || {});
+  }
+
+  async getNotificationLogs(limit = 100) {
+    const { data, error } = await this.client.from("proposal_notification_queue")
+      .select("id,proposal_id,step_id,recipient_email,recipient_name,notification_type,status,attempts,available_at,sent_at,last_error,created_at,updated_at,proposals(proposal_no,title),approval_steps(role_name)")
+      .order("created_at", { ascending: false }).limit(limit);
+    if (error) throw error;
+    return data || [];
+  }
+
+  async retryNotification(id) {
+    const { data, error } = await this.client.rpc("retry_proposal_notification", { p_notification_id: Number(id) });
+    if (error) throw error;
+    return data;
+  }
+
   async getApprovalSteps(includeInactive = false) {
     let query = this.client.from("approval_steps").select("*").order("step_order");
     if (!includeInactive) query = query.eq("active", true);
@@ -753,7 +804,7 @@ class SupabaseStore {
 
   async getApprovalRecords(proposalId) {
     const { data, error } = await this.client.from("approval_records")
-      .select("id,proposal_id,step_id,status,assigned_name,approver_name,comment,acted_at,created_at,updated_at").eq("proposal_id", proposalId).order("step_id");
+      .select("id,proposal_id,step_id,status,assigned_name,approver_name,comment,acted_at,actionable_at,created_at,updated_at").eq("proposal_id", proposalId).order("step_id");
     if (error) throw error;
     return data || [];
   }

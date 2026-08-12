@@ -22,8 +22,8 @@ import {
   resolveApprovalPermission,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=2.2";
-import { createStore } from "./services/store.js?v=2.2";
+} from "./core.js?v=2.3";
+import { createStore } from "./services/store.js?v=2.3";
 import {
   appendImageFiles,
   createImageSelection,
@@ -32,8 +32,8 @@ import {
   MAX_IMAGES_PER_SECTION,
   removeSelectedImage,
   totalSelectedImages,
-} from "./image-manager.js?v=2.2";
-import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.2";
+} from "./image-manager.js?v=2.3";
+import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.3";
 
 const store = createStore();
 const state = {
@@ -42,6 +42,8 @@ const state = {
   departmentGoals: [],
   approvalSteps: [],
   approverAssignments: [],
+  approvalInbox: [],
+  approvalOverdueSummary: {},
   admin: null,
   loading: true,
   error: "",
@@ -209,21 +211,36 @@ function setActiveNav(route) {
   });
 }
 
+function actionableApprovalCount(rows = state.approvalInbox) {
+  return (rows || []).filter((row) => row.can_act === true && row.approval_status === "대기").length;
+}
+
+function syncApprovalInboxBadge() {
+  const count = actionableApprovalCount();
+  const badge = $("#approvalInboxBadge");
+  if (!badge) return;
+  badge.textContent = String(count);
+  badge.hidden = count < 1;
+  badge.setAttribute("aria-label", `내 결재 대기 ${count}건`);
+}
+
+function showApprovalLoginNotice() {
+  const count = actionableApprovalCount();
+  const dialog = $("#approvalNoticeDialog");
+  const text = $("#approvalNoticeText");
+  if (!dialog || count < 1) return;
+  if (text) text.textContent = `현재 본인 결재 대기 ${count}건이 있습니다. 처리하지 않은 건은 내 결재함에 계속 표시됩니다.`;
+  if (!dialog.open && typeof dialog.showModal === "function") dialog.showModal();
+}
+
 async function refreshData() {
   const [proposals, employees, departmentGoals, approvalSteps, admin, approverAssignments] = await Promise.all([
-    store.getProposals(),
-    store.getEmployees(),
-    store.getDepartmentGoals().catch(() => []),
-    store.getApprovalSteps(true).catch(() => []),
-    store.getAdminSession(),
-    store.getApproverAssignments(true).catch(() => []),
+    store.getProposals(), store.getEmployees(), store.getDepartmentGoals().catch(() => []), store.getApprovalSteps(true).catch(() => []), store.getAdminSession(), store.getApproverAssignments(true).catch(() => []),
   ]);
-  state.proposals = proposals;
-  state.employees = employees;
-  state.departmentGoals = departmentGoals;
-  state.approvalSteps = approvalSteps;
-  state.admin = admin;
-  state.approverAssignments = approverAssignments;
+  state.proposals = proposals; state.employees = employees; state.departmentGoals = departmentGoals; state.approvalSteps = approvalSteps; state.admin = admin; state.approverAssignments = approverAssignments;
+  state.approvalInbox = admin ? await store.getMyApprovalInbox().catch(() => []) : [];
+  state.approvalOverdueSummary = admin?.isSystemAdmin ? await store.getApprovalOverdueSummary().catch(() => ({})) : {};
+  syncApprovalInboxBadge();
 }
 
 async function init() {
@@ -243,6 +260,7 @@ function render() {
   setActiveNav(["detail", "edit", "print", "person"].includes(route) ? "list" : route === "report" ? "dashboard" : route);
   $("#modeBadge").textContent = store.mode === "demo" ? "데모 모드" : "Supabase 연결";
   $("#modeBadge").className = `mode-badge ${store.mode}`;
+  syncApprovalInboxBadge();
 
   if (state.loading) {
     main.innerHTML = `<div class="loading-card"><div class="spinner"></div><p>제안 데이터를 불러오는 중입니다.</p></div>`;
@@ -999,7 +1017,7 @@ function renderDetail(proposalNo) {
 
     <section class="detail-operation-card approval-progress-card">
       <div class="section-heading"><div><span class="eyebrow">APPROVAL</span><h2>전자결재 진행</h2></div></div>
-      <div id="approvalContent">${renderApprovalProgress(state.approvalSteps, [])}</div>
+      <div id="approvalContent">${proposal.approval_required === true ? renderApprovalProgress(state.approvalSteps, []) : `<div class="approval-not-required"><strong>전자결재 대상 아님</strong><p>V2.3 적용 이전 등록 제안은 전자결재·이메일 알림 대상에서 제외됩니다.</p></div>`}</div>
     </section>
 
     <section class="review-box">
@@ -1054,7 +1072,7 @@ async function hydrateDetailOperations(proposal) {
   const timelineTarget = $("#timelineContent");
   if (timelineTarget) timelineTarget.innerHTML = renderTimelineRows(history.length ? history : buildTimelineFallback(proposal));
   const approvalTarget = $("#approvalContent");
-  if (approvalTarget) approvalTarget.innerHTML = renderApprovalProgress(state.approvalSteps, approvals);
+  if (approvalTarget) approvalTarget.innerHTML = proposal.approval_required === true ? renderApprovalProgress(state.approvalSteps, approvals) : `<div class="approval-not-required"><strong>전자결재 대상 아님</strong><p>V2.3 적용 이전 등록 제안은 전자결재·이메일 알림 대상에서 제외됩니다.</p></div>`;
 }
 
 function renderProposerProfile(name) {
@@ -1263,13 +1281,14 @@ function renderManagementReport() {
 
 function adminNav(active = "proposals") {
   if (!state.admin?.isSystemAdmin) {
-    return `<nav class="admin-subnav"><button class="${active === "inbox" ? "active" : ""}" data-route="admin/inbox">내 결재함</button></nav>`;
+    return `<nav class="admin-subnav"><button class="${active === "inbox" ? "active" : ""}" data-route="admin/inbox">내 결재함${actionableApprovalCount() ? ` <span class="approval-inbox-badge inline">${actionableApprovalCount()}</span>` : ""}</button></nav>`;
   }
   return `<nav class="admin-subnav">
     <button class="${active === "proposals" ? "active" : ""}" data-route="admin">제안 심사</button>
-    <button class="${active === "inbox" ? "active" : ""}" data-route="admin/inbox">내 결재함</button>
+    <button class="${active === "inbox" ? "active" : ""}" data-route="admin/inbox">내 결재함${actionableApprovalCount() ? ` <span class="approval-inbox-badge inline">${actionableApprovalCount()}</span>` : ""}</button>
     <button class="${active === "goals" ? "active" : ""}" data-route="admin/goals">부서 목표관리</button>
     <button class="${active === "approvals" ? "active" : ""}" data-route="admin/approvals">전자결재 설정</button>
+    <button class="${active === "notifications" ? "active" : ""}" data-route="admin/notifications">메일알림</button>
     <button class="${active === "audit" ? "active" : ""}" data-route="admin/audit">관리자 변경이력</button>
   </nav>`;
 }
@@ -1306,9 +1325,9 @@ function renderAdminApprovals() {
   const stepMap = new Map(steps.map((step) => [String(step.id), step]));
   const assignments = state.approverAssignments || [];
   const manualSteps = steps.filter((step) => step.active !== false && step.auto_author !== true);
-  main.innerHTML = `${adminPageHeader("전자결재 설정", "담당은 제안 제출 시 제안자명으로 자동 작성되고, 부서장부터 실제 계정으로 순차 전자서명합니다.", "approvals")}
+  main.innerHTML = `${adminPageHeader("전자결재 설정", "담당은 자동작성되고, 신규 제안만 부서장 → 주관부서 → 대표이사 순서로 전자서명합니다.", "approvals")}
     <section class="approval-security-notice">
-      <strong>V2.2 결재방식</strong><span>① 담당: 제안 제출 즉시 제안자명·제출일 자동작성 · ② 부서장/공장장/대표이사: Supabase Authentication 계정 연결 · ③ 각 결재자는 본인 단계만 승인·반려</span>
+      <strong>V2.3 결재방식</strong><span>① 담당: 제안 제출 즉시 자동작성 · ② 부서장/주관부서/대표이사: Supabase Authentication 계정 연결 · ③ V2.3 적용 이후 신규 제안만 결재대상 · ④ 각 결재자는 본인 단계만 승인·반려</span>
     </section>
     <section class="admin-config-grid">
       <form id="approvalStepForm" class="side-card admin-config-form">
@@ -1335,7 +1354,7 @@ function renderAdminApprovals() {
         <label class="field">결재자 이름<input name="display_name" maxlength="50" required placeholder="예: 홍길동"></label>
         <label class="field">본인 결재단계<select name="step_id" required><option value="">단계 선택</option>${manualSteps.map(step=>`<option value="${step.id}">${step.step_order}. ${escapeHtml(step.role_name)}</option>`).join("")}</select></label>
         <label class="field">적용부서<select name="department"><option value="">전체 부서</option>${departments.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("")}</select></label>
-        <small class="form-help">담당은 계정 연결 대상이 아닙니다. 부서장은 해당 부서를 지정하고, 공장장·대표이사는 전체 부서를 선택하세요.</small>
+        <small class="form-help">담당은 계정 연결 대상이 아닙니다. 부서장은 해당 부서를 지정하고, 주관부서·대표이사는 전체 부서를 선택하세요.</small>
         <button class="button button-primary button-wide" type="submit">결재자 연결</button>
       </form>
       <article class="analytics-panel admin-config-list approver-assignment-list"><div class="analytics-panel-head"><div><span class="eyebrow">ASSIGNMENTS</span><h2>지정된 결재자</h2></div></div>
@@ -1348,7 +1367,7 @@ async function renderApproverInbox() {
   main.innerHTML = `${adminPageHeader("내 결재함", "본인 계정에 지정된 결재만 표시됩니다. 이전 단계가 승인되어야 다음 단계가 활성화됩니다.", "inbox")}<div class="loading-card"><div class="spinner"></div><p>결재함을 불러오는 중입니다.</p></div>`;
   try {
     const rows = await store.getMyApprovalInbox();
-    const body = rows.length ? `<div class="approver-inbox">${rows.map(row=>`<article class="approver-inbox-card ${row.can_act ? "actionable" : "blocked"}"><div><span class="eyebrow">${escapeHtml(row.role_name)} · ${escapeHtml(row.department)}</span><h3>${escapeHtml(row.proposal_no)} · ${escapeHtml(row.title)}</h3><p>${escapeHtml(row.proposer_name)} · ${escapeHtml(formatDate(row.received_date))}</p></div><div class="approver-inbox-state">${statusBadge(row.approval_status)}<small>${escapeHtml(row.block_reason||"")}</small><button class="button ${row.can_act ? "button-primary" : "button-secondary"}" data-route="admin/review/${escapeHtml(row.proposal_id)}">${row.can_act ? "결재 검토" : "내용 보기"}</button></div></article>`).join("")}</div>` : `<div class="empty-state"><h2>배정된 결재가 없습니다.</h2><p>시스템 관리자가 전자결재 설정에서 본인 계정을 결재단계에 연결해야 합니다.</p></div>`;
+    const body = rows.length ? `<div class="approver-inbox">${rows.map(row=>{ const days=Number(row.pending_days||0); const delay=days>=7?"장기 미결재":days>=3?"결재 지연":days>=1?"결재 필요":"신규 결재"; return `<article class="approver-inbox-card ${row.can_act ? "actionable" : "blocked"} overdue-${Number(row.overdue_level||0)}"><div><span class="eyebrow">${escapeHtml(row.role_name)} · ${escapeHtml(row.department)}</span><h3>${escapeHtml(row.proposal_no)} · ${escapeHtml(row.title)}</h3><p>${escapeHtml(row.proposer_name)} · ${escapeHtml(formatDate(row.received_date))}</p></div><div class="approver-inbox-state"><span class="approval-delay-label">${escapeHtml(delay)}${row.can_act ? ` · ${days}일` : ""}</span>${statusBadge(row.approval_status)}<small>${escapeHtml(row.block_reason||"")}</small><button class="button ${row.can_act ? "button-primary" : "button-secondary"}" data-route="admin/review/${escapeHtml(row.proposal_id)}">${row.can_act ? "결재 검토" : "내용 보기"}</button></div></article>`;}).join("")}</div>` : `<div class="empty-state"><h2>현재 결재 대기 건이 없습니다.</h2><p>V2.3 적용 이후 신규 제안 중 본인 순서가 된 건만 표시됩니다.</p></div>`;
     main.innerHTML = `${adminPageHeader("내 결재함", "본인 계정에 지정된 결재만 표시됩니다. 이전 단계가 승인되어야 다음 단계가 활성화됩니다.", "inbox")}<section class="section"><div class="section-heading"><div><span class="eyebrow">MY APPROVALS</span><h2>결재 대상</h2></div></div>${body}</section>`;
   } catch (error) {
     main.innerHTML = `${adminPageHeader("내 결재함", "V2.1 전자결재 SQL 적용 후 사용할 수 있습니다.", "inbox")}<div class="empty-state"><h2>결재함을 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p></div>`;
@@ -1368,7 +1387,7 @@ function renderApprovalAction(permission, proposalId) {
 
 async function renderApproverReview(id) {
   const proposal = state.proposals.find((item) => item.id === id);
-  if (!proposal) { main.innerHTML = `<div class="empty-state"><h2>제안을 찾지 못했습니다.</h2><button class="button button-primary" data-route="admin/inbox">내 결재함</button></div>`; return; }
+  if (!proposal) { main.innerHTML = `<div class="empty-state"><h2>제안을 찾지 못했습니다.</h2><button class="button button-primary" data-route="admin/inbox">내 결재함${actionableApprovalCount() ? ` <span class="approval-inbox-badge inline">${actionableApprovalCount()}</span>` : ""}</button></div>`; return; }
   const records = await store.getApprovalRecords(proposal.id).catch(() => []);
   const permission = resolveApprovalPermission(proposal, state.approvalSteps, records, state.admin?.assignments || []);
   main.innerHTML = `${adminPageHeader("전자결재 검토", "제안내용을 확인한 뒤 본인에게 지정된 단계만 승인 또는 반려할 수 있습니다.", "inbox")}
@@ -1376,6 +1395,18 @@ async function renderApproverReview(id) {
       <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2><p>${escapeHtml(proposal.current_problem)}</p><h2>개선방안</h2><p>${escapeHtml(proposal.improvement_plan)}</p><h2>기대효과</h2><p>${escapeHtml(proposal.expected_effect)}</p><div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div></article>
       <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${renderApprovalProgress(state.approvalSteps, records)}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}</section></aside>
     </section>`;
+}
+
+async function renderAdminNotifications() {
+  if (!state.admin?.isSystemAdmin) { renderAdminInbox(); return; }
+  main.innerHTML = `${adminPageHeader("메일알림", "결재 요청 이메일의 전송 성공·실패를 확인하고 실패 건을 재전송합니다.", "notifications")}<div class="loading-card"><div class="spinner"></div><p>메일 발송기록을 불러오는 중입니다.</p></div>`;
+  try {
+    const logs = await store.getNotificationLogs(150);
+    const rows = logs.length ? `<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>일시</th><th>제안</th><th>단계</th><th>수신자</th><th>유형</th><th>상태</th><th>처리</th></tr></thead><tbody>${logs.map(row=>`<tr><td>${escapeHtml(new Date(row.created_at).toLocaleString("ko-KR"))}</td><td>${escapeHtml(row.proposals?.proposal_no||"-")}<br><small>${escapeHtml(row.proposals?.title||"")}</small></td><td>${escapeHtml(row.approval_steps?.role_name||"-")}</td><td>${escapeHtml(row.recipient_name||"")}<br><small>${escapeHtml(row.recipient_email||"")}</small></td><td>${escapeHtml(row.notification_type||"")}</td><td>${statusBadge(row.status === "sent" ? "완료" : row.status === "failed" ? "보류" : "진행중")}<br><small>${escapeHtml(row.last_error||"")}</small></td><td>${row.status === "failed" ? `<button class="button button-small button-primary" data-action="retry-notification" data-id="${row.id}">재전송</button>` : "-"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state"><h2>메일 발송기록이 없습니다.</h2><p>V2.3 이후 신규 제안이 결재대상으로 등록되면 이곳에 기록됩니다.</p></div>`;
+    main.innerHTML = `${adminPageHeader("메일알림", "결재 요청 이메일의 전송 성공·실패를 확인하고 실패 건을 재전송합니다.", "notifications")}<section class="section"><div class="section-heading"><div><span class="eyebrow">EMAIL LOG</span><h2>최근 발송 150건</h2></div></div>${rows}</section>`;
+  } catch (error) {
+    main.innerHTML = `${adminPageHeader("메일알림", "V2.3 SQL과 Edge Function 적용 후 사용할 수 있습니다.", "notifications")}<div class="empty-state"><h2>메일 발송기록을 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p></div>`;
+  }
 }
 
 async function renderAdminAudit() {
@@ -1429,6 +1460,7 @@ function renderAdmin(action = "", id = "") {
   if (action === "inbox") { void renderApproverInbox(); return; }
   if (action === "goals") { renderAdminGoals(); return; }
   if (action === "approvals") { renderAdminApprovals(); return; }
+  if (action === "notifications") { void renderAdminNotifications(); return; }
   if (action === "audit") { void renderAdminAudit(); return; }
 
   const metrics = dashboardMetrics(state.proposals);
@@ -1442,6 +1474,12 @@ function renderAdmin(action = "", id = "") {
       </div>
     </section>
     ${adminNav("proposals")}
+
+    <section class="metric-grid admin-metrics approval-admin-summary">
+      <div class="metric-card"><span class="metric-icon">✅</span><div><small>현재 결재대기</small><strong>${Number(state.approvalOverdueSummary.pending_total || 0)}건</strong></div></div>
+      <div class="metric-card"><span class="metric-icon">⚠️</span><div><small>결재 지연 3일+</small><strong>${Number(state.approvalOverdueSummary.overdue_3 || 0)}건</strong></div></div>
+      <div class="metric-card"><span class="metric-icon">🚨</span><div><small>장기 미결재 7일+</small><strong>${Number(state.approvalOverdueSummary.overdue_7 || 0)}건</strong></div></div>
+    </section>
 
     <section class="metric-grid admin-metrics">
       <div class="metric-card"><span class="metric-icon">💡</span><div><small>전체</small><strong>${metrics.total}</strong></div></div>
@@ -1795,6 +1833,15 @@ document.addEventListener("click", async (event) => {
       await refreshData();
       renderAdmin("approvals");
       showToast("결재자 배정을 해제했습니다.");
+    } else if (action === "close-approval-notice") {
+      $("#approvalNoticeDialog")?.close();
+    } else if (action === "open-approval-inbox") {
+      $("#approvalNoticeDialog")?.close();
+      go("admin/inbox");
+    } else if (action === "retry-notification") {
+      await store.retryNotification(actionButton.dataset.id);
+      renderAdminNotifications();
+      showToast("메일 재전송 대기열에 넣었습니다.");
     } else if (action === "save-approval-action") {
       const box = $("#approvalActionForm");
       if (!box) return;
@@ -1856,11 +1903,14 @@ document.addEventListener("submit", async (event) => {
       await handleProposalSubmit(event.target);
     } else if (event.target.id === "adminLoginForm") {
       const data = new FormData(event.target);
+      const loginRoute = routeParts();
       const account = await store.loginAdmin(data.get("email"), data.get("password"));
       await refreshData();
-      if (!account?.isSystemAdmin) location.hash = "#admin/inbox";
+      const hasDirectReview = loginRoute[0] === "admin" && loginRoute[1] === "review" && loginRoute[2];
+      if (!account?.isSystemAdmin && !hasDirectReview) location.hash = "#admin/inbox";
       render();
       showToast(account?.isSystemAdmin ? "시스템 관리자 로그인되었습니다." : "결재자 로그인되었습니다.");
+      setTimeout(showApprovalLoginNotice, 120);
     } else if (event.target.id === "departmentGoalForm") {
       const data = new FormData(event.target);
       await store.saveDepartmentGoal({ year: Number(data.get("year")), department: data.get("department"), annual_goal: Number(data.get("annual_goal") || 0), note: data.get("note")?.trim() });

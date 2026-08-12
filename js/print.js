@@ -1,4 +1,4 @@
-export const PRINT_APPROVAL_ROLES = ["담당", "팀장", "임원", "주관부서", "대표이사"];
+export const PRINT_APPROVAL_ROLES = ["담당", "부서장", "주관부서", "대표이사"];
 
 function display(value, fallback = "-") {
   const normalized = String(value ?? "").trim();

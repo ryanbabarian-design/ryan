@@ -366,6 +366,9 @@ export function collectProposalImagePaths(proposal, storageBucket) {
 
 
 export function resolveApprovalPermission(proposal, steps, records, assignments) {
+  if (proposal?.approval_required !== true) {
+    return { assigned: false, canAct: false, step: null, assignment: null, record: null, reason: "V2.3 적용 이전 제안으로 전자결재 대상이 아닙니다." };
+  }
   const activeSteps = (Array.isArray(steps) ? steps : [])
     .filter((step) => step.active !== false)
     .sort((a, b) => Number(a.step_order || 0) - Number(b.step_order || 0));
