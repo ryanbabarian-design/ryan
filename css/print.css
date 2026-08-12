@@ -322,3 +322,19 @@ body.print-route #app {
     print-color-adjust: exact !important;
   }
 }
+
+/* V2.0 management report print */
+@media print {
+  .management-report-screen .print-toolbar { display:none !important; }
+  .management-report-document { width:auto; min-height:0; margin:0; padding:0; box-shadow:none; }
+  .management-report-document .analytics-table-wrap { overflow:visible; }
+  .management-report-document .analytics-table { font-size:8pt; }
+  .management-report-document .analytics-table th,
+  .management-report-document .analytics-table td { padding:1.5mm; }
+  .report-section { break-inside:avoid; }
+}
+.print-approval-table td strong,.print-approval-table td small,.print-approval-table td em { display:block; }
+.print-approval-table td strong { color:#0f8b6d; font-size:8pt; }
+.print-approval-table td small { margin-top:.5mm; font-size:7pt; font-weight:700; }
+.print-approval-table td em { margin-top:.3mm; color:#777; font-size:6.5pt; font-style:normal; }
+.print-approval-pending { color:#8a93a1; font-size:7.5pt; }

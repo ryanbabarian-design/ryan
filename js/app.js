@@ -5,6 +5,13 @@ import {
   dashboardDepartmentMonthly,
   dashboardHighlights,
   dashboardMetrics,
+  departmentGoalProgress,
+  effectAnalysis,
+  findSimilarProposals,
+  operationalMetrics,
+  proposerPerformance,
+  topProposals,
+  buildTimelineFallback,
   filterProposals,
   formatCurrency,
   formatDate,
@@ -14,8 +21,8 @@ import {
   REVIEW_RESULTS,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=1.9";
-import { createStore } from "./services/store.js?v=1.9";
+} from "./core.js?v=2.0";
+import { createStore } from "./services/store.js?v=2.0";
 import {
   appendImageFiles,
   createImageSelection,
@@ -24,13 +31,15 @@ import {
   MAX_IMAGES_PER_SECTION,
   removeSelectedImage,
   totalSelectedImages,
-} from "./image-manager.js?v=1.7";
+} from "./image-manager.js?v=2.0";
 import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js";
 
 const store = createStore();
 const state = {
   proposals: [],
   employees: [],
+  departmentGoals: [],
+  approvalSteps: [],
   admin: null,
   loading: true,
   error: "",
@@ -199,13 +208,17 @@ function setActiveNav(route) {
 }
 
 async function refreshData() {
-  const [proposals, employees, admin] = await Promise.all([
+  const [proposals, employees, departmentGoals, approvalSteps, admin] = await Promise.all([
     store.getProposals(),
     store.getEmployees(),
+    store.getDepartmentGoals().catch(() => []),
+    store.getApprovalSteps(true).catch(() => []),
     store.getAdminSession(),
   ]);
   state.proposals = proposals;
   state.employees = employees;
+  state.departmentGoals = departmentGoals;
+  state.approvalSteps = approvalSteps;
   state.admin = admin;
 }
 
@@ -222,8 +235,8 @@ async function init() {
 
 function render() {
   const [route = "dashboard"] = routeParts();
-  document.body.classList.toggle("print-route", route === "print");
-  setActiveNav(route === "detail" || route === "edit" || route === "print" ? "list" : route);
+  document.body.classList.toggle("print-route", route === "print" || route === "report");
+  setActiveNav(["detail", "edit", "print", "person"].includes(route) ? "list" : route === "report" ? "dashboard" : route);
   $("#modeBadge").textContent = store.mode === "demo" ? "데모 모드" : "Supabase 연결";
   $("#modeBadge").className = `mode-badge ${store.mode}`;
 
@@ -242,6 +255,8 @@ function render() {
   else if (route === "detail") renderDetail(routeParts()[1]);
   else if (route === "print") renderPrint(routeParts()[1]);
   else if (route === "edit") renderProposalForm(routeParts()[1]);
+  else if (route === "person") renderProposerProfile(decodeURIComponent(routeParts()[1] || ""));
+  else if (route === "report") renderManagementReport();
   else if (route === "admin") renderAdmin(routeParts()[1], routeParts()[2]);
   else renderDashboard();
 }
@@ -262,7 +277,7 @@ function proposalCard(proposal) {
       </div>
       <p class="proposal-summary">${escapeHtml(proposal.current_problem || "상세내용 없음")}</p>
       <div class="proposal-card-bottom">
-        <div class="proposer"><span class="avatar">${escapeHtml(proposal.proposer_name?.slice(0, 1) || "?")}</span>${escapeHtml(proposal.proposer_name)}</div>
+        <button class="proposer proposer-link" data-route="person/${encodeURIComponent(proposal.proposer_name)}?year=${encodeURIComponent(String(proposal.received_date || "").slice(0,4) || "all")}"><span class="avatar">${escapeHtml(proposal.proposer_name?.slice(0, 1) || "?")}</span>${escapeHtml(proposal.proposer_name)}</button>
         <div class="card-actions">
           ${statusBadge(proposal.implementation_status)}
           <button class="button button-ghost button-small" data-action="detail" data-no="${escapeHtml(proposal.proposal_no)}">상세보기</button>
@@ -274,6 +289,18 @@ function proposalCard(proposal) {
 function getDashboardYearFromUrl() {
   const params = new URLSearchParams(location.hash.split("?")[1] || "");
   return params.get("year") || "";
+}
+
+function getRankingMetricFromUrl() {
+  const params = new URLSearchParams(location.hash.split("?")[1] || "");
+  const metric = params.get("ranking") || "score";
+  return ["score", "effect", "award"].includes(metric) ? metric : "score";
+}
+
+function getReportMonthFromUrl() {
+  const params = new URLSearchParams(location.hash.split("?")[1] || "");
+  const month = String(params.get("month") || "").trim();
+  return /^(?:[1-9]|1[0-2])$/.test(month) ? month : "";
 }
 
 function analyticsRows(rows, emptyMessage) {
@@ -366,6 +393,11 @@ function renderDashboard() {
   const currentYearCount = currentYearProposalCount(state.proposals);
   const departmentMonthly = dashboardDepartmentMonthly(state.proposals, report.selectedYear);
   const highlights = dashboardHighlights(state.proposals, report.selectedYear);
+  const operations = operationalMetrics(scopedProposals);
+  const goals = departmentGoalProgress(state.proposals, state.departmentGoals, report.selectedYear);
+  const effects = effectAnalysis(scopedProposals);
+  const rankingMetric = getRankingMetricFromUrl();
+  const top10 = topProposals(state.proposals, report.selectedYear, rankingMetric, 10);
   const recent = filterProposals(state.proposals).slice(0, 3);
   const departments = [...new Set(state.proposals.map((item) => item.department).filter(Boolean))].sort();
   const selectedLabel = report.selectedYear === "all" ? "전체 연도" : `${report.selectedYear}년`;
@@ -416,6 +448,13 @@ function renderDashboard() {
       </button>
     </section>
 
+    <section class="metric-grid operational-metric-grid" aria-label="운영관리 요약">
+      <button class="metric-card operational-card danger" data-route="list?year=${dashboardYearParam}&workflow=overdue-review"><span class="metric-icon">!</span><div><small>장기 미심사</small><strong>${operations.overdueReview.toLocaleString("ko-KR")}건</strong><em>7일 이상</em></div></button>
+      <button class="metric-card operational-card warning" data-route="list?year=${dashboardYearParam}&workflow=overdue-implementation"><span class="metric-icon">↻</span><div><small>시행 지연</small><strong>${operations.overdueImplementation.toLocaleString("ko-KR")}건</strong><em>채택 후 30일+</em></div></button>
+      <div class="metric-card operational-card"><span class="metric-icon">＋</span><div><small>이번달 신규</small><strong>${operations.monthNew.toLocaleString("ko-KR")}건</strong><em>현재 월 접수</em></div></div>
+      <div class="metric-card operational-card"><span class="metric-icon">₩</span><div><small>이번달 포상금</small><strong class="metric-money">${formatCurrency(operations.monthAward)}</strong><em>현재 월 제안 기준</em></div></div>
+    </section>
+
     <section class="quick-search brand-quick-search">
       <div>
         <span class="eyebrow">DUPLICATE CHECK</span>
@@ -449,6 +488,7 @@ function renderDashboard() {
           <p>제안건수·예상 투입비용·포상금·효과금액을 연도별, 월별, 부서별로 확인합니다.</p>
         </div>
         <div class="dashboard-controls">
+          <button class="button button-ghost" data-route="report?year=${dashboardYearParam}">월간/연간 운영보고서</button>
           <label>조회 연도
             <select id="dashboardYearFilter">
               <option value="all" ${report.selectedYear === "all" ? "selected" : ""}>전체 연도</option>
@@ -468,6 +508,36 @@ function renderDashboard() {
         <div class="metric-card analytics-kpi cost"><span class="metric-icon">₩</span><div><small>예상 투입비용</small><strong class="metric-money">${formatCurrency(report.totals.costTotal)}</strong></div></div>
         <div class="metric-card analytics-kpi award"><span class="metric-icon">賞</span><div><small>포상금</small><strong class="metric-money">${formatCurrency(report.totals.awardTotal)}</strong></div></div>
         <div class="metric-card analytics-kpi effect"><span class="metric-icon">↗</span><div><small>효과금액</small><strong class="metric-money">${formatCurrency(report.totals.effectTotal)}</strong></div></div>
+      </section>
+
+      <section class="v2-insight-grid">
+        <article class="analytics-panel goal-panel">
+          <div class="analytics-panel-head"><div><span class="eyebrow">GOAL</span><h2>부서 목표달성률</h2><p>연도별 목표 대비 실제 제안건수를 비교합니다.</p></div></div>
+          ${report.selectedYear === "all" ? `<div class="analytics-empty">조회 연도를 선택하면 부서 목표달성률이 표시됩니다.</div>` : goals.length ? `
+            <div class="goal-progress-list">${goals.map((row) => `
+              <div class="goal-progress">
+                <div><strong>${escapeHtml(row.department)}</strong><span>${row.actual}건 / 목표 ${row.goal}건</span><b>${row.rate.toLocaleString("ko-KR")}%</b></div>
+                <div class="goal-progress-track"><span style="width:${Math.min(100, row.rate)}%"></span></div>
+              </div>`).join("")}</div>` : `<div class="analytics-empty">등록된 부서 목표가 없습니다. 관리자에서 목표를 설정하세요.</div>`}
+        </article>
+
+        <article class="analytics-panel roi-panel">
+          <div class="analytics-panel-head"><div><span class="eyebrow">VALUE</span><h2>제안 효과 분석</h2><p>투입비용과 포상금을 포함해 순효과와 ROI를 계산합니다.</p></div></div>
+          <div class="roi-summary">
+            <div><small>총 효과금액</small><strong>${formatCurrency(effects.effectTotal)}</strong></div>
+            <div><small>총 투자비용</small><strong>${formatCurrency(effects.investment)}</strong></div>
+            <div class="net"><small>순효과</small><strong>${formatCurrency(effects.netEffect)}</strong></div>
+            <div class="roi"><small>ROI</small><strong>${effects.roi.toLocaleString("ko-KR", { maximumFractionDigits: 1 })}%</strong></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="analytics-panel top10-panel">
+        <div class="analytics-panel-head"><div><span class="eyebrow">TOP 10</span><h2>우수제안 TOP 10</h2><p>점수·효과금액·포상금 기준으로 순위를 비교합니다.</p></div><label>순위기준<select id="top10MetricFilter"><option value="score" ${rankingMetric === "score" ? "selected" : ""}>심사점수</option><option value="effect" ${rankingMetric === "effect" ? "selected" : ""}>효과금액</option><option value="award" ${rankingMetric === "award" ? "selected" : ""}>포상금</option></select></label></div>
+        ${top10.length ? `<div class="top10-list">${top10.map((proposal, index) => `
+          <button class="top10-row" data-action="detail" data-no="${escapeHtml(proposal.proposal_no)}">
+            <b>${index + 1}</b><span><strong>${escapeHtml(proposal.title)}</strong><small>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.proposer_name)} · ${escapeHtml(proposal.department)}</small></span><em>${rankingMetric === "effect" ? formatCurrency(proposal.effect_amount) : rankingMetric === "award" ? formatCurrency(proposal.award_amount) : `${Number(proposal.score || 0)}점`}</em>
+          </button>`).join("")}</div>` : `<div class="analytics-empty">선택 기준에 해당하는 제안이 없습니다.</div>`}
       </section>
 
       <section class="analytics-layout">
@@ -587,7 +657,7 @@ function renderList() {
   const proposals = filterProposals(state.proposals, filters);
   const departments = [...new Set(state.proposals.map((item) => item.department))].sort();
   const years = dashboardBreakdown(state.proposals, "all").years;
-  const workflowLabels = { total: "전체 제안", pending: "심사 대기", adopted: "채택", completed: "실시 완료" };
+  const workflowLabels = { total: "전체 제안", pending: "심사 대기", "overdue-review": "장기 미심사", adopted: "채택", "overdue-implementation": "시행 지연", completed: "실시 완료" };
   const yearLabel = filters.year === "all" ? "전체 연도" : `${filters.year}년`;
   const workflowLabel = workflowLabels[filters.workflow] || "전체 제안";
 
@@ -621,7 +691,9 @@ function renderList() {
             <select name="workflow">
               <option value="total" ${filters.workflow === "total" ? "selected" : ""}>전체 제안</option>
               <option value="pending" ${filters.workflow === "pending" ? "selected" : ""}>심사 대기</option>
+              <option value="overdue-review" ${filters.workflow === "overdue-review" ? "selected" : ""}>장기 미심사(7일+)</option>
               <option value="adopted" ${filters.workflow === "adopted" ? "selected" : ""}>채택</option>
+              <option value="overdue-implementation" ${filters.workflow === "overdue-implementation" ? "selected" : ""}>시행 지연(30일+)</option>
               <option value="completed" ${filters.workflow === "completed" ? "selected" : ""}>실시 완료</option>
             </select>
           </label>
@@ -676,14 +748,19 @@ function employeeOptions(selectedName = "", selectedDepartment = "") {
 
 function renderSimilar(title, excludeNo = "") {
   if (!title?.trim()) return "";
-  const similar = filterProposals(state.proposals, { query: title })
-    .filter((p) => p.proposal_no !== excludeNo)
-    .slice(0, 4);
-  if (!similar.length) return `<p class="similar-empty">현재 검색어와 일치하는 기존 제안이 없습니다.</p>`;
+  const form = $("#proposalForm");
+  const draft = {
+    title,
+    current_problem: form?.elements?.current_problem?.value || "",
+    improvement_plan: form?.elements?.improvement_plan?.value || "",
+    expected_effect: form?.elements?.expected_effect?.value || "",
+  };
+  const similar = findSimilarProposals(state.proposals, draft, { excludeProposalNo: excludeNo, limit: 5 });
+  if (!similar.length) return `<p class="similar-empty">유사도가 높은 기존 제안이 없습니다.</p>`;
   return similar.map((proposal) => `
     <button type="button" class="similar-item" data-action="detail" data-no="${escapeHtml(proposal.proposal_no)}">
       <strong>${escapeHtml(proposal.title)}</strong>
-      <span>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.department)} · ${escapeHtml(proposal.proposer_name)}</span>
+      <span>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.department)} · ${escapeHtml(proposal.proposer_name)} · <b>유사도 ${proposal.similarity}%</b></span>
     </button>
   `).join("");
 }
@@ -771,7 +848,7 @@ function renderProposalForm(proposalNo = "") {
           <div class="comparison-card before">
             <div class="comparison-label">BEFORE · 개선 전</div>
             <label class="field">현재 문제점 <b>*</b>
-              <textarea name="current_problem" rows="8" required placeholder="어떤 문제가 있고, 왜 불편하거나 위험한지 작성">${escapeHtml(proposal?.current_problem || "")}</textarea>
+              <textarea id="currentProblem" name="current_problem" rows="8" required placeholder="어떤 문제가 있고, 왜 불편하거나 위험한지 작성">${escapeHtml(proposal?.current_problem || "")}</textarea>
             </label>
             <label class="upload-box image-add-box">개선 전 사진 추가
               <input id="beforeImages" type="file" accept="image/jpeg,image/png,image/webp" multiple>
@@ -786,7 +863,7 @@ function renderProposalForm(proposalNo = "") {
           <div class="comparison-card after">
             <div class="comparison-label">AFTER · 개선 후</div>
             <label class="field">개선방안 <b>*</b>
-              <textarea name="improvement_plan" rows="8" required placeholder="무엇을 어떻게 바꿀지 구체적으로 작성">${escapeHtml(proposal?.improvement_plan || "")}</textarea>
+              <textarea id="improvementPlan" name="improvement_plan" rows="8" required placeholder="무엇을 어떻게 바꿀지 구체적으로 작성">${escapeHtml(proposal?.improvement_plan || "")}</textarea>
             </label>
             <label class="upload-box image-add-box">개선 후·참고 사진 추가
               <input id="afterImages" type="file" accept="image/jpeg,image/png,image/webp" multiple>
@@ -863,7 +940,7 @@ function renderDetail(proposalNo) {
             <span>${escapeHtml(proposal.category)}제안</span>
           </div>
           <h1>${escapeHtml(proposal.title)}</h1>
-          <p><strong>${escapeHtml(proposal.proposer_name)}</strong> · ${escapeHtml(proposal.department)}</p>
+          <p><button class="detail-proposer-link" data-route="person/${encodeURIComponent(proposal.proposer_name)}?year=${encodeURIComponent(String(proposal.received_date || "").slice(0,4) || "all")}"><strong>${escapeHtml(proposal.proposer_name)}</strong></button> · ${escapeHtml(proposal.department)}</p>
         </div>
         <div class="detail-actions">
           ${statusBadge(proposal.status)}
@@ -905,6 +982,22 @@ function renderDetail(proposalNo) {
       <div class="effect-cost"><small>예상 투입비용</small><strong>${formatCurrency(proposal.cost_amount)}</strong></div>
     </section>
 
+    <section class="detail-operations-grid">
+      <article class="detail-operation-card timeline-card">
+        <div class="section-heading"><div><span class="eyebrow">TIMELINE</span><h2>진행상태 타임라인</h2></div></div>
+        <div id="timelineContent" class="proposal-timeline">${renderTimelineRows(buildTimelineFallback(proposal))}</div>
+      </article>
+      <article class="detail-operation-card proposer-performance-card">
+        <div class="section-heading"><div><span class="eyebrow">PERSONAL</span><h2>개인 제안실적</h2></div><button class="button button-ghost button-small" data-route="person/${encodeURIComponent(proposal.proposer_name)}?year=${encodeURIComponent(String(proposal.received_date || "").slice(0,4) || "all")}">전체보기</button></div>
+        ${renderProposerMiniPerformance(proposal)}
+      </article>
+    </section>
+
+    <section class="detail-operation-card approval-progress-card">
+      <div class="section-heading"><div><span class="eyebrow">APPROVAL</span><h2>전자결재 진행</h2></div></div>
+      <div id="approvalContent">${renderApprovalProgress(state.approvalSteps, [])}</div>
+    </section>
+
     <section class="review-box">
       <div>
         <span class="eyebrow">REVIEW</span>
@@ -917,8 +1010,58 @@ function renderDetail(proposalNo) {
       </dl>
     </section>
   `;
+  hydrateDetailOperations(proposal).catch((error) => console.warn("V2 상세정보를 불러오지 못했습니다.", error));
 }
 
+function renderTimelineRows(rows) {
+  if (!rows?.length) return `<div class="analytics-empty">기록된 진행이력이 없습니다.</div>`;
+  return rows.map((row, index) => `
+    <div class="timeline-item ${index === rows.length - 1 ? "current" : ""}">
+      <span class="timeline-dot"></span>
+      <div><strong>${escapeHtml(row.stage || "-")}</strong><small>${escapeHtml(formatDate(String(row.happened_at || row.date || "").slice(0,10)))} · ${escapeHtml(row.actor_name || row.actor || "-")}</small><p>${escapeHtml(row.detail || "")}</p></div>
+    </div>`).join("");
+}
+
+function renderApprovalProgress(steps, records) {
+  if (!steps?.length) return `<div class="analytics-empty">전자결재 단계가 설정되지 않았습니다.</div>`;
+  const recordMap = new Map((records || []).map((row) => [String(row.step_id), row]));
+  return `<div class="approval-progress">${steps.filter((step) => step.active !== false).map((step) => {
+    const record = recordMap.get(String(step.id));
+    const status = record?.status || "대기";
+    return `<div class="approval-step ${status === "승인" ? "approved" : status === "반려" ? "rejected" : "pending"}"><span>${escapeHtml(String(step.step_order))}</span><div><strong>${escapeHtml(step.role_name)}</strong><small>${escapeHtml(status)}${record?.approver_name ? ` · ${escapeHtml(record.approver_name)}` : ""}</small></div></div>`;
+  }).join("")}</div>`;
+}
+
+function renderProposerMiniPerformance(proposal) {
+  const year = String(proposal.received_date || "").slice(0, 4) || "all";
+  const perf = proposerPerformance(state.proposals, proposal.proposer_name, year, proposal.department);
+  if (!perf) return `<div class="analytics-empty">개인 실적이 없습니다.</div>`;
+  return `<div class="personal-mini-grid"><div><small>${year}년 제안</small><strong>${perf.total}건</strong></div><div><small>채택률</small><strong>${perf.adoptionRate}%</strong></div><div><small>누적점수</small><strong>${perf.totalScore}점</strong></div><div><small>연도 순위</small><strong>${perf.rank}위</strong></div></div>`;
+}
+
+async function hydrateDetailOperations(proposal) {
+  const [history, approvals] = await Promise.all([
+    store.getStatusHistory(proposal.id).catch(() => []),
+    store.getApprovalRecords(proposal.id).catch(() => []),
+  ]);
+  const timelineTarget = $("#timelineContent");
+  if (timelineTarget) timelineTarget.innerHTML = renderTimelineRows(history.length ? history : buildTimelineFallback(proposal));
+  const approvalTarget = $("#approvalContent");
+  if (approvalTarget) approvalTarget.innerHTML = renderApprovalProgress(state.approvalSteps, approvals);
+}
+
+function renderProposerProfile(name) {
+  const requested = getDashboardYearFromUrl();
+  const report = dashboardBreakdown(state.proposals, requested);
+  const year = report.selectedYear;
+  const perf = proposerPerformance(state.proposals, name, year);
+  const rows = filterProposals(state.proposals, { year: year === "all" ? "all" : year, query: name }).filter((p) => p.proposer_name === name);
+  main.innerHTML = `
+    <section class="page-header"><div><span class="eyebrow">PROPOSER PROFILE</span><h1>${escapeHtml(name)} 개인 제안실적</h1><p>연도별 제안건수·채택률·점수·포상금·효과금액을 확인합니다.</p></div><button class="button button-ghost" data-route="list">접수현황</button></section>
+    <section class="profile-toolbar"><label>조회연도<select id="personYearFilter" data-person="${escapeHtml(name)}"><option value="all" ${year === "all" ? "selected" : ""}>전체 연도</option>${report.years.map((y) => `<option value="${y}" ${year === y ? "selected" : ""}>${y}년</option>`).join("")}</select></label></section>
+    ${perf ? `<section class="metric-grid profile-metrics"><div class="metric-card"><div><small>총 제안</small><strong>${perf.total}건</strong></div></div><div class="metric-card"><div><small>채택</small><strong>${perf.adopted}건</strong></div></div><div class="metric-card"><div><small>채택률</small><strong>${perf.adoptionRate}%</strong></div></div><div class="metric-card"><div><small>순위</small><strong>${perf.rank}위</strong></div></div><div class="metric-card"><div><small>누적점수</small><strong>${perf.totalScore}점</strong></div></div><div class="metric-card"><div><small>포상금</small><strong>${formatCurrency(perf.awardTotal)}</strong></div></div><div class="metric-card"><div><small>효과금액</small><strong>${formatCurrency(perf.effectTotal)}</strong></div></div></section>` : `<div class="analytics-empty">선택 기간 실적이 없습니다.</div>`}
+    <section class="section"><div class="section-heading"><div><span class="eyebrow">IDEAS</span><h2>${escapeHtml(year === "all" ? "전체 연도" : `${year}년`)} 제안내역</h2></div></div>${rows.length ? `<div class="proposal-grid">${rows.map(proposalCard).join("")}</div>` : `<div class="analytics-empty">제안내역이 없습니다.</div>`}</section>`;
+}
 
 function renderPrintImages(images, label) {
   if (!images.length) {
@@ -942,9 +1085,11 @@ function renderPrint(proposalNo) {
   }
 
   const model = buildPrintModel(proposal);
-  const approvalCells = PRINT_APPROVAL_ROLES.map((role) => `
+  const printSteps = state.approvalSteps.filter((step) => step.active !== false).slice(0, 5);
+  const printRoles = printSteps.length ? printSteps.map((step) => step.role_name) : PRINT_APPROVAL_ROLES;
+  const approvalCells = printRoles.map((role) => `
     <th>${escapeHtml(role)}</th>`).join("");
-  const approvalSignatures = PRINT_APPROVAL_ROLES.map(() => `<td></td>`).join("");
+  const approvalSignatures = printRoles.map((_, index) => `<td data-print-approval-index="${index}"></td>`).join("");
   const categoryMark = (checked) => `<span class="print-checkbox ${checked ? "checked" : ""}">${checked ? "✓" : ""}</span>`;
 
   main.innerHTML = `
@@ -1039,6 +1184,145 @@ function renderPrint(proposalNo) {
         </footer>
       </article>
     </section>`;
+  hydratePrintApproval(proposal, printSteps).catch(() => {});
+}
+
+async function hydratePrintApproval(proposal, steps) {
+  if (!steps?.length) return;
+  const records = await store.getApprovalRecords(proposal.id).catch(() => []);
+  const recordMap = new Map(records.map((row) => [String(row.step_id), row]));
+  steps.forEach((step, index) => {
+    const cell = document.querySelector(`[data-print-approval-index="${index}"]`);
+    if (!cell) return;
+    const record = recordMap.get(String(step.id));
+    if (!record || record.status === "대기") {
+      cell.innerHTML = `<span class="print-approval-pending">대기</span>`;
+    } else {
+      cell.innerHTML = `<strong>${escapeHtml(record.status)}</strong><small>${escapeHtml(record.approver_name || "")}</small><em>${escapeHtml(record.acted_at ? formatDate(String(record.acted_at).slice(0,10)) : "")}</em>`;
+    }
+  });
+}
+
+function renderManagementReport() {
+  const requested = getDashboardYearFromUrl();
+  const annualReport = dashboardBreakdown(state.proposals, requested);
+  const year = annualReport.selectedYear;
+  const month = year === "all" ? "" : getReportMonthFromUrl();
+  const scoped = filterProposals(state.proposals, { year, month });
+  const scopedBreakdown = dashboardBreakdown(scoped, "all");
+  const metrics = dashboardMetrics(scoped);
+  const operations = operationalMetrics(scoped);
+  const effects = effectAnalysis(scoped);
+  const goals = departmentGoalProgress(state.proposals, state.departmentGoals, year);
+  const top10 = topProposals(scoped, "all", "score", 10);
+  const label = year === "all" ? "전체 연도" : month ? `${year}년 ${Number(month)}월` : `${year}년`;
+  const monthlyRows = month
+    ? annualReport.monthly.filter((row) => Number(row.key) === Number(month))
+    : annualReport.monthly;
+  const departmentRows = scopedBreakdown.departments;
+
+  main.innerHTML = `
+    <section class="proposal-print-screen management-report-screen">
+      <div class="print-toolbar">
+        <div><strong>월간/연간 운영보고서</strong><span>${escapeHtml(label)} 제안제도 운영실적</span></div>
+        <div class="report-filter-controls">
+          <label>조회연도<select id="reportYearFilter"><option value="all" ${year === "all" ? "selected" : ""}>전체 연도</option>${annualReport.years.map((y) => `<option value="${y}" ${year === y ? "selected" : ""}>${y}년</option>`).join("")}</select></label>
+          <label>조회월<select id="reportMonthFilter" ${year === "all" ? "disabled" : ""}><option value="" ${!month ? "selected" : ""}>연간 전체</option>${Array.from({ length: 12 }, (_, index) => `<option value="${index + 1}" ${Number(month) === index + 1 ? "selected" : ""}>${index + 1}월</option>`).join("")}</select></label>
+        </div>
+        <div class="print-toolbar-actions">
+          <button class="button button-ghost" data-route="dashboard?year=${encodeURIComponent(year)}">대시보드</button>
+          <button class="button button-ghost" data-action="export-report-csv" data-year="${escapeHtml(year)}" data-month="${escapeHtml(month)}">CSV 저장</button>
+          <button class="button button-primary" data-action="trigger-print">인쇄 / PDF 저장</button>
+        </div>
+      </div>
+      <article class="management-report-document">
+        <header class="management-report-header"><img src="./assets/hana-metal-logo.png" alt="HANA METAL"><div><span>제안제도 운영보고</span><h1>${escapeHtml(label)} 제안관리 현황</h1><p>출력일 ${escapeHtml(new Date().toLocaleDateString("ko-KR"))}</p></div></header>
+        <section class="report-kpi-grid">
+          <div><small>전체 제안</small><strong>${metrics.total}건</strong></div><div><small>심사 대기</small><strong>${metrics.pending}건</strong></div><div><small>채택</small><strong>${metrics.adopted}건</strong></div><div><small>실시 완료</small><strong>${metrics.completed}건</strong></div>
+          <div><small>장기 미심사</small><strong>${operations.overdueReview}건</strong></div><div><small>시행 지연</small><strong>${operations.overdueImplementation}건</strong></div><div><small>포상금</small><strong>${formatCurrency(scopedBreakdown.totals.awardTotal)}</strong></div><div><small>효과금액</small><strong>${formatCurrency(scopedBreakdown.totals.effectTotal)}</strong></div>
+        </section>
+        <section class="report-value-summary"><div><small>투입비용</small><strong>${formatCurrency(effects.costTotal)}</strong></div><div><small>포상금</small><strong>${formatCurrency(effects.awardTotal)}</strong></div><div><small>순효과</small><strong>${formatCurrency(effects.netEffect)}</strong></div><div><small>ROI</small><strong>${effects.roi.toLocaleString("ko-KR", { maximumFractionDigits: 1 })}%</strong></div></section>
+        <section class="report-section"><h2>${month ? `${Number(month)}월 제안실적` : "월별 제안실적"}</h2>${analyticsTable(monthlyRows, "월")}</section>
+        <section class="report-section"><h2>부서별 제안실적</h2>${analyticsTable(departmentRows, "부서")}</section>
+        <section class="report-section"><h2>부서 목표달성률</h2>${year === "all" ? `<p>연도 선택 시 목표달성률이 표시됩니다.</p>` : month ? `<p>부서 목표는 연간 목표입니다. 연간 전체를 선택하면 목표달성률을 확인할 수 있습니다.</p>` : goals.length ? `<table class="analytics-table"><thead><tr><th>부서</th><th>목표</th><th>실적</th><th>달성률</th></tr></thead><tbody>${goals.map(row=>`<tr><td>${escapeHtml(row.department)}</td><td>${row.goal}건</td><td>${row.actual}건</td><td>${row.rate}%</td></tr>`).join("")}</tbody></table>` : `<p>등록된 목표가 없습니다.</p>`}</section>
+        <section class="report-section"><h2>우수제안 TOP 10</h2>${top10.length ? `<table class="analytics-table"><thead><tr><th>순위</th><th>접수번호</th><th>제안명</th><th>제안자</th><th>부서</th><th>점수</th><th>효과금액</th></tr></thead><tbody>${top10.map((proposal,index)=>`<tr><td>${index+1}</td><td>${escapeHtml(proposal.proposal_no)}</td><td>${escapeHtml(proposal.title)}</td><td>${escapeHtml(proposal.proposer_name)}</td><td>${escapeHtml(proposal.department)}</td><td>${Number(proposal.score||0)}점</td><td>${formatCurrency(proposal.effect_amount)}</td></tr>`).join("")}</tbody></table>` : `<p>점수 등록 제안이 없습니다.</p>`}</section>
+      </article>
+    </section>`;
+}
+
+function adminNav(active = "proposals") {
+  return `<nav class="admin-subnav">
+    <button class="${active === "proposals" ? "active" : ""}" data-route="admin">제안 심사</button>
+    <button class="${active === "goals" ? "active" : ""}" data-route="admin/goals">부서 목표관리</button>
+    <button class="${active === "approvals" ? "active" : ""}" data-route="admin/approvals">전자결재 설정</button>
+    <button class="${active === "audit" ? "active" : ""}" data-route="admin/audit">관리자 변경이력</button>
+  </nav>`;
+}
+
+function adminPageHeader(title, description, active) {
+  return `<section class="page-header"><div><span class="eyebrow">ADMIN CONSOLE</span><h1>${escapeHtml(title)}</h1><p>${escapeHtml(description)}</p></div><div class="header-buttons"><button class="button button-secondary" data-action="logout-admin">로그아웃</button></div></section>${adminNav(active)}`;
+}
+
+function renderAdminGoals() {
+  const years = dashboardBreakdown(state.proposals, "all").years;
+  const selectedYear = getDashboardYearFromUrl() === "all" ? String(new Date().getFullYear()) : (getDashboardYearFromUrl() || years[0] || String(new Date().getFullYear()));
+  const departments = [...new Set(state.employees.map((e) => e.department).concat(state.proposals.map((p) => p.department)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ko"));
+  const rows = state.departmentGoals.filter((row) => String(row.year) === String(selectedYear));
+  main.innerHTML = `${adminPageHeader("부서 목표관리", "연도별 부서 제안 목표를 설정하고 대시보드 달성률에 반영합니다.", "goals")}
+    <section class="admin-config-grid">
+      <form id="departmentGoalForm" class="side-card admin-config-form">
+        <span class="eyebrow">GOAL SETTING</span><h2>목표 등록·수정</h2>
+        <label class="field">연도<input type="number" name="year" min="2000" max="2100" value="${escapeHtml(selectedYear)}" required></label>
+        <label class="field">부서<select name="department" required><option value="">부서 선택</option>${departments.map(d=>`<option>${escapeHtml(d)}</option>`).join("")}</select></label>
+        <label class="field">연간 목표건수<input type="number" name="annual_goal" min="0" value="0" required></label>
+        <label class="field">비고<input name="note" maxlength="120" placeholder="예: 부서원 1인 2건"></label>
+        <button class="button button-primary button-wide" type="submit">목표 저장</button>
+      </form>
+      <article class="analytics-panel admin-config-list"><div class="analytics-panel-head"><div><span class="eyebrow">${escapeHtml(selectedYear)}</span><h2>등록된 부서 목표</h2></div><label>조회연도<select id="adminGoalYearFilter">${years.map(y=>`<option value="${y}" ${String(y)===String(selectedYear)?"selected":""}>${y}년</option>`).join("")}</select></label></div>
+        ${rows.length ? `<div class="goal-admin-list">${rows.map(row=>`<button type="button" class="goal-admin-row" data-action="edit-goal" data-year="${row.year}" data-department="${escapeHtml(row.department)}" data-goal="${row.annual_goal}" data-note="${escapeHtml(row.note||"")}"><strong>${escapeHtml(row.department)}</strong><span>${row.annual_goal}건</span><small>${escapeHtml(row.note||"")}</small></button>`).join("")}</div>` : `<div class="analytics-empty">해당 연도 목표가 없습니다.</div>`}
+      </article>
+    </section>`;
+}
+
+function renderAdminApprovals() {
+  const steps = state.approvalSteps;
+  main.innerHTML = `${adminPageHeader("전자결재 설정", "결재단계의 순서·직책·설명을 관리합니다. 활성 단계는 모든 제안에 적용됩니다.", "approvals")}
+    <section class="admin-config-grid">
+      <form id="approvalStepForm" class="side-card admin-config-form">
+        <span class="eyebrow">APPROVAL FLOW</span><h2>결재단계 등록·수정</h2>
+        <input type="hidden" name="id">
+        <label class="field">순서<input type="number" name="step_order" min="1" required></label>
+        <label class="field">직책/단계명<input name="role_name" maxlength="50" required placeholder="예: 담당"></label>
+        <label class="field">설명<input name="description" maxlength="150" placeholder="확인내용"></label>
+        <label class="check-label"><input type="checkbox" name="active" checked> 사용</label>
+        <button class="button button-primary button-wide" type="submit">결재단계 저장</button>
+      </form>
+      <article class="analytics-panel admin-config-list"><div class="analytics-panel-head"><div><span class="eyebrow">WORKFLOW</span><h2>현재 결재선</h2></div></div>
+        <div class="approval-admin-list">${steps.length ? steps.map(step=>`<button type="button" class="approval-admin-row" data-action="edit-approval-step" data-id="${step.id}" data-order="${step.step_order}" data-role="${escapeHtml(step.role_name)}" data-description="${escapeHtml(step.description||"")}" data-active="${step.active !== false}"><b>${step.step_order}</b><span><strong>${escapeHtml(step.role_name)}</strong><small>${escapeHtml(step.description||"")}</small></span>${statusBadge(step.active !== false ? "완료" : "미실시")}</button>`).join("") : `<div class="analytics-empty">등록된 결재단계가 없습니다.</div>`}</div>
+      </article>
+    </section>`;
+}
+
+async function renderAdminAudit() {
+  main.innerHTML = `${adminPageHeader("관리자 변경이력", "심사결과·점수·포상금·실시상태·삭제 등 관리자 변경사항을 확인합니다.", "audit")}<div class="loading-card"><div class="spinner"></div><p>변경이력을 불러오는 중입니다.</p></div>`;
+  try {
+    const logs = await store.getAuditLogs(300);
+    const fieldLabels = { status:"업무상태", review_result:"심사결과", implementing_department:"시행부서", implementation_status:"실시상태", implemented_date:"실시일", score:"점수", award_grade:"포상등급", award_amount:"포상금", payment_status:"지급상태", effect_amount:"효과금액", review_comment:"심사의견", title:"제안명", current_problem:"현재 문제점", improvement_plan:"개선방안", expected_effect:"기대효과", cost_amount:"투입비용", __deleted__:"제안 삭제" };
+    const content = logs.length ? `<div class="admin-table-wrap"><table class="admin-table audit-table"><thead><tr><th>일시</th><th>관리자</th><th>제안번호</th><th>항목</th><th>변경 전</th><th>변경 후</th></tr></thead><tbody>${logs.map(log=>`<tr><td>${escapeHtml(new Date(log.created_at).toLocaleString("ko-KR"))}</td><td>${escapeHtml(log.actor_name||"-")}</td><td>${escapeHtml(log.proposal_no)}</td><td><strong>${escapeHtml(fieldLabels[log.field_name]||log.field_name)}</strong></td><td>${escapeHtml(displayAuditValue(log.old_value))}</td><td>${escapeHtml(displayAuditValue(log.new_value))}</td></tr>`).join("")}</tbody></table></div>` : `<div class="analytics-empty">변경이력이 없습니다.</div>`;
+    main.innerHTML = `${adminPageHeader("관리자 변경이력", "심사결과·점수·포상금·실시상태·삭제 등 관리자 변경사항을 확인합니다.", "audit")}<section class="section"><div class="section-heading"><div><span class="eyebrow">AUDIT TRAIL</span><h2>최근 300건</h2></div></div>${content}</section>`;
+  } catch (error) {
+    main.innerHTML = `${adminPageHeader("관리자 변경이력", "Supabase V2 SQL 적용 후 사용할 수 있습니다.", "audit")}<div class="empty-state"><h2>변경이력을 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p></div>`;
+  }
+}
+
+function displayAuditValue(value) {
+  if (value == null) return "-";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    const rendered = JSON.stringify(value);
+    return rendered.length > 120 ? `${rendered.slice(0,117)}...` : rendered;
+  } catch { return String(value); }
 }
 
 function renderAdmin(action = "", id = "") {
@@ -1063,6 +1347,9 @@ function renderAdmin(action = "", id = "") {
     renderAdminEdit(id);
     return;
   }
+  if (action === "goals") { renderAdminGoals(); return; }
+  if (action === "approvals") { renderAdminApprovals(); return; }
+  if (action === "audit") { void renderAdminAudit(); return; }
 
   const metrics = dashboardMetrics(state.proposals);
   const proposals = filterProposals(state.proposals);
@@ -1074,6 +1361,7 @@ function renderAdmin(action = "", id = "") {
         <button class="button button-secondary" data-action="logout-admin">로그아웃</button>
       </div>
     </section>
+    ${adminNav("proposals")}
 
     <section class="metric-grid admin-metrics">
       <div class="metric-card"><span class="metric-icon">💡</span><div><small>전체</small><strong>${metrics.total}</strong></div></div>
@@ -1193,6 +1481,16 @@ function renderAdminEdit(id) {
           <small>점수 기준 예상 포상</small>
           <strong>${escapeHtml(proposal.award_grade || "-")} · ${formatCurrency(proposal.award_amount)}</strong>
         </div>
+        <section class="admin-approval-box">
+          <div class="section-heading"><div><span class="eyebrow">APPROVAL</span><h2>전자결재 처리</h2></div></div>
+          <div id="adminApprovalProgress">${renderApprovalProgress(state.approvalSteps, [])}</div>
+          <div id="approvalActionForm" data-proposal-id="${escapeHtml(proposal.id)}" class="approval-action-form">
+            <label class="field">결재단계<select name="step_id" required>${state.approvalSteps.map(step=>`<option value="${step.id}">${step.step_order}. ${escapeHtml(step.role_name)}</option>`).join("")}</select></label>
+            <label class="field">처리<select name="approval_status"><option value="승인">승인</option><option value="반려">반려</option></select></label>
+            <label class="field approval-comment">의견<input name="comment" placeholder="결재의견"></label>
+            <button class="button button-secondary" type="button" data-action="save-approval-action">전자결재 저장</button>
+          </div>
+        </section>
         <div class="admin-review-actions">
           <button type="button" class="button button-danger" data-action="delete-proposal" data-id="${escapeHtml(proposal.id)}">제안 삭제</button>
           <div><button type="button" class="button button-ghost" data-route="admin">취소</button><button class="button button-primary" type="submit">심사 저장</button></div>
@@ -1200,6 +1498,13 @@ function renderAdminEdit(id) {
       </section>
     </form>
   `;
+  hydrateAdminApproval(proposal).catch((error) => console.warn("전자결재 현황을 불러오지 못했습니다.", error));
+}
+
+async function hydrateAdminApproval(proposal) {
+  const records = await store.getApprovalRecords(proposal.id).catch(() => []);
+  const target = $("#adminApprovalProgress");
+  if (target) target.innerHTML = renderApprovalProgress(state.approvalSteps, records);
 }
 
 function buildProposalPayload(form) {
@@ -1325,13 +1630,14 @@ async function parseEmployeeFile(file) {
   return employees;
 }
 
-function downloadCsv() {
-  const csv = toProposalCsv(filterProposals(state.proposals));
+function downloadCsv(year = "all", month = "") {
+  const scoped = filterProposals(state.proposals, { year, month });
+  const csv = toProposalCsv(scoped);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `제안접수현황_${new Date().toISOString().slice(0, 10)}.csv`;
+  anchor.download = `제안접수현황_${year === "all" ? "전체" : year}${month ? `_${month}월` : ""}_${new Date().toISOString().slice(0, 10)}.csv`;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -1382,6 +1688,37 @@ document.addEventListener("click", async (event) => {
       showToast("로그아웃되었습니다.");
     } else if (action === "export-csv") {
       downloadCsv();
+    } else if (action === "export-report-csv") {
+      downloadCsv(actionButton.dataset.year || "all", actionButton.dataset.month || "");
+    } else if (action === "edit-goal") {
+      const form = $("#departmentGoalForm");
+      if (form) {
+        form.elements.year.value = actionButton.dataset.year || "";
+        form.elements.department.value = actionButton.dataset.department || "";
+        form.elements.annual_goal.value = actionButton.dataset.goal || "0";
+        form.elements.note.value = actionButton.dataset.note || "";
+        form.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    } else if (action === "edit-approval-step") {
+      const form = $("#approvalStepForm");
+      if (form) {
+        form.elements.id.value = actionButton.dataset.id || "";
+        form.elements.step_order.value = actionButton.dataset.order || "";
+        form.elements.role_name.value = actionButton.dataset.role || "";
+        form.elements.description.value = actionButton.dataset.description || "";
+        form.elements.active.checked = actionButton.dataset.active !== "false";
+        form.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    } else if (action === "save-approval-action") {
+      const box = $("#approvalActionForm");
+      if (!box) return;
+      const stepId = box.querySelector('[name="step_id"]')?.value;
+      const approvalStatus = box.querySelector('[name="approval_status"]')?.value;
+      const comment = box.querySelector('[name="comment"]')?.value?.trim() || "";
+      await store.actApproval(box.dataset.proposalId, stepId, approvalStatus, comment);
+      const proposal = state.proposals.find((p) => p.id === box.dataset.proposalId);
+      if (proposal) await hydrateAdminApproval(proposal);
+      showToast("전자결재 처리결과를 저장했습니다.");
     } else if (action === "import-employees") {
       const rows = await parseEmployeeFile($("#employeeFile").files[0]);
       await store.importEmployees(rows);
@@ -1432,6 +1769,19 @@ document.addEventListener("submit", async (event) => {
       await refreshData();
       render();
       showToast("관리자 로그인되었습니다.");
+    } else if (event.target.id === "departmentGoalForm") {
+      const data = new FormData(event.target);
+      await store.saveDepartmentGoal({ year: Number(data.get("year")), department: data.get("department"), annual_goal: Number(data.get("annual_goal") || 0), note: data.get("note")?.trim() });
+      await refreshData();
+      location.hash = `#admin/goals?year=${encodeURIComponent(String(data.get("year")))}`;
+      render();
+      showToast("부서 목표를 저장했습니다.");
+    } else if (event.target.id === "approvalStepForm") {
+      const data = new FormData(event.target);
+      await store.saveApprovalStep({ id: data.get("id") || undefined, step_order: Number(data.get("step_order")), role_name: data.get("role_name")?.trim(), description: data.get("description")?.trim(), active: data.get("active") === "on" });
+      await refreshData();
+      renderAdmin("approvals");
+      showToast("전자결재 단계를 저장했습니다.");
     } else if (event.target.id === "adminReviewForm") {
       const data = new FormData(event.target);
       const proposal = state.proposals.find((p) => p.id === event.target.dataset.id);
@@ -1463,7 +1813,38 @@ document.addEventListener("submit", async (event) => {
 document.addEventListener("change", (event) => {
   if (event.target.id === "dashboardYearFilter") {
     const year = event.target.value || "all";
-    location.hash = `#dashboard?year=${encodeURIComponent(year)}`;
+    const ranking = getRankingMetricFromUrl();
+    location.hash = `#dashboard?year=${encodeURIComponent(year)}&ranking=${encodeURIComponent(ranking)}`;
+    render();
+    return;
+  }
+  if (event.target.id === "top10MetricFilter") {
+    const year = getDashboardYearFromUrl() || "all";
+    location.hash = `#dashboard?year=${encodeURIComponent(year)}&ranking=${encodeURIComponent(event.target.value || "score")}`;
+    render();
+    return;
+  }
+  if (event.target.id === "reportYearFilter") {
+    const year = event.target.value || "all";
+    location.hash = `#report?year=${encodeURIComponent(year)}`;
+    render();
+    return;
+  }
+  if (event.target.id === "reportMonthFilter") {
+    const year = getDashboardYearFromUrl() || "all";
+    const month = event.target.value || "";
+    location.hash = `#report?year=${encodeURIComponent(year)}${month ? `&month=${encodeURIComponent(month)}` : ""}`;
+    render();
+    return;
+  }
+  if (event.target.id === "adminGoalYearFilter") {
+    location.hash = `#admin/goals?year=${encodeURIComponent(event.target.value)}`;
+    render();
+    return;
+  }
+  if (event.target.id === "personYearFilter") {
+    const name = event.target.dataset.person || "";
+    location.hash = `#person/${encodeURIComponent(name)}?year=${encodeURIComponent(event.target.value || "all")}`;
     render();
     return;
   }
@@ -1485,8 +1866,11 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("input", (event) => {
-  if (event.target.id === "proposalTitle") {
-    $("#similarResults").innerHTML = renderSimilar(event.target.value, $("#proposalForm")?.dataset.no || "");
+  if (["proposalTitle", "currentProblem", "improvementPlan"].includes(event.target.id) || ["current_problem", "improvement_plan"].includes(event.target.name)) {
+    const form = $("#proposalForm");
+    if ($("#similarResults") && form) {
+      $("#similarResults").innerHTML = renderSimilar(form.elements.title?.value || "", form.dataset.no || "");
+    }
   }
   if (event.target.name === "score" && $("#awardPreview")) {
     const proposal = state.proposals.find((p) => p.id === $("#adminReviewForm")?.dataset.id);

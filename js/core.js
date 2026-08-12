@@ -71,14 +71,18 @@ export function filterProposals(proposals, filters = {}) {
   const reviewResult = filters.reviewResult ?? "";
   const implementationStatus = filters.implementationStatus ?? "";
   const year = String(filters.year ?? "").trim();
+  const month = String(filters.month ?? "").trim();
   const workflow = String(filters.workflow ?? "").trim();
 
   return proposals
     .filter((proposal) => {
       const date = proposalDateParts(proposal);
       if (year && year !== "all" && date?.year !== year) return false;
+      if (month && month !== "all" && date?.month !== Number(month)) return false;
       if (workflow === "pending" && !(["접수", "심사중"].includes(proposal.status) && proposal.review_result === "미심사")) return false;
+      if (workflow === "overdue-review" && !(["접수", "심사중"].includes(proposal.status) && proposal.review_result === "미심사" && daysBetween(proposal.received_date, new Date()) >= 7)) return false;
       if (workflow === "adopted" && proposal.review_result !== "채택") return false;
+      if (workflow === "overdue-implementation" && !(proposal.review_result === "채택" && proposal.implementation_status !== "완료" && daysBetween(proposal.reviewed_at || proposal.updated_at || proposal.received_date, new Date()) >= 30)) return false;
       if (workflow === "completed" && proposal.implementation_status !== "완료") return false;
       if (category && proposal.category !== category) return false;
       if (department && proposal.department !== department) return false;
@@ -395,4 +399,210 @@ export function toProposalCsv(proposals) {
   ]);
 
   return "\uFEFF" + [headers, ...rows].map((row) => row.map(csvEscape).join(",")).join("\n");
+}
+
+// V2.0 operational management helpers
+function daysBetween(dateText, now = new Date()) {
+  if (!dateText) return 0;
+  const start = new Date(`${String(dateText).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return 0;
+  return Math.max(0, Math.floor((now.getTime() - start.getTime()) / 86400000));
+}
+
+export function operationalMetrics(proposals, now = new Date(), options = {}) {
+  const source = Array.isArray(proposals) ? proposals : [];
+  const reviewDelayDays = Number(options.reviewDelayDays ?? 7);
+  const implementationDelayDays = Number(options.implementationDelayDays ?? 30);
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+
+  const overdueReview = source.filter((proposal) =>
+    proposal.review_result === "미심사"
+    && ["접수", "심사중"].includes(proposal.status)
+    && daysBetween(proposal.received_date, now) >= reviewDelayDays
+  ).length;
+
+  const overdueImplementation = source.filter((proposal) =>
+    proposal.review_result === "채택"
+    && proposal.implementation_status !== "완료"
+    && daysBetween(proposal.reviewed_at || proposal.updated_at || proposal.received_date, now) >= implementationDelayDays
+  ).length;
+
+  const monthRows = source.filter((proposal) => {
+    const parts = proposalDateParts(proposal);
+    return parts && Number(parts.year) === year && parts.month === month;
+  });
+
+  return {
+    overdueReview,
+    overdueImplementation,
+    monthNew: monthRows.length,
+    monthAward: monthRows.reduce((sum, row) => sum + safeAmount(row.award_amount), 0),
+  };
+}
+
+export function departmentGoalProgress(proposals, goals, requestedYear = "") {
+  const year = String(requestedYear || new Date().getFullYear());
+  if (!year || year === "all") return [];
+  const actualMap = new Map();
+  for (const proposal of Array.isArray(proposals) ? proposals : []) {
+    const parts = proposalDateParts(proposal);
+    if (!parts || parts.year !== year) continue;
+    const department = String(proposal.department || "미지정").trim() || "미지정";
+    actualMap.set(department, (actualMap.get(department) || 0) + 1);
+  }
+
+  const goalMap = new Map();
+  for (const goal of Array.isArray(goals) ? goals : []) {
+    if (String(goal.year) !== year) continue;
+    goalMap.set(String(goal.department || "미지정"), Math.max(0, Number(goal.annual_goal || 0)));
+  }
+
+  const departments = [...new Set([...actualMap.keys(), ...goalMap.keys()])];
+  return departments.map((department) => {
+    const actual = actualMap.get(department) || 0;
+    const goal = goalMap.get(department) || 0;
+    return {
+      department,
+      actual,
+      goal,
+      rate: goal > 0 ? Math.round((actual / goal) * 1000) / 10 : 0,
+    };
+  }).sort((a, b) => b.rate - a.rate || b.actual - a.actual || a.department.localeCompare(b.department, "ko"));
+}
+
+function proposalsForYear(proposals, requestedYear = "") {
+  const year = String(requestedYear || "all");
+  return (Array.isArray(proposals) ? proposals : []).filter((proposal) => {
+    if (year === "all") return true;
+    return proposalDateParts(proposal)?.year === year;
+  });
+}
+
+function proposerRows(proposals) {
+  const map = new Map();
+  for (const proposal of proposals) {
+    const name = String(proposal.proposer_name || "미지정").trim() || "미지정";
+    const department = String(proposal.department || "미지정").trim() || "미지정";
+    const key = `${name}\u0000${department}`;
+    const row = map.get(key) || {
+      name, department, total: 0, adopted: 0, totalScore: 0,
+      awardTotal: 0, effectTotal: 0, proposals: [],
+    };
+    row.total += 1;
+    row.adopted += proposal.review_result === "채택" ? 1 : 0;
+    row.totalScore += Number.isFinite(Number(proposal.score)) ? Number(proposal.score) : 0;
+    row.awardTotal += safeAmount(proposal.award_amount);
+    row.effectTotal += safeAmount(proposal.effect_amount);
+    row.proposals.push(proposal);
+    map.set(key, row);
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    b.total - a.total || b.adopted - a.adopted || b.totalScore - a.totalScore || a.name.localeCompare(b.name, "ko")
+  );
+}
+
+export function proposerPerformance(proposals, proposerName, requestedYear = "all", department = "") {
+  const scoped = proposalsForYear(proposals, requestedYear);
+  const ranking = proposerRows(scoped);
+  const target = ranking.find((row) => row.name === proposerName && (!department || row.department === department));
+  if (!target) return null;
+  const rank = ranking.findIndex((row) => row === target) + 1;
+  return {
+    ...target,
+    adoptionRate: target.total ? Math.round((target.adopted / target.total) * 1000) / 10 : 0,
+    rank,
+  };
+}
+
+export function topProposals(proposals, requestedYear = "all", metric = "score", limit = 10) {
+  const scoped = proposalsForYear(proposals, requestedYear);
+  const fieldMap = { score: "score", effect: "effect_amount", award: "award_amount" };
+  const field = fieldMap[metric] || "score";
+  return scoped
+    .filter((proposal) => Number.isFinite(Number(proposal[field])) && Number(proposal[field]) > 0)
+    .sort((a, b) =>
+      Number(b[field]) - Number(a[field])
+      || Number(b.score || 0) - Number(a.score || 0)
+      || safeAmount(b.effect_amount) - safeAmount(a.effect_amount)
+      || String(b.received_date || "").localeCompare(String(a.received_date || ""))
+    )
+    .slice(0, Math.max(1, Number(limit) || 10));
+}
+
+export function effectAnalysis(proposals) {
+  const source = Array.isArray(proposals) ? proposals : [];
+  const costTotal = source.reduce((sum, row) => sum + safeAmount(row.cost_amount), 0);
+  const awardTotal = source.reduce((sum, row) => sum + safeAmount(row.award_amount), 0);
+  const effectTotal = source.reduce((sum, row) => sum + safeAmount(row.effect_amount), 0);
+  const investment = costTotal + awardTotal;
+  const netEffect = effectTotal - investment;
+  return {
+    costTotal,
+    awardTotal,
+    effectTotal,
+    investment,
+    netEffect,
+    roi: investment > 0 ? (netEffect / investment) * 100 : 0,
+  };
+}
+
+function similarityTokens(value) {
+  const normalized = normalizeText(value).replace(/[^0-9a-z가-힣]+/g, " ");
+  const tokens = new Set(normalized.split(" ").filter((token) => token.length >= 2));
+  const compact = normalized.replace(/\s+/g, "");
+  for (let index = 0; index < compact.length - 1; index += 1) {
+    tokens.add(compact.slice(index, index + 2));
+  }
+  return tokens;
+}
+
+function jaccardSimilarity(left, right) {
+  if (!left.size || !right.size) return 0;
+  let intersection = 0;
+  for (const token of left) if (right.has(token)) intersection += 1;
+  const union = new Set([...left, ...right]).size;
+  return union ? intersection / union : 0;
+}
+
+export function findSimilarProposals(proposals, draft, options = {}) {
+  const limit = Math.max(1, Number(options.limit || 5));
+  const excludeProposalNo = String(options.excludeProposalNo || "");
+  const draftTitle = similarityTokens(draft?.title || "");
+  const draftBody = similarityTokens([draft?.current_problem, draft?.improvement_plan, draft?.expected_effect].join(" "));
+
+  return (Array.isArray(proposals) ? proposals : [])
+    .filter((proposal) => String(proposal.proposal_no || "") !== excludeProposalNo)
+    .map((proposal) => {
+      const titleScore = jaccardSimilarity(draftTitle, similarityTokens(proposal.title || ""));
+      const bodyScore = jaccardSimilarity(draftBody, similarityTokens([
+        proposal.current_problem, proposal.improvement_plan, proposal.expected_effect,
+      ].join(" ")));
+      const similarity = Math.round((titleScore * 0.2 + bodyScore * 0.8) * 1000) / 10;
+      return { ...proposal, similarity };
+    })
+    .filter((proposal) => proposal.similarity > 0)
+    .sort((a, b) => b.similarity - a.similarity || String(b.received_date || "").localeCompare(String(a.received_date || "")))
+    .slice(0, limit);
+}
+
+export function buildTimelineFallback(proposal) {
+  if (!proposal) return [];
+  const rows = [{ stage: "접수", date: proposal.received_date || "", actor: proposal.proposer_name || "", state: "done" }];
+  if (proposal.status === "심사중") {
+    rows.push({ stage: "심사중", date: proposal.updated_at || "", actor: "관리자", state: "current" });
+  }
+  if (proposal.review_result && proposal.review_result !== "미심사") {
+    rows.push({ stage: proposal.review_result === "채택" ? "채택" : proposal.review_result, date: proposal.reviewed_at || proposal.updated_at || "", actor: "관리자", state: "done" });
+  }
+  if (proposal.implementation_status === "진행중") {
+    rows.push({ stage: "시행중", date: proposal.updated_at || "", actor: proposal.implementing_department || "", state: "current" });
+  }
+  if (proposal.implementation_status === "완료") {
+    rows.push({ stage: "실시완료", date: proposal.implemented_date || proposal.updated_at || "", actor: proposal.implementing_department || "", state: "done" });
+  }
+  if (proposal.payment_status === "완료") {
+    rows.push({ stage: "포상지급", date: proposal.updated_at || "", actor: "관리자", state: "done" });
+  }
+  return rows;
 }

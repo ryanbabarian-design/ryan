@@ -1,10 +1,21 @@
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
-import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, sha256 } from "../core.js?v=1.8";
-import { mergeRetainedWithUploaded } from "../image-manager.js?v=1.8";
+import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, sha256 } from "../core.js?v=2.0";
+import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.0";
 
 const PROPOSAL_KEY = "proposal-system:v1:proposals";
 const EMPLOYEE_KEY = "proposal-system:v1:employees";
 const ADMIN_KEY = "proposal-system:v1:admin";
+const GOAL_KEY = "proposal-system:v2:department-goals";
+const STATUS_HISTORY_KEY = "proposal-system:v2:status-history";
+const APPROVAL_STEPS_KEY = "proposal-system:v2:approval-steps";
+const APPROVAL_RECORDS_KEY = "proposal-system:v2:approval-records";
+const AUDIT_KEY = "proposal-system:v2:audit-logs";
+const DEFAULT_APPROVAL_STEPS = [
+  { id: 1, step_order: 1, role_name: "담당", description: "제안 내용 및 기본사항 확인", active: true },
+  { id: 2, step_order: 2, role_name: "팀장", description: "부서 검토 및 심사 확인", active: true },
+  { id: 3, step_order: 3, role_name: "공장장", description: "실시·효과 검토", active: true },
+  { id: 4, step_order: 4, role_name: "대표이사", description: "최종 승인", active: true },
+];
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -96,6 +107,11 @@ class DemoStore {
     if (!localStorage.getItem(EMPLOYEE_KEY)) {
       localStorage.setItem(EMPLOYEE_KEY, JSON.stringify(SEED_EMPLOYEES));
     }
+    if (!localStorage.getItem(GOAL_KEY)) localStorage.setItem(GOAL_KEY, "[]");
+    if (!localStorage.getItem(STATUS_HISTORY_KEY)) localStorage.setItem(STATUS_HISTORY_KEY, "[]");
+    if (!localStorage.getItem(APPROVAL_STEPS_KEY)) localStorage.setItem(APPROVAL_STEPS_KEY, JSON.stringify(DEFAULT_APPROVAL_STEPS));
+    if (!localStorage.getItem(APPROVAL_RECORDS_KEY)) localStorage.setItem(APPROVAL_RECORDS_KEY, "[]");
+    if (!localStorage.getItem(AUDIT_KEY)) localStorage.setItem(AUDIT_KEY, "[]");
   }
 
   get mode() {
@@ -146,6 +162,13 @@ class DemoStore {
     delete proposal.edit_pin;
     proposals.unshift(proposal);
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
+    const history = JSON.parse(localStorage.getItem(STATUS_HISTORY_KEY) || "[]");
+    history.push({ id: Date.now(), proposal_id: proposal.id, proposal_no: proposal.proposal_no, stage: "접수", detail: "신규 제안 접수", actor_name: proposal.proposer_name, happened_at: now });
+    localStorage.setItem(STATUS_HISTORY_KEY, JSON.stringify(history));
+    const steps = await this.getApprovalSteps();
+    const records = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
+    for (const step of steps) records.push({ id: `${proposal.id}-${step.id}`, proposal_id: proposal.id, step_id: step.id, status: "대기", created_at: now, updated_at: now });
+    localStorage.setItem(APPROVAL_RECORDS_KEY, JSON.stringify(records));
     return proposal;
   }
 
@@ -213,28 +236,53 @@ class DemoStore {
   }
 
   async adminUpdateProposal(id, patch) {
-    if (!(await this.getAdminSession())) throw new Error("관리자 로그인이 필요합니다.");
+    const admin = await this.getAdminSession();
+    if (!admin) throw new Error("관리자 로그인이 필요합니다.");
     const proposals = await this.getProposals();
     const index = proposals.findIndex((item) => item.id === id);
     if (index < 0) throw new Error("제안을 찾지 못했습니다.");
+    const before = clone(proposals[index]);
+    const now = new Date().toISOString();
 
     proposals[index] = normalizeProposal({
       ...proposals[index],
       ...patch,
       locked: ["심사중", "심사완료"].includes(patch.status ?? proposals[index].status),
-      updated_at: new Date().toISOString(),
+      updated_at: now,
     });
+    const after = proposals[index];
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
-    return proposals[index];
+
+    const tracked = ["status","review_result","implementing_department","implementation_status","implemented_date","score","award_grade","award_amount","payment_status","effect_amount","review_comment"];
+    const audits = JSON.parse(localStorage.getItem(AUDIT_KEY) || "[]");
+    for (const field of tracked) {
+      if (JSON.stringify(before[field] ?? null) !== JSON.stringify(after[field] ?? null)) {
+        audits.push({ id: `${Date.now()}-${field}`, proposal_id: id, proposal_no: after.proposal_no, action: "UPDATE", field_name: field, old_value: before[field] ?? null, new_value: after[field] ?? null, actor_name: admin.displayName || admin.email, created_at: now });
+      }
+    }
+    localStorage.setItem(AUDIT_KEY, JSON.stringify(audits));
+
+    const history = JSON.parse(localStorage.getItem(STATUS_HISTORY_KEY) || "[]");
+    if (before.status !== after.status && after.status === "심사중") history.push({ proposal_id:id, proposal_no:after.proposal_no, stage:"심사중", detail:"관리자 심사 시작", actor_name:admin.displayName||admin.email, happened_at:now });
+    if (before.review_result !== after.review_result && after.review_result !== "미심사") history.push({ proposal_id:id, proposal_no:after.proposal_no, stage:after.review_result, detail:after.review_comment||"심사결과 등록", actor_name:admin.displayName||admin.email, happened_at:now });
+    if (before.implementation_status !== after.implementation_status && after.implementation_status === "진행중") history.push({ proposal_id:id, proposal_no:after.proposal_no, stage:"시행중", detail:"시행 진행", actor_name:admin.displayName||admin.email, happened_at:now });
+    if (before.implementation_status !== after.implementation_status && after.implementation_status === "완료") history.push({ proposal_id:id, proposal_no:after.proposal_no, stage:"실시완료", detail:"실시 완료", actor_name:admin.displayName||admin.email, happened_at:after.implemented_date || now });
+    if (before.payment_status !== after.payment_status && after.payment_status === "완료") history.push({ proposal_id:id, proposal_no:after.proposal_no, stage:"포상지급", detail:"포상금 지급 완료", actor_name:admin.displayName||admin.email, happened_at:now });
+    localStorage.setItem(STATUS_HISTORY_KEY, JSON.stringify(history));
+    return after;
   }
 
   async deleteProposal(id) {
-    if (!(await this.getAdminSession())) throw new Error("관리자 로그인이 필요합니다.");
+    const admin = await this.getAdminSession();
+    if (!admin) throw new Error("관리자 로그인이 필요합니다.");
     const proposals = await this.getProposals();
-    localStorage.setItem(
-      PROPOSAL_KEY,
-      JSON.stringify(proposals.filter((item) => item.id !== id)),
-    );
+    const target = proposals.find((item) => item.id === id);
+    localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals.filter((item) => item.id !== id)));
+    if (target) {
+      const audits = JSON.parse(localStorage.getItem(AUDIT_KEY) || "[]");
+      audits.push({ id: Date.now(), proposal_id:id, proposal_no:target.proposal_no, action:"DELETE", field_name:"__deleted__", old_value:target, new_value:null, actor_name:admin.displayName||admin.email, created_at:new Date().toISOString() });
+      localStorage.setItem(AUDIT_KEY, JSON.stringify(audits));
+    }
   }
 
   async importEmployees(rows) {
@@ -254,9 +302,76 @@ class DemoStore {
     return saved;
   }
 
+  async getStatusHistory(proposalId) {
+    return JSON.parse(localStorage.getItem(STATUS_HISTORY_KEY) || "[]")
+      .filter((row) => row.proposal_id === proposalId)
+      .sort((a, b) => String(a.happened_at).localeCompare(String(b.happened_at)));
+  }
+
+  async getDepartmentGoals(year = "") {
+    const rows = JSON.parse(localStorage.getItem(GOAL_KEY) || "[]");
+    return year && year !== "all" ? rows.filter((row) => String(row.year) === String(year)) : rows;
+  }
+
+  async saveDepartmentGoal(goal) {
+    if (!(await this.getAdminSession())) throw new Error("관리자 로그인이 필요합니다.");
+    const rows = JSON.parse(localStorage.getItem(GOAL_KEY) || "[]");
+    const normalized = { ...goal, year: Number(goal.year), annual_goal: Math.max(0, Number(goal.annual_goal || 0)) };
+    const index = rows.findIndex((row) => Number(row.year) === normalized.year && row.department === normalized.department);
+    if (index >= 0) rows[index] = { ...rows[index], ...normalized, updated_at: new Date().toISOString() };
+    else rows.push({ id: Date.now(), ...normalized, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+    localStorage.setItem(GOAL_KEY, JSON.stringify(rows));
+    return normalized;
+  }
+
+  async getApprovalSteps(includeInactive = false) {
+    const rows = JSON.parse(localStorage.getItem(APPROVAL_STEPS_KEY) || "[]");
+    return rows.filter((row) => includeInactive || row.active !== false).sort((a, b) => a.step_order - b.step_order);
+  }
+
+  async saveApprovalStep(step) {
+    if (!(await this.getAdminSession())) throw new Error("관리자 로그인이 필요합니다.");
+    const rows = JSON.parse(localStorage.getItem(APPROVAL_STEPS_KEY) || "[]");
+    const normalized = { ...step, step_order: Number(step.step_order), active: step.active !== false };
+    const index = rows.findIndex((row) => String(row.id) === String(normalized.id) || Number(row.step_order) === normalized.step_order);
+    if (index >= 0) rows[index] = { ...rows[index], ...normalized };
+    else rows.push({ ...normalized, id: Date.now() });
+    localStorage.setItem(APPROVAL_STEPS_KEY, JSON.stringify(rows));
+    return normalized;
+  }
+
+  async getApprovalRecords(proposalId) {
+    return JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]").filter((row) => row.proposal_id === proposalId);
+  }
+
+  async actApproval(proposalId, stepId, status, comment = "") {
+    const admin = await this.getAdminSession();
+    if (!admin) throw new Error("관리자 로그인이 필요합니다.");
+    const rows = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
+    let row = rows.find((item) => item.proposal_id === proposalId && String(item.step_id) === String(stepId));
+    const now = new Date().toISOString();
+    if (!row) {
+      row = { id: Date.now(), proposal_id: proposalId, step_id: Number(stepId) };
+      rows.push(row);
+    }
+    Object.assign(row, { status, comment, approver_name: admin.displayName || admin.email, acted_at: now, updated_at: now });
+    localStorage.setItem(APPROVAL_RECORDS_KEY, JSON.stringify(rows));
+    return row;
+  }
+
+  async getAuditLogs(limit = 200, proposalId = "") {
+    const rows = JSON.parse(localStorage.getItem(AUDIT_KEY) || "[]");
+    return rows.filter((row) => !proposalId || row.proposal_id === proposalId).slice(-limit).reverse();
+  }
+
   async resetDemo() {
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(SEED_PROPOSALS));
     localStorage.setItem(EMPLOYEE_KEY, JSON.stringify(SEED_EMPLOYEES));
+    localStorage.setItem(GOAL_KEY, "[]");
+    localStorage.setItem(STATUS_HISTORY_KEY, "[]");
+    localStorage.setItem(APPROVAL_STEPS_KEY, JSON.stringify(DEFAULT_APPROVAL_STEPS));
+    localStorage.setItem(APPROVAL_RECORDS_KEY, "[]");
+    localStorage.setItem(AUDIT_KEY, "[]");
     sessionStorage.removeItem(ADMIN_KEY);
   }
 }
@@ -466,6 +581,87 @@ class SupabaseStore {
       .from("employees")
       .upsert(rows, { onConflict: "name,department" })
       .select();
+    if (error) throw error;
+    return data || [];
+  }
+
+  async getStatusHistory(proposalId) {
+    const { data, error } = await this.client
+      .from("proposal_status_history")
+      .select("id,proposal_id,proposal_no,stage,detail,actor_name,happened_at")
+      .eq("proposal_id", proposalId)
+      .order("happened_at", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async getDepartmentGoals(year = "") {
+    let query = this.client.from("department_goals").select("id,year,department,annual_goal,note,created_at,updated_at").order("year", { ascending: false }).order("department");
+    if (year && year !== "all") query = query.eq("year", Number(year));
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  }
+
+  async saveDepartmentGoal(goal) {
+    const { data: sessionData } = await this.client.auth.getSession();
+    const payload = {
+      year: Number(goal.year), department: goal.department,
+      annual_goal: Math.max(0, Number(goal.annual_goal || 0)),
+      note: goal.note || null, created_by: sessionData.session?.user?.id || null,
+    };
+    const { data, error } = await this.client.from("department_goals")
+      .upsert(payload, { onConflict: "year,department" }).select("id,year,department,annual_goal,note,created_at,updated_at").single();
+    if (error) throw error;
+    return data;
+  }
+
+  async getApprovalSteps(includeInactive = false) {
+    let query = this.client.from("approval_steps").select("*").order("step_order");
+    if (!includeInactive) query = query.eq("active", true);
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  }
+
+  async saveApprovalStep(step) {
+    const payload = {
+      ...(step.id ? { id: step.id } : {}),
+      step_order: Number(step.step_order), role_name: step.role_name,
+      description: step.description || null, active: step.active !== false,
+    };
+    const { data, error } = await this.client.from("approval_steps").upsert(payload).select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  async getApprovalRecords(proposalId) {
+    const { data, error } = await this.client.from("approval_records")
+      .select("id,proposal_id,step_id,status,approver_name,comment,acted_at,created_at,updated_at").eq("proposal_id", proposalId).order("step_id");
+    if (error) throw error;
+    return data || [];
+  }
+
+  async actApproval(proposalId, stepId, status, comment = "") {
+    const { data: sessionData } = await this.client.auth.getSession();
+    const user = sessionData.session?.user;
+    if (!user) throw new Error("관리자 로그인이 필요합니다.");
+    const admin = await this.getAdminSession();
+    const payload = {
+      proposal_id: proposalId, step_id: Number(stepId), status,
+      approved_by: user.id, approver_name: admin?.displayName || admin?.email || user.email,
+      comment: comment || null, acted_at: new Date().toISOString(),
+    };
+    const { data, error } = await this.client.from("approval_records")
+      .upsert(payload, { onConflict: "proposal_id,step_id" }).select("id,proposal_id,step_id,status,approver_name,comment,acted_at,created_at,updated_at").single();
+    if (error) throw error;
+    return data;
+  }
+
+  async getAuditLogs(limit = 200, proposalId = "") {
+    let query = this.client.from("proposal_audit_logs").select("*").order("created_at", { ascending: false }).limit(limit);
+    if (proposalId) query = query.eq("proposal_id", proposalId);
+    const { data, error } = await query;
     if (error) throw error;
     return data || [];
   }
