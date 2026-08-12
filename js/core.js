@@ -369,13 +369,14 @@ export function resolveApprovalPermission(proposal, steps, records, assignments)
   const activeSteps = (Array.isArray(steps) ? steps : [])
     .filter((step) => step.active !== false)
     .sort((a, b) => Number(a.step_order || 0) - Number(b.step_order || 0));
+  const manualSteps = activeSteps.filter((step) => step.auto_author !== true);
   const approvalRecords = Array.isArray(records) ? records : [];
   const userAssignments = (Array.isArray(assignments) ? assignments : []).filter((assignment) => assignment.active !== false);
   const department = String(proposal?.department || "").trim();
 
   const recordFor = (stepId) => approvalRecords.find((record) => String(record.step_id) === String(stepId));
 
-  for (const step of activeSteps) {
+  for (const step of manualSteps) {
     const matchingAssignments = userAssignments
       .filter((assignment) => String(assignment.step_id) === String(step.id))
       .filter((assignment) => {

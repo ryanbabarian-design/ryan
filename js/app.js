@@ -22,8 +22,8 @@ import {
   resolveApprovalPermission,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=2.1";
-import { createStore } from "./services/store.js?v=2.1";
+} from "./core.js?v=2.2";
+import { createStore } from "./services/store.js?v=2.2";
 import {
   appendImageFiles,
   createImageSelection,
@@ -32,8 +32,8 @@ import {
   MAX_IMAGES_PER_SECTION,
   removeSelectedImage,
   totalSelectedImages,
-} from "./image-manager.js?v=2.1";
-import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js";
+} from "./image-manager.js?v=2.2";
+import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.2";
 
 const store = createStore();
 const state = {
@@ -1032,8 +1032,10 @@ function renderApprovalProgress(steps, records) {
   return `<div class="approval-progress">${steps.filter((step) => step.active !== false).map((step) => {
     const record = recordMap.get(String(step.id));
     const status = record?.status || "대기";
-    const signer = record?.approver_name || record?.assigned_name || "결재자 미지정";
-    return `<div class="approval-step ${status === "승인" ? "approved" : status === "반려" ? "rejected" : "pending"}"><span>${escapeHtml(String(step.step_order))}</span><div><strong>${escapeHtml(step.role_name)}</strong><small>${escapeHtml(status)} · ${escapeHtml(signer)}</small></div></div>`;
+    const isAutoAuthor = step.auto_author === true;
+    const statusLabel = isAutoAuthor && status === "승인" ? "작성완료" : status;
+    const signer = record?.approver_name || record?.assigned_name || (isAutoAuthor ? "제안자 자동작성" : "결재자 미지정");
+    return `<div class="approval-step ${status === "승인" ? "approved" : status === "반려" ? "rejected" : "pending"} ${isAutoAuthor ? "auto-author" : ""}"><span>${escapeHtml(String(step.step_order))}</span><div><strong>${escapeHtml(step.role_name)}${isAutoAuthor ? ' <em class="approval-auto-tag">자동작성</em>' : ""}</strong><small>${escapeHtml(statusLabel)} · ${escapeHtml(signer)}</small></div></div>`;
   }).join("")}</div>`;
 }
 
@@ -1201,7 +1203,11 @@ async function hydratePrintApproval(proposal, steps) {
     if (!cell) return;
     const record = recordMap.get(String(step.id));
     if (!record || record.status === "대기") {
-      cell.innerHTML = `<span class="print-approval-pending">대기</span>`;
+      cell.innerHTML = step.auto_author === true
+        ? `<span class="print-approval-pending">자동작성 대기</span>`
+        : `<span class="print-approval-pending">대기</span>`;
+    } else if (step.auto_author === true) {
+      cell.innerHTML = `<strong>작성완료</strong><small>${escapeHtml(record.approver_name || proposal.proposer_name || "")}</small><em>전자작성 · ${escapeHtml(record.acted_at ? formatDate(String(record.acted_at).slice(0,10)) : formatDate(proposal.received_date))}</em>`;
     } else {
       cell.innerHTML = `<strong>${escapeHtml(record.status)}</strong><small>${escapeHtml(record.approver_name || "")}</small><em>${escapeHtml(record.acted_at ? formatDate(String(record.acted_at).slice(0,10)) : "")}</em>`;
     }
@@ -1299,37 +1305,41 @@ function renderAdminApprovals() {
   const departments = [...new Set(state.employees.map((e) => e.department).concat(state.proposals.map((p) => p.department)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ko"));
   const stepMap = new Map(steps.map((step) => [String(step.id), step]));
   const assignments = state.approverAssignments || [];
-  main.innerHTML = `${adminPageHeader("전자결재 설정", "결재단계와 실제 결재자 계정을 연결합니다. 결재자는 본인 단계만 순서대로 승인·반려할 수 있습니다.", "approvals")}
+  const manualSteps = steps.filter((step) => step.active !== false && step.auto_author !== true);
+  main.innerHTML = `${adminPageHeader("전자결재 설정", "담당은 제안 제출 시 제안자명으로 자동 작성되고, 부서장부터 실제 계정으로 순차 전자서명합니다.", "approvals")}
     <section class="approval-security-notice">
-      <strong>필수 절차</strong><span>① Supabase Authentication → Users에서 결재자 이메일 계정을 먼저 생성 · ② 아래에서 이메일/결재단계/부서를 연결 · ③ 결재자는 관리자·결재 로그인에서 본인 계정으로 로그인</span>
+      <strong>V2.2 결재방식</strong><span>① 담당: 제안 제출 즉시 제안자명·제출일 자동작성 · ② 부서장/공장장/대표이사: Supabase Authentication 계정 연결 · ③ 각 결재자는 본인 단계만 승인·반려</span>
     </section>
     <section class="admin-config-grid">
       <form id="approvalStepForm" class="side-card admin-config-form">
-        <span class="eyebrow">APPROVAL FLOW</span><h2>결재단계 등록·수정</h2>
+        <span class="eyebrow">APPROVAL FLOW</span><h2>전자서명 단계 등록·수정</h2>
+        <p class="form-help">담당 자동작성 단계는 시스템 필수단계이므로 수정·삭제할 수 없습니다. 아래 입력폼은 부서장 이후의 실제 전자서명 단계 관리용입니다.</p>
         <input type="hidden" name="id">
-        <label class="field">순서<input type="number" name="step_order" min="1" required></label>
-        <label class="field">직책/단계명<input name="role_name" maxlength="50" required placeholder="예: 팀장"></label>
+        <label class="field">순서<input type="number" name="step_order" min="2" required></label>
+        <label class="field">직책/단계명<input name="role_name" maxlength="50" required placeholder="예: 부서장"></label>
         <label class="field">설명<input name="description" maxlength="150" placeholder="확인내용"></label>
         <label class="check-label"><input type="checkbox" name="active" checked> 사용</label>
         <button class="button button-primary button-wide" type="submit">결재단계 저장</button>
       </form>
       <article class="analytics-panel admin-config-list"><div class="analytics-panel-head"><div><span class="eyebrow">WORKFLOW</span><h2>현재 결재선</h2></div></div>
-        <div class="approval-admin-list">${steps.length ? steps.map(step=>`<button type="button" class="approval-admin-row" data-action="edit-approval-step" data-id="${step.id}" data-order="${step.step_order}" data-role="${escapeHtml(step.role_name)}" data-description="${escapeHtml(step.description||"")}" data-active="${step.active !== false}"><b>${step.step_order}</b><span><strong>${escapeHtml(step.role_name)}</strong><small>${escapeHtml(step.description||"")}</small></span>${statusBadge(step.active !== false ? "완료" : "미실시")}</button>`).join("") : `<div class="analytics-empty">등록된 결재단계가 없습니다.</div>`}</div>
+        <div class="approval-admin-list">${steps.length ? steps.map(step=>step.auto_author === true
+          ? `<div class="approval-admin-row approval-auto-row"><b>${step.step_order}</b><span><strong>${escapeHtml(step.role_name)}</strong><small>${escapeHtml(step.description||"제안 제출 시 자동작성")}</small></span><em class="approval-auto-badge">자동작성</em></div>`
+          : `<button type="button" class="approval-admin-row" data-action="edit-approval-step" data-id="${step.id}" data-order="${step.step_order}" data-role="${escapeHtml(step.role_name)}" data-description="${escapeHtml(step.description||"")}" data-active="${step.active !== false}"><b>${step.step_order}</b><span><strong>${escapeHtml(step.role_name)}</strong><small>${escapeHtml(step.description||"")}</small></span>${statusBadge(step.active !== false ? "완료" : "미실시")}</button>`).join("") : `<div class="analytics-empty">등록된 결재단계가 없습니다.</div>`}</div>
       </article>
     </section>
 
     <section class="admin-config-grid approver-assignment-grid">
       <form id="approverAssignmentForm" class="side-card admin-config-form approver-assignment-form">
-        <span class="eyebrow">SIGNER ACCOUNT</span><h2>결재자 계정 연결</h2>
+        <span class="eyebrow">SIGNER ACCOUNT</span><h2>실제 결재자 계정 연결</h2>
         <label class="field">결재자 이메일<input type="email" name="approver_email" required placeholder="Supabase Auth에 생성한 이메일"></label>
         <label class="field">결재자 이름<input name="display_name" maxlength="50" required placeholder="예: 홍길동"></label>
-        <label class="field">본인 결재단계<select name="step_id" required><option value="">단계 선택</option>${steps.filter(step=>step.active!==false).map(step=>`<option value="${step.id}">${step.step_order}. ${escapeHtml(step.role_name)}</option>`).join("")}</select></label>
+        <label class="field">본인 결재단계<select name="step_id" required><option value="">단계 선택</option>${manualSteps.map(step=>`<option value="${step.id}">${step.step_order}. ${escapeHtml(step.role_name)}</option>`).join("")}</select></label>
         <label class="field">적용부서<select name="department"><option value="">전체 부서</option>${departments.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("")}</select></label>
-        <small class="form-help">팀장/부서장처럼 부서별 결재자는 해당 부서를 지정하세요. 공장장·대표이사처럼 전사 결재자는 전체 부서를 선택합니다.</small>
+        <small class="form-help">담당은 계정 연결 대상이 아닙니다. 부서장은 해당 부서를 지정하고, 공장장·대표이사는 전체 부서를 선택하세요.</small>
         <button class="button button-primary button-wide" type="submit">결재자 연결</button>
       </form>
       <article class="analytics-panel admin-config-list approver-assignment-list"><div class="analytics-panel-head"><div><span class="eyebrow">ASSIGNMENTS</span><h2>지정된 결재자</h2></div></div>
-        ${assignments.length ? `<div class="approver-assignment-rows">${assignments.map(row=>{const step=stepMap.get(String(row.step_id)); return `<div class="approver-assignment-row"><div><strong>${escapeHtml(row.display_name)}</strong><small>${escapeHtml(row.email)}</small></div><span>${escapeHtml(step?.role_name||"결재단계")}</span><em>${escapeHtml(row.department||"전체 부서")}</em><button type="button" class="button button-small button-danger" data-action="remove-approver-assignment" data-id="${row.id}">배정 해제</button></div>`;}).join("")}</div>` : `<div class="analytics-empty">아직 지정된 결재자가 없습니다.</div>`}
+        ${assignments.length ? `<div class="approver-assignment-rows">${assignments.map(row=>{const step=stepMap.get(String(row.step_id)); return `<div class="approver-assignment-row"><div><strong>${escapeHtml(row.display_name)}</strong><small>${escapeHtml(row.email)}</small></div><span>${escapeHtml(step?.role_name||"결재단계")}</span><em>${escapeHtml(row.department||"전체 부서")}</em><button type="button" class="button button-small button-danger" data-action="remove-approver-assignment" data-id="${row.id}">배정 해제</button></div>`;}).join("")}</div>` : `<div class="analytics-empty">아직 지정된 실제 결재자가 없습니다.</div>`}
       </article>
     </section>`;
 }

@@ -1,6 +1,6 @@
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
-import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.1";
-import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.1";
+import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.2";
+import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.2";
 
 const PROPOSAL_KEY = "proposal-system:v1:proposals";
 const EMPLOYEE_KEY = "proposal-system:v1:employees";
@@ -12,10 +12,10 @@ const APPROVAL_RECORDS_KEY = "proposal-system:v2:approval-records";
 const AUDIT_KEY = "proposal-system:v2:audit-logs";
 const APPROVAL_ASSIGNMENTS_KEY = "proposal-system:v21:approval-assignments";
 const DEFAULT_APPROVAL_STEPS = [
-  { id: 1, step_order: 1, role_name: "담당", description: "제안 내용 및 기본사항 확인", active: true },
-  { id: 2, step_order: 2, role_name: "팀장", description: "부서 검토 및 심사 확인", active: true },
-  { id: 3, step_order: 3, role_name: "공장장", description: "실시·효과 검토", active: true },
-  { id: 4, step_order: 4, role_name: "대표이사", description: "최종 승인", active: true },
+  { id: 1, step_order: 1, role_name: "담당", description: "제안 제출 시 제안자 자동작성", auto_author: true, active: true },
+  { id: 2, step_order: 2, role_name: "부서장", description: "해당 부서 검토 및 승인", auto_author: false, active: true },
+  { id: 3, step_order: 3, role_name: "공장장", description: "실시·효과 검토", auto_author: false, active: true },
+  { id: 4, step_order: 4, role_name: "대표이사", description: "최종 승인", auto_author: false, active: true },
 ];
 
 function clone(value) {
@@ -166,10 +166,21 @@ class DemoStore {
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
     const history = JSON.parse(localStorage.getItem(STATUS_HISTORY_KEY) || "[]");
     history.push({ id: Date.now(), proposal_id: proposal.id, proposal_no: proposal.proposal_no, stage: "접수", detail: "신규 제안 접수", actor_name: proposal.proposer_name, happened_at: now });
+    history.push({ id: `${Date.now()}-author`, proposal_id: proposal.id, proposal_no: proposal.proposal_no, stage: "담당 작성완료", detail: "제안 제출 시 자동작성", actor_name: proposal.proposer_name, happened_at: now });
     localStorage.setItem(STATUS_HISTORY_KEY, JSON.stringify(history));
     const steps = await this.getApprovalSteps();
     const records = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
-    for (const step of steps) records.push({ id: `${proposal.id}-${step.id}`, proposal_id: proposal.id, step_id: step.id, status: "대기", created_at: now, updated_at: now });
+    for (const step of steps) {
+      const autoAuthor = step.auto_author === true;
+      records.push({
+        id: `${proposal.id}-${step.id}`, proposal_id: proposal.id, step_id: step.id,
+        status: autoAuthor ? "승인" : "대기",
+        assigned_name: autoAuthor ? proposal.proposer_name : null,
+        approver_name: autoAuthor ? proposal.proposer_name : null,
+        comment: autoAuthor ? "제안 제출 시 자동작성" : null,
+        acted_at: autoAuthor ? now : null, created_at: now, updated_at: now,
+      });
+    }
     localStorage.setItem(APPROVAL_RECORDS_KEY, JSON.stringify(records));
     return proposal;
   }
@@ -337,6 +348,8 @@ class DemoStore {
   async linkApproverAccount({ email, display_name, step_id, department = "" }) {
     const admin = await this.getAdminSession();
     if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 결재자를 연결할 수 있습니다.");
+    const step = (await this.getApprovalSteps(true)).find((row) => String(row.id) === String(step_id));
+    if (step?.auto_author) throw new Error("담당 자동작성 단계는 결재자 계정 연결이 필요하지 않습니다.");
     const rows = JSON.parse(localStorage.getItem(APPROVAL_ASSIGNMENTS_KEY) || "[]");
     const scope = String(department || "").trim();
     const index = rows.findIndex((row) => String(row.step_id) === String(step_id) && String(row.department || "") === scope);
@@ -696,6 +709,8 @@ class SupabaseStore {
   async linkApproverAccount({ email, display_name, step_id, department = "" }) {
     const session = await this.getAdminSession();
     if (!session?.isSystemAdmin) throw new Error("시스템 관리자만 결재자를 연결할 수 있습니다.");
+    const step = (await this.getApprovalSteps(true)).find((row) => String(row.id) === String(step_id));
+    if (step?.auto_author) throw new Error("담당 자동작성 단계는 결재자 계정 연결이 필요하지 않습니다.");
     const { data, error } = await this.client.rpc("link_approver_by_email", {
       p_email: String(email || "").trim(), p_display_name: String(display_name || "").trim(),
       p_step_id: Number(step_id), p_department: String(department || "").trim() || null,
