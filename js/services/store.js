@@ -1,6 +1,6 @@
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
-import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, sha256 } from "../core.js?v=2.0";
-import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.0";
+import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.1";
+import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.1";
 
 const PROPOSAL_KEY = "proposal-system:v1:proposals";
 const EMPLOYEE_KEY = "proposal-system:v1:employees";
@@ -10,6 +10,7 @@ const STATUS_HISTORY_KEY = "proposal-system:v2:status-history";
 const APPROVAL_STEPS_KEY = "proposal-system:v2:approval-steps";
 const APPROVAL_RECORDS_KEY = "proposal-system:v2:approval-records";
 const AUDIT_KEY = "proposal-system:v2:audit-logs";
+const APPROVAL_ASSIGNMENTS_KEY = "proposal-system:v21:approval-assignments";
 const DEFAULT_APPROVAL_STEPS = [
   { id: 1, step_order: 1, role_name: "담당", description: "제안 내용 및 기본사항 확인", active: true },
   { id: 2, step_order: 2, role_name: "팀장", description: "부서 검토 및 심사 확인", active: true },
@@ -112,6 +113,7 @@ class DemoStore {
     if (!localStorage.getItem(APPROVAL_STEPS_KEY)) localStorage.setItem(APPROVAL_STEPS_KEY, JSON.stringify(DEFAULT_APPROVAL_STEPS));
     if (!localStorage.getItem(APPROVAL_RECORDS_KEY)) localStorage.setItem(APPROVAL_RECORDS_KEY, "[]");
     if (!localStorage.getItem(AUDIT_KEY)) localStorage.setItem(AUDIT_KEY, "[]");
+    if (!localStorage.getItem(APPROVAL_ASSIGNMENTS_KEY)) localStorage.setItem(APPROVAL_ASSIGNMENTS_KEY, "[]");
   }
 
   get mode() {
@@ -220,10 +222,11 @@ class DemoStore {
       email !== this.config.demoAdminEmail ||
       password !== this.config.demoAdminPassword
     ) {
-      throw new Error("관리자 이메일 또는 비밀번호가 올바르지 않습니다.");
+      throw new Error("관리자/결재자 이메일 또는 비밀번호가 올바르지 않습니다.");
     }
     sessionStorage.setItem(ADMIN_KEY, email);
-    return { email };
+    const assignments = (await this.getApproverAssignments()).filter((row) => row.email === email && row.active !== false);
+    return { email, displayName: "데모 관리자", isSystemAdmin: true, assignments };
   }
 
   async logoutAdmin() {
@@ -232,7 +235,9 @@ class DemoStore {
 
   async getAdminSession() {
     const email = sessionStorage.getItem(ADMIN_KEY);
-    return email ? { email } : null;
+    if (!email) return null;
+    const assignments = (await this.getApproverAssignments()).filter((row) => row.email === email && row.active !== false);
+    return { email, displayName: "데모 관리자", isSystemAdmin: true, assignments };
   }
 
   async adminUpdateProposal(id, patch) {
@@ -324,6 +329,56 @@ class DemoStore {
     return normalized;
   }
 
+  async getApproverAssignments(includeInactive = true) {
+    const rows = JSON.parse(localStorage.getItem(APPROVAL_ASSIGNMENTS_KEY) || "[]");
+    return rows.filter((row) => includeInactive || row.active !== false);
+  }
+
+  async linkApproverAccount({ email, display_name, step_id, department = "" }) {
+    const admin = await this.getAdminSession();
+    if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 결재자를 연결할 수 있습니다.");
+    const rows = JSON.parse(localStorage.getItem(APPROVAL_ASSIGNMENTS_KEY) || "[]");
+    const scope = String(department || "").trim();
+    const index = rows.findIndex((row) => String(row.step_id) === String(step_id) && String(row.department || "") === scope);
+    const next = {
+      id: index >= 0 ? rows[index].id : Date.now(), step_id: Number(step_id), user_id: `demo:${email}`,
+      email: String(email || "").trim().toLowerCase(), display_name: String(display_name || "").trim(),
+      department: scope || null, active: true, updated_at: new Date().toISOString(),
+    };
+    if (index >= 0) rows[index] = { ...rows[index], ...next }; else rows.push({ ...next, created_at: new Date().toISOString() });
+    localStorage.setItem(APPROVAL_ASSIGNMENTS_KEY, JSON.stringify(rows));
+    return next;
+  }
+
+  async deleteApproverAssignment(id) {
+    const admin = await this.getAdminSession();
+    if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 결재자 배정을 해제할 수 있습니다.");
+    const rows = JSON.parse(localStorage.getItem(APPROVAL_ASSIGNMENTS_KEY) || "[]");
+    localStorage.setItem(APPROVAL_ASSIGNMENTS_KEY, JSON.stringify(rows.filter((row) => String(row.id) !== String(id))));
+  }
+
+  async getMyApprovalInbox() {
+    const session = await this.getAdminSession();
+    if (!session) throw new Error("로그인이 필요합니다.");
+    const proposals = await this.getProposals();
+    const steps = await this.getApprovalSteps();
+    const allRecords = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
+    const assignments = session.assignments || [];
+    const result = [];
+    for (const proposal of proposals) {
+      const records = allRecords.filter((row) => row.proposal_id === proposal.id);
+      const permission = resolveApprovalPermission(proposal, steps, records, assignments);
+      if (!permission.assigned) continue;
+      result.push({
+        proposal_id: proposal.id, proposal_no: proposal.proposal_no, title: proposal.title, department: proposal.department,
+        proposer_name: proposal.proposer_name, received_date: proposal.received_date, step_id: permission.step.id,
+        step_order: permission.step.step_order, role_name: permission.step.role_name, approval_status: permission.record?.status || "대기",
+        can_act: permission.canAct, block_reason: permission.reason,
+      });
+    }
+    return result;
+  }
+
   async getApprovalSteps(includeInactive = false) {
     const rows = JSON.parse(localStorage.getItem(APPROVAL_STEPS_KEY) || "[]");
     return rows.filter((row) => includeInactive || row.active !== false).sort((a, b) => a.step_order - b.step_order);
@@ -345,16 +400,20 @@ class DemoStore {
   }
 
   async actApproval(proposalId, stepId, status, comment = "") {
-    const admin = await this.getAdminSession();
-    if (!admin) throw new Error("관리자 로그인이 필요합니다.");
+    const session = await this.getAdminSession();
+    if (!session) throw new Error("로그인이 필요합니다.");
+    const proposals = await this.getProposals();
+    const proposal = proposals.find((row) => row.id === proposalId);
+    if (!proposal) throw new Error("제안을 찾지 못했습니다.");
+    const steps = await this.getApprovalSteps();
     const rows = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
     let row = rows.find((item) => item.proposal_id === proposalId && String(item.step_id) === String(stepId));
+    if (!row) { row = { id: Date.now(), proposal_id: proposalId, step_id: Number(stepId), status: "대기" }; rows.push(row); }
+    const proposalRecords = rows.filter((item) => item.proposal_id === proposalId);
+    const permission = resolveApprovalPermission(proposal, steps, proposalRecords, session.assignments || []);
+    if (!permission.canAct || String(permission.step?.id) !== String(stepId)) throw new Error(permission.reason || "본인 결재단계만 처리할 수 있습니다.");
     const now = new Date().toISOString();
-    if (!row) {
-      row = { id: Date.now(), proposal_id: proposalId, step_id: Number(stepId) };
-      rows.push(row);
-    }
-    Object.assign(row, { status, comment, approver_name: admin.displayName || admin.email, acted_at: now, updated_at: now });
+    Object.assign(row, { status, comment, assigned_name: permission.assignment.display_name, approver_name: permission.assignment.display_name, acted_at: now, updated_at: now });
     localStorage.setItem(APPROVAL_RECORDS_KEY, JSON.stringify(rows));
     return row;
   }
@@ -372,6 +431,7 @@ class DemoStore {
     localStorage.setItem(APPROVAL_STEPS_KEY, JSON.stringify(DEFAULT_APPROVAL_STEPS));
     localStorage.setItem(APPROVAL_RECORDS_KEY, "[]");
     localStorage.setItem(AUDIT_KEY, "[]");
+    localStorage.setItem(APPROVAL_ASSIGNMENTS_KEY, "[]");
     sessionStorage.removeItem(ADMIN_KEY);
   }
 }
@@ -521,22 +581,26 @@ class SupabaseStore {
     const { data, error } = await this.client.auth.signInWithPassword({ email, password });
     if (error) throw error;
 
-    const { data: admin, error: adminError } = await this.client
-      .from("admins")
-      .select("user_id,display_name")
-      .eq("user_id", data.user.id)
-      .maybeSingle();
+    const [{ data: admin, error: adminError }, { data: assignments, error: assignmentError }] = await Promise.all([
+      this.client.from("admins").select("user_id,display_name").eq("user_id", data.user.id).maybeSingle(),
+      this.client.from("approval_assignments").select("id,step_id,email,display_name,department,active").eq("user_id", data.user.id).eq("active", true),
+    ]);
     if (adminError) throw adminError;
-    if (!admin) {
+    if (assignmentError && !admin) {
       await this.client.auth.signOut();
-      throw new Error("관리자 권한이 없는 계정입니다.");
+      throw new Error("V2.1 전자결재 SQL을 먼저 적용하거나 결재자 계정을 연결하세요.");
     }
-    try {
-      await this.cleanupRemovedImages();
-    } catch (cleanupError) {
-      console.warn("삭제 예약 사진 정리에 실패했습니다.", cleanupError);
+    if (!admin && !(assignments || []).length) {
+      await this.client.auth.signOut();
+      throw new Error("관리자 또는 결재자 권한이 없는 계정입니다.");
     }
-    return { email: data.user.email, displayName: admin.display_name };
+    if (admin) {
+      try { await this.cleanupRemovedImages(); } catch (cleanupError) { console.warn("삭제 예약 사진 정리에 실패했습니다.", cleanupError); }
+    }
+    return {
+      email: data.user.email, displayName: admin?.display_name || assignments?.[0]?.display_name || data.user.email,
+      isSystemAdmin: Boolean(admin), assignments: assignments || [],
+    };
   }
 
   async logoutAdmin() {
@@ -547,14 +611,17 @@ class SupabaseStore {
   async getAdminSession() {
     const { data } = await this.client.auth.getSession();
     if (!data.session) return null;
-    const { data: admin } = await this.client
-      .from("admins")
-      .select("display_name")
-      .eq("user_id", data.session.user.id)
-      .maybeSingle();
-    return admin
-      ? { email: data.session.user.email, displayName: admin.display_name }
-      : null;
+    const user = data.session.user;
+    const [{ data: admin }, { data: assignments, error: assignmentError }] = await Promise.all([
+      this.client.from("admins").select("display_name").eq("user_id", user.id).maybeSingle(),
+      this.client.from("approval_assignments").select("id,step_id,email,display_name,department,active").eq("user_id", user.id).eq("active", true),
+    ]);
+    if (!admin && assignmentError) return null;
+    if (!admin && !(assignments || []).length) return null;
+    return {
+      email: user.email, displayName: admin?.display_name || assignments?.[0]?.display_name || user.email,
+      isSystemAdmin: Boolean(admin), assignments: assignments || [],
+    };
   }
 
   async adminUpdateProposal(id, patch) {
@@ -616,6 +683,40 @@ class SupabaseStore {
     return data;
   }
 
+  async getApproverAssignments(includeInactive = true) {
+    let query = this.client.from("approval_assignments")
+      .select("id,step_id,user_id,email,display_name,department,active,created_at,updated_at")
+      .order("step_id").order("department", { ascending: true, nullsFirst: true });
+    if (!includeInactive) query = query.eq("active", true);
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  }
+
+  async linkApproverAccount({ email, display_name, step_id, department = "" }) {
+    const session = await this.getAdminSession();
+    if (!session?.isSystemAdmin) throw new Error("시스템 관리자만 결재자를 연결할 수 있습니다.");
+    const { data, error } = await this.client.rpc("link_approver_by_email", {
+      p_email: String(email || "").trim(), p_display_name: String(display_name || "").trim(),
+      p_step_id: Number(step_id), p_department: String(department || "").trim() || null,
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async deleteApproverAssignment(id) {
+    const session = await this.getAdminSession();
+    if (!session?.isSystemAdmin) throw new Error("시스템 관리자만 결재자 배정을 해제할 수 있습니다.");
+    const { error } = await this.client.from("approval_assignments").delete().eq("id", id);
+    if (error) throw error;
+  }
+
+  async getMyApprovalInbox() {
+    const { data, error } = await this.client.rpc("get_my_approval_inbox");
+    if (error) throw error;
+    return data || [];
+  }
+
   async getApprovalSteps(includeInactive = false) {
     let query = this.client.from("approval_steps").select("*").order("step_order");
     if (!includeInactive) query = query.eq("active", true);
@@ -637,25 +738,17 @@ class SupabaseStore {
 
   async getApprovalRecords(proposalId) {
     const { data, error } = await this.client.from("approval_records")
-      .select("id,proposal_id,step_id,status,approver_name,comment,acted_at,created_at,updated_at").eq("proposal_id", proposalId).order("step_id");
+      .select("id,proposal_id,step_id,status,assigned_name,approver_name,comment,acted_at,created_at,updated_at").eq("proposal_id", proposalId).order("step_id");
     if (error) throw error;
     return data || [];
   }
 
   async actApproval(proposalId, stepId, status, comment = "") {
-    const { data: sessionData } = await this.client.auth.getSession();
-    const user = sessionData.session?.user;
-    if (!user) throw new Error("관리자 로그인이 필요합니다.");
-    const admin = await this.getAdminSession();
-    const payload = {
-      proposal_id: proposalId, step_id: Number(stepId), status,
-      approved_by: user.id, approver_name: admin?.displayName || admin?.email || user.email,
-      comment: comment || null, acted_at: new Date().toISOString(),
-    };
-    const { data, error } = await this.client.from("approval_records")
-      .upsert(payload, { onConflict: "proposal_id,step_id" }).select("id,proposal_id,step_id,status,approver_name,comment,acted_at,created_at,updated_at").single();
+    const { data, error } = await this.client.rpc("act_approval_secure", {
+      p_proposal_id: proposalId, p_step_id: Number(stepId), p_status: status, p_comment: comment || null,
+    });
     if (error) throw error;
-    return data;
+    return Array.isArray(data) ? data[0] : data;
   }
 
   async getAuditLogs(limit = 200, proposalId = "") {

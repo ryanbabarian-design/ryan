@@ -364,6 +364,55 @@ export function collectProposalImagePaths(proposal, storageBucket) {
   return Array.from(paths);
 }
 
+
+export function resolveApprovalPermission(proposal, steps, records, assignments) {
+  const activeSteps = (Array.isArray(steps) ? steps : [])
+    .filter((step) => step.active !== false)
+    .sort((a, b) => Number(a.step_order || 0) - Number(b.step_order || 0));
+  const approvalRecords = Array.isArray(records) ? records : [];
+  const userAssignments = (Array.isArray(assignments) ? assignments : []).filter((assignment) => assignment.active !== false);
+  const department = String(proposal?.department || "").trim();
+
+  const recordFor = (stepId) => approvalRecords.find((record) => String(record.step_id) === String(stepId));
+
+  for (const step of activeSteps) {
+    const matchingAssignments = userAssignments
+      .filter((assignment) => String(assignment.step_id) === String(step.id))
+      .filter((assignment) => {
+        const scope = String(assignment.department || "").trim();
+        return !scope || scope === department;
+      })
+      .sort((left, right) => {
+        const leftExact = String(left.department || "").trim() === department ? 1 : 0;
+        const rightExact = String(right.department || "").trim() === department ? 1 : 0;
+        return rightExact - leftExact;
+      });
+
+    const assignment = matchingAssignments[0];
+    if (!assignment) continue;
+
+    const record = recordFor(step.id) || { step_id: step.id, status: "대기" };
+    const previousSteps = activeSteps.filter((candidate) => Number(candidate.step_order || 0) < Number(step.step_order || 0));
+    const rejectedPrevious = previousSteps.find((candidate) => recordFor(candidate.id)?.status === "반려");
+    if (rejectedPrevious) {
+      return { assigned: true, canAct: false, step, assignment, record, reason: "이전 결재단계가 반려되어 진행할 수 없습니다." };
+    }
+
+    const incompletePrevious = previousSteps.find((candidate) => recordFor(candidate.id)?.status !== "승인");
+    if (incompletePrevious) {
+      return { assigned: true, canAct: false, step, assignment, record, reason: "이전 결재단계 승인이 완료되어야 합니다." };
+    }
+
+    if (record.status !== "대기") {
+      return { assigned: true, canAct: false, step, assignment, record, reason: `이미 ${record.status} 처리된 결재입니다.` };
+    }
+
+    return { assigned: true, canAct: true, step, assignment, record, reason: "결재 처리 가능" };
+  }
+
+  return { assigned: false, canAct: false, step: null, assignment: null, record: null, reason: "이 제안에 지정된 본인 결재단계가 없습니다." };
+}
+
 export function formatCurrency(value) {
   return `${Number(value || 0).toLocaleString("ko-KR")}원`;
 }

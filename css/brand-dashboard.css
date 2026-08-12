@@ -659,3 +659,45 @@ body {
   .roi-summary { grid-template-columns:1fr; }
   .top10-row { grid-template-columns:32px 1fr 54px; }
 }
+
+/* V2.1 secure electronic approval */
+.approval-security-notice { margin: 0 0 18px; padding: 14px 18px; border:1px solid #f3c8c8; background:#fff7f5; border-radius:14px; display:flex; gap:12px; align-items:flex-start; }
+.approval-security-notice strong { color:#c8232c; white-space:nowrap; }
+.approval-security-notice span { color:#5f6672; line-height:1.55; }
+.approver-assignment-grid { margin-top:18px; }
+.approver-assignment-form .form-help { display:block; color:#707887; line-height:1.5; margin:-2px 0 10px; }
+.approver-assignment-rows { display:grid; gap:10px; }
+.approver-assignment-row { display:grid; grid-template-columns:minmax(180px,1.5fr) minmax(100px,.7fr) minmax(110px,.8fr) auto; gap:12px; align-items:center; padding:13px 14px; border:1px solid #e7e9ee; border-radius:12px; background:#fff; }
+.approver-assignment-row div { display:grid; gap:2px; }
+.approver-assignment-row small { color:#7b8493; }
+.approver-assignment-row span { font-weight:800; color:#17243a; }
+.approver-assignment-row em { font-style:normal; color:#c8232c; font-weight:700; }
+.approver-inbox { display:grid; gap:12px; }
+.approver-inbox-card { display:flex; justify-content:space-between; gap:18px; align-items:center; padding:18px 20px; border:1px solid #e5e8ee; border-radius:16px; background:#fff; }
+.approver-inbox-card.actionable { border-left:5px solid #cf2029; box-shadow:0 10px 28px rgba(25,35,50,.08); }
+.approver-inbox-card.blocked { border-left:5px solid #c7cdd5; }
+.approver-inbox-card h3 { margin:5px 0; color:#13213a; }
+.approver-inbox-card p { margin:0; color:#727b89; }
+.approver-inbox-state { min-width:180px; display:grid; justify-items:end; gap:7px; }
+.approver-inbox-state small { color:#737c89; }
+.approver-review-layout { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:18px; align-items:start; }
+.approver-readonly-preview h1 { color:#13213a; margin:18px 0 22px; font-size:25px; }
+.approver-review-side { display:grid; gap:14px; position:sticky; top:88px; }
+.approval-permission { padding:14px; border-radius:12px; background:#f6f7f9; border:1px solid #e3e6eb; }
+.approval-permission strong { display:block; color:#17243a; margin-bottom:5px; }
+.approval-permission p { margin:0; color:#6c7480; line-height:1.45; }
+.approval-permission.waiting { background:#fff8e8; border-color:#f2d7a0; }
+.approval-permission.blocked { background:#f7f7f8; }
+.secure-approval-action { grid-template-columns:minmax(160px,.8fr) 120px minmax(180px,1fr) auto; align-items:end; }
+.approval-own-step { min-height:62px; display:flex; flex-direction:column; justify-content:center; padding:9px 12px; background:#101d31; color:white; border-radius:10px; }
+.approval-own-step small { opacity:.75; }
+.approval-own-step strong { font-size:15px; }
+.approval-own-step span { font-size:11px; color:#f5a33a; }
+@media (max-width: 900px) {
+  .approver-assignment-row { grid-template-columns:1fr 1fr; }
+  .approver-review-layout { grid-template-columns:1fr; }
+  .approver-review-side { position:static; }
+  .secure-approval-action { grid-template-columns:1fr; }
+  .approver-inbox-card { align-items:flex-start; flex-direction:column; }
+  .approver-inbox-state { width:100%; justify-items:start; }
+}
