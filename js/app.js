@@ -22,8 +22,8 @@ import {
   resolveApprovalPermission,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=2.3.6";
-import { createStore } from "./services/store.js?v=2.3.6";
+} from "./core.js?v=2.3.9";
+import { createStore } from "./services/store.js?v=2.3.9";
 import {
   appendImageFiles,
   createImageSelection,
@@ -32,8 +32,8 @@ import {
   MAX_IMAGES_PER_SECTION,
   removeSelectedImage,
   totalSelectedImages,
-} from "./image-manager.js?v=2.3.6";
-import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.3.6";
+} from "./image-manager.js?v=2.3.9";
+import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.3.9";
 
 const store = createStore();
 const state = {
@@ -1334,9 +1334,9 @@ function renderAdminApprovals() {
   const stepMap = new Map(steps.map((step) => [String(step.id), step]));
   const assignments = state.approverAssignments || [];
   const manualSteps = steps.filter((step) => step.active !== false && step.auto_author !== true);
-  main.innerHTML = `${adminPageHeader("전자결재 설정", "담당은 자동작성되고, 신규 제안만 부서장 → 해당부서 임원 → 주관부서 → 대표이사 순서로 전자서명합니다.", "approvals")}
+  main.innerHTML = `${adminPageHeader("전자결재 설정", "담당은 자동작성되고, 신규 제안만 부서장 → 해당부서 임원 → 대표이사 순서로 전자서명합니다.", "approvals")}
     <section class="approval-security-notice">
-      <strong>V2.3.5 결재방식</strong><span>① 담당: 제안 제출 즉시 자동작성 · ② 부서장/해당부서 임원: 제안 부서별 계정 연결 · ③ 주관부서/대표이사: 전체 부서 공통 계정 연결 · ④ V2.3 적용 이후 신규 제안만 결재대상 · ⑤ 각 결재자는 본인 단계만 승인·반려</span>
+      <strong>V2.3.9 최종 결재방식</strong><span>① 담당: 제안 제출 즉시 자동작성 · ② 부서장/해당부서 임원: 제안 부서별 계정 연결 · ③ 대표이사: 전체 부서 공통 계정 연결 · ④ V2.3 적용 이후 신규 제안만 결재대상 · ⑤ 각 결재자는 본인 단계만 승인·반려</span>
     </section>
     <section class="admin-config-grid">
       <form id="approvalStepForm" class="side-card admin-config-form">
@@ -1363,7 +1363,7 @@ function renderAdminApprovals() {
         <label class="field">결재자 이름<input name="display_name" maxlength="50" required placeholder="예: 홍길동"></label>
         <label class="field">본인 결재단계<select name="step_id" required><option value="">단계 선택</option>${manualSteps.map(step=>`<option value="${step.id}">${step.step_order}. ${escapeHtml(step.role_name)}</option>`).join("")}</select></label>
         <label class="field">적용부서<select name="department"><option value="">전체 부서</option>${departments.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("")}</select></label>
-        <small class="form-help">담당은 계정 연결 대상이 아닙니다. 부서장·해당부서 임원은 해당 부서를 지정하고, 주관부서·대표이사는 전체 부서를 선택하세요.</small>
+        <small class="form-help">담당은 계정 연결 대상이 아닙니다. 부서장·해당부서 임원은 해당 부서를 지정하고, 대표이사는 전체 부서를 선택하세요.</small>
         <button class="button button-primary button-wide" type="submit">결재자 연결</button>
       </form>
       <article class="analytics-panel admin-config-list approver-assignment-list"><div class="analytics-panel-head"><div><span class="eyebrow">ASSIGNMENTS</span><h2>지정된 결재자</h2></div></div>

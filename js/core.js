@@ -380,16 +380,12 @@ export function resolveApprovalPermission(proposal, steps, records, assignments)
   const recordFor = (stepId) => approvalRecords.find((record) => String(record.step_id) === String(stepId));
 
   for (const step of manualSteps) {
+    const departmentScoped = Number(step.step_order) === 2 || Number(step.step_order) === 3;
     const matchingAssignments = userAssignments
       .filter((assignment) => String(assignment.step_id) === String(step.id))
       .filter((assignment) => {
         const scope = String(assignment.department || "").trim();
-        return !scope || scope === department;
-      })
-      .sort((left, right) => {
-        const leftExact = String(left.department || "").trim() === department ? 1 : 0;
-        const rightExact = String(right.department || "").trim() === department ? 1 : 0;
-        return rightExact - leftExact;
+        return departmentScoped ? scope === department : !scope;
       });
 
     const assignment = matchingAssignments[0];

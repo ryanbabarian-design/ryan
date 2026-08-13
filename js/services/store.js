@@ -1,6 +1,6 @@
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
-import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.3.5";
-import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3.5";
+import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.3.9";
+import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3.9";
 
 const PROPOSAL_KEY = "proposal-system:v1:proposals";
 const EMPLOYEE_KEY = "proposal-system:v1:employees";
@@ -16,8 +16,7 @@ const DEFAULT_APPROVAL_STEPS = [
   { id: 1, step_order: 1, role_name: "담당", description: "제안 제출 시 제안자 자동작성", auto_author: true, active: true },
   { id: 2, step_order: 2, role_name: "부서장", description: "해당 부서 검토 및 승인", auto_author: false, active: true },
   { id: 3, step_order: 3, role_name: "해당부서 임원", description: "해당 부서 담당 임원 검토 및 승인", auto_author: false, active: true },
-  { id: 4, step_order: 4, role_name: "주관부서", description: "제안제도 주관부서 검토 및 승인", auto_author: false, active: true },
-  { id: 5, step_order: 5, role_name: "대표이사", description: "최종 승인", auto_author: false, active: true },
+  { id: 5, step_order: 4, role_name: "대표이사", description: "최종 승인", auto_author: false, active: true },
 ];
 
 function clone(value) {
