@@ -1,6 +1,7 @@
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
-import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.3.9";
-import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3.9";
+import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.3.11";
+import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3.11";
+import { mergeEmployeeRoster, normalizeEmployeeImportRows } from "../employee-sync.js?v=2.3.11";
 
 const PROPOSAL_KEY = "proposal-system:v1:proposals";
 const EMPLOYEE_KEY = "proposal-system:v1:employees";
@@ -308,18 +309,16 @@ class DemoStore {
   async importEmployees(rows) {
     if (!(await this.getAdminSession())) throw new Error("관리자 로그인이 필요합니다.");
     const current = JSON.parse(localStorage.getItem(EMPLOYEE_KEY) || "[]");
-    const keyed = new Map(current.map((row) => [`${row.name}|${row.department}`, row]));
-    rows.forEach((row) => {
-      keyed.set(`${row.name}|${row.department}`, {
-        name: row.name,
-        department: row.department,
-        employee_no: row.employee_no || "",
-        active: row.active !== false,
-      });
-    });
-    const saved = Array.from(keyed.values());
+    const normalized = normalizeEmployeeImportRows(rows);
+    const saved = mergeEmployeeRoster(current, normalized);
     localStorage.setItem(EMPLOYEE_KEY, JSON.stringify(saved));
-    return saved;
+    return {
+      uploaded_count: normalized.length,
+      active_count: saved.filter((row) => row.active !== false).length,
+      deactivated_count: saved.filter((row) => row.active === false).length,
+      inserted_count: Math.max(0, saved.length - current.length),
+      updated_count: normalized.length,
+    };
   }
 
   async getStatusHistory(proposalId) {
@@ -688,12 +687,12 @@ class SupabaseStore {
   }
 
   async importEmployees(rows) {
-    const { data, error } = await this.client
-      .from("employees")
-      .upsert(rows, { onConflict: "name,department" })
-      .select();
+    const normalized = normalizeEmployeeImportRows(rows);
+    const { data, error } = await this.client.rpc("sync_employees_admin_v2311", {
+      p_rows: normalized,
+    });
     if (error) throw error;
-    return data || [];
+    return Array.isArray(data) ? (data[0] || {}) : (data || {});
   }
 
   async getStatusHistory(proposalId) {
@@ -727,10 +726,16 @@ class SupabaseStore {
     return data;
   }
 
-  async getApproverAssignments(includeInactive = true) {
+  async getApproverAssignments(includeInactive = false) {
+    if (!includeInactive) {
+      const { data: rpcData, error: rpcError } = await this.client.rpc("list_approver_assignments_admin_v2311");
+      if (!rpcError) return rpcData || [];
+    }
+
     let query = this.client.from("approval_assignments")
       .select("id,step_id,user_id,email,display_name,department,active,created_at,updated_at")
-      .order("step_id").order("department", { ascending: true, nullsFirst: true });
+      .order("updated_at", { ascending: false })
+      .order("created_at", { ascending: false });
     if (!includeInactive) query = query.eq("active", true);
     const { data, error } = await query;
     if (error) throw error;

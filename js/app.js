@@ -22,8 +22,8 @@ import {
   resolveApprovalPermission,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=2.3.9";
-import { createStore } from "./services/store.js?v=2.3.9";
+} from "./core.js?v=2.3.11";
+import { createStore } from "./services/store.js?v=2.3.11";
 import {
   appendImageFiles,
   createImageSelection,
@@ -32,8 +32,8 @@ import {
   MAX_IMAGES_PER_SECTION,
   removeSelectedImage,
   totalSelectedImages,
-} from "./image-manager.js?v=2.3.9";
-import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.3.9";
+} from "./image-manager.js?v=2.3.11";
+import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.3.11";
 
 const store = createStore();
 const state = {
@@ -47,6 +47,7 @@ const state = {
   admin: null,
   loading: true,
   error: "",
+  lastSavedAssignmentId: null,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -235,7 +236,7 @@ function showApprovalLoginNotice() {
 
 async function refreshData() {
   const [proposals, employees, departmentGoals, approvalSteps, admin, approverAssignments] = await Promise.all([
-    store.getProposals(), store.getEmployees(), store.getDepartmentGoals().catch(() => []), store.getApprovalSteps(true).catch(() => []), store.getAdminSession(), store.getApproverAssignments(true).catch(() => []),
+    store.getProposals(), store.getEmployees(), store.getDepartmentGoals().catch(() => []), store.getApprovalSteps(true).catch(() => []), store.getAdminSession(), store.getApproverAssignments(false).catch(() => []),
   ]);
   state.proposals = proposals; state.employees = employees; state.departmentGoals = departmentGoals; state.approvalSteps = approvalSteps; state.admin = admin; state.approverAssignments = approverAssignments;
   state.approvalInbox = admin ? await store.getMyApprovalInbox().catch(() => []) : [];
@@ -1332,7 +1333,9 @@ function renderAdminApprovals() {
   const steps = state.approvalSteps;
   const departments = [...new Set(state.employees.map((e) => e.department).concat(state.proposals.map((p) => p.department)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ko"));
   const stepMap = new Map(steps.map((step) => [String(step.id), step]));
-  const assignments = state.approverAssignments || [];
+  const assignments = (state.approverAssignments || [])
+    .filter((row) => row.active !== false && stepMap.get(String(row.step_id))?.active !== false)
+    .sort((a, b) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")));
   const manualSteps = steps.filter((step) => step.active !== false && step.auto_author !== true);
   main.innerHTML = `${adminPageHeader("전자결재 설정", "담당은 자동작성되고, 신규 제안만 부서장 → 해당부서 임원 → 대표이사 순서로 전자서명합니다.", "approvals")}
     <section class="approval-security-notice">
@@ -1366,8 +1369,8 @@ function renderAdminApprovals() {
         <small class="form-help">담당은 계정 연결 대상이 아닙니다. 부서장·해당부서 임원은 해당 부서를 지정하고, 대표이사는 전체 부서를 선택하세요.</small>
         <button class="button button-primary button-wide" type="submit">결재자 연결</button>
       </form>
-      <article class="analytics-panel admin-config-list approver-assignment-list"><div class="analytics-panel-head"><div><span class="eyebrow">ASSIGNMENTS</span><h2>지정된 결재자</h2></div></div>
-        ${assignments.length ? `<div class="approver-assignment-rows">${assignments.map(row=>{const step=stepMap.get(String(row.step_id)); return `<div class="approver-assignment-row"><div><strong>${escapeHtml(row.display_name)}</strong><small>${escapeHtml(row.email)}</small></div><span>${escapeHtml(step?.role_name||"결재단계")}</span><em>${escapeHtml(row.department||"전체 부서")}</em><button type="button" class="button button-small button-danger" data-action="remove-approver-assignment" data-id="${row.id}">배정 해제</button></div>`;}).join("")}</div>` : `<div class="analytics-empty">아직 지정된 실제 결재자가 없습니다.</div>`}
+      <article class="analytics-panel admin-config-list approver-assignment-list"><div class="analytics-panel-head"><div><span class="eyebrow">ASSIGNMENTS</span><h2>지정된 결재자</h2><small>활성 결재자 ${assignments.length}명 · 최근 저장 순</small></div></div>
+        ${assignments.length ? `<div class="approver-assignment-rows">${assignments.map(row=>{const step=stepMap.get(String(row.step_id)); const recent=String(row.id)===String(state.lastSavedAssignmentId||""); return `<div class="approver-assignment-row" data-assignment-id="${row.id}"><div><strong>${escapeHtml(row.display_name)}${recent ? ` <small class="approval-auto-badge">최근 저장</small>` : ""}</strong><small>${escapeHtml(row.email)}</small></div><span>${escapeHtml(row.role_name||step?.role_name||"결재단계")}</span><em>${escapeHtml(row.department||"전체 부서")}</em><button type="button" class="button button-small button-danger" data-action="remove-approver-assignment" data-id="${row.id}">배정 해제</button></div>`;}).join("")}</div>` : `<div class="analytics-empty">아직 지정된 실제 결재자가 없습니다.</div>`}
       </article>
     </section>`;
 }
@@ -1868,10 +1871,12 @@ document.addEventListener("click", async (event) => {
       showToast("본인 전자서명을 저장했습니다.");
     } else if (action === "import-employees") {
       const rows = await parseEmployeeFile($("#employeeFile").files[0]);
-      await store.importEmployees(rows);
+      const result = await store.importEmployees(rows);
       await refreshData();
       render();
-      showToast(`직원 ${rows.length}명을 반영했습니다.`);
+      const activeCount = Number(result?.active_count ?? state.employees.length);
+      const deactivatedCount = Number(result?.deactivated_count ?? 0);
+      showToast(`직원명단 최신화 완료 · 활성 ${activeCount}명${deactivatedCount ? ` · 비활성 ${deactivatedCount}명` : ""}`);
     } else if (action === "delete-proposal") {
       if (!confirm("이 제안을 삭제하시겠습니까? 삭제 후 복구할 수 없습니다.")) return;
       await store.deleteProposal(actionButton.dataset.id);
@@ -1935,13 +1940,15 @@ document.addEventListener("submit", async (event) => {
       showToast("전자결재 단계를 저장했습니다.");
     } else if (event.target.id === "approverAssignmentForm") {
       const data = new FormData(event.target);
-      await store.linkApproverAccount({
+      const savedAssignment = await store.linkApproverAccount({
         email: data.get("approver_email"), display_name: data.get("display_name"),
         step_id: data.get("step_id"), department: data.get("department"),
       });
+      const savedRow = Array.isArray(savedAssignment) ? savedAssignment[0] : savedAssignment;
+      state.lastSavedAssignmentId = savedRow?.id || null;
       await refreshData();
       renderAdmin("approvals");
-      showToast("결재자 계정을 연결했습니다.");
+      showToast(`결재자 저장 완료: ${data.get("display_name")} · ${data.get("department") || "전체 부서"}`);
     } else if (event.target.id === "adminReviewForm") {
       const data = new FormData(event.target);
       const proposal = state.proposals.find((p) => p.id === event.target.dataset.id);
