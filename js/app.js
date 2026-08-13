@@ -22,8 +22,8 @@ import {
   resolveApprovalPermission,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=2.3";
-import { createStore } from "./services/store.js?v=2.3";
+} from "./core.js?v=2.3.6";
+import { createStore } from "./services/store.js?v=2.3.6";
 import {
   appendImageFiles,
   createImageSelection,
@@ -32,8 +32,8 @@ import {
   MAX_IMAGES_PER_SECTION,
   removeSelectedImage,
   totalSelectedImages,
-} from "./image-manager.js?v=2.3";
-import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.3";
+} from "./image-manager.js?v=2.3.6";
+import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.3.6";
 
 const store = createStore();
 const state = {
@@ -1046,13 +1046,17 @@ function renderTimelineRows(rows) {
 
 function renderApprovalProgress(steps, records) {
   if (!steps?.length) return `<div class="analytics-empty">전자결재 단계가 설정되지 않았습니다.</div>`;
+  const activeSteps = steps.filter((step) => step.active !== false).sort((a,b)=>Number(a.step_order)-Number(b.step_order));
   const recordMap = new Map((records || []).map((row) => [String(row.step_id), row]));
-  return `<div class="approval-progress">${steps.filter((step) => step.active !== false).map((step) => {
+  const finalStep = activeSteps[activeSteps.length - 1];
+  const finalApproved = finalStep ? recordMap.get(String(finalStep.id))?.status === "승인" : false;
+  return `<div class="approval-progress">${activeSteps.map((step) => {
     const record = recordMap.get(String(step.id));
-    const status = record?.status || "대기";
+    const migratedFinalMissing = !record && finalApproved && step.auto_author !== true;
+    const status = migratedFinalMissing ? "승인" : (record?.status || "대기");
     const isAutoAuthor = step.auto_author === true;
-    const statusLabel = isAutoAuthor && status === "승인" ? "작성완료" : status;
-    const signer = record?.approver_name || record?.assigned_name || (isAutoAuthor ? "제안자 자동작성" : "결재자 미지정");
+    const statusLabel = migratedFinalMissing ? "전환 전 완료" : (isAutoAuthor && status === "승인" ? "작성완료" : status);
+    const signer = migratedFinalMissing ? "소급결재 제외" : (record?.approver_name || record?.assigned_name || (isAutoAuthor ? "제안자 자동작성" : "결재자 미지정"));
     return `<div class="approval-step ${status === "승인" ? "approved" : status === "반려" ? "rejected" : "pending"} ${isAutoAuthor ? "auto-author" : ""}"><span>${escapeHtml(String(step.step_order))}</span><div><strong>${escapeHtml(step.role_name)}${isAutoAuthor ? ' <em class="approval-auto-tag">자동작성</em>' : ""}</strong><small>${escapeHtml(statusLabel)} · ${escapeHtml(signer)}</small></div></div>`;
   }).join("")}</div>`;
 }
@@ -1216,11 +1220,16 @@ async function hydratePrintApproval(proposal, steps) {
   if (!steps?.length) return;
   const records = await store.getApprovalRecords(proposal.id).catch(() => []);
   const recordMap = new Map(records.map((row) => [String(row.step_id), row]));
+  const finalStep = steps[steps.length - 1];
+  const finalApproved = finalStep ? recordMap.get(String(finalStep.id))?.status === "승인" : false;
   steps.forEach((step, index) => {
     const cell = document.querySelector(`[data-print-approval-index="${index}"]`);
     if (!cell) return;
     const record = recordMap.get(String(step.id));
-    if (!record || record.status === "대기") {
+    const migratedFinalMissing = !record && finalApproved && step.auto_author !== true;
+    if (migratedFinalMissing) {
+      cell.innerHTML = `<strong>전환 전 완료</strong><small>소급결재 제외</small><em>V2.3.5 적용 전 최종승인</em>`;
+    } else if (!record || record.status === "대기") {
       cell.innerHTML = step.auto_author === true
         ? `<span class="print-approval-pending">자동작성 대기</span>`
         : `<span class="print-approval-pending">대기</span>`;
@@ -1325,9 +1334,9 @@ function renderAdminApprovals() {
   const stepMap = new Map(steps.map((step) => [String(step.id), step]));
   const assignments = state.approverAssignments || [];
   const manualSteps = steps.filter((step) => step.active !== false && step.auto_author !== true);
-  main.innerHTML = `${adminPageHeader("전자결재 설정", "담당은 자동작성되고, 신규 제안만 부서장 → 주관부서 → 대표이사 순서로 전자서명합니다.", "approvals")}
+  main.innerHTML = `${adminPageHeader("전자결재 설정", "담당은 자동작성되고, 신규 제안만 부서장 → 해당부서 임원 → 주관부서 → 대표이사 순서로 전자서명합니다.", "approvals")}
     <section class="approval-security-notice">
-      <strong>V2.3 결재방식</strong><span>① 담당: 제안 제출 즉시 자동작성 · ② 부서장/주관부서/대표이사: Supabase Authentication 계정 연결 · ③ V2.3 적용 이후 신규 제안만 결재대상 · ④ 각 결재자는 본인 단계만 승인·반려</span>
+      <strong>V2.3.5 결재방식</strong><span>① 담당: 제안 제출 즉시 자동작성 · ② 부서장/해당부서 임원: 제안 부서별 계정 연결 · ③ 주관부서/대표이사: 전체 부서 공통 계정 연결 · ④ V2.3 적용 이후 신규 제안만 결재대상 · ⑤ 각 결재자는 본인 단계만 승인·반려</span>
     </section>
     <section class="admin-config-grid">
       <form id="approvalStepForm" class="side-card admin-config-form">
@@ -1354,7 +1363,7 @@ function renderAdminApprovals() {
         <label class="field">결재자 이름<input name="display_name" maxlength="50" required placeholder="예: 홍길동"></label>
         <label class="field">본인 결재단계<select name="step_id" required><option value="">단계 선택</option>${manualSteps.map(step=>`<option value="${step.id}">${step.step_order}. ${escapeHtml(step.role_name)}</option>`).join("")}</select></label>
         <label class="field">적용부서<select name="department"><option value="">전체 부서</option>${departments.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("")}</select></label>
-        <small class="form-help">담당은 계정 연결 대상이 아닙니다. 부서장은 해당 부서를 지정하고, 주관부서·대표이사는 전체 부서를 선택하세요.</small>
+        <small class="form-help">담당은 계정 연결 대상이 아닙니다. 부서장·해당부서 임원은 해당 부서를 지정하고, 주관부서·대표이사는 전체 부서를 선택하세요.</small>
         <button class="button button-primary button-wide" type="submit">결재자 연결</button>
       </form>
       <article class="analytics-panel admin-config-list approver-assignment-list"><div class="analytics-panel-head"><div><span class="eyebrow">ASSIGNMENTS</span><h2>지정된 결재자</h2></div></div>
