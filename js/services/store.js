@@ -13,6 +13,12 @@ const APPROVAL_RECORDS_KEY = "proposal-system:v2:approval-records";
 const AUDIT_KEY = "proposal-system:v2:audit-logs";
 const APPROVAL_ASSIGNMENTS_KEY = "proposal-system:v21:approval-assignments";
 const NOTIFICATION_LOG_KEY = "proposal-system:v23:notification-logs";
+const APPROVAL_DEPARTMENTS_V2313 = [
+  "소재개발연구소", "미래사업기획 TF팀", "경영기획실", "경영지원실",
+  "인사안전팀", "자재팀", "생산지원실", "플랜트사업실", "생산관리팀",
+  "공무팀", "품질관리팀", "압연팀", "압출인발팀", "가공팀", "플랜트사업팀", "영업실",
+];
+
 const DEFAULT_APPROVAL_STEPS = [
   { id: 1, step_order: 1, role_name: "담당", description: "제안 제출 시 제안자 자동작성", auto_author: true, active: true },
   { id: 2, step_order: 2, role_name: "부서장", description: "해당 부서 검토 및 승인", auto_author: false, active: true },
@@ -135,6 +141,10 @@ class DemoStore {
       .sort((a, b) => `${a.department}${a.name}`.localeCompare(`${b.department}${b.name}`, "ko"));
   }
 
+  async getApprovalDepartments() {
+    return [...APPROVAL_DEPARTMENTS_V2313];
+  }
+
   async createProposal(payload, beforeFiles, afterFiles) {
     const proposals = await this.getProposals();
     const pinHash = await sha256(payload.edit_pin);
@@ -254,6 +264,10 @@ class DemoStore {
     if (!email) return null;
     const assignments = (await this.getApproverAssignments()).filter((row) => row.email === email && row.active !== false);
     return { email, displayName: "데모 관리자", isSystemAdmin: true, assignments };
+  }
+
+  async changeOwnPassword() {
+    throw new Error("데모 모드에서는 비밀번호를 변경할 수 없습니다.");
   }
 
   async adminUpdateProposal(id, patch) {
@@ -516,6 +530,12 @@ class SupabaseStore {
     return data || [];
   }
 
+  async getApprovalDepartments() {
+    const { data, error } = await this.client.rpc("list_approval_departments_v2313");
+    if (error) throw error;
+    return (data || []).map((row) => String(row.name || "").trim()).filter(Boolean);
+  }
+
   async uploadImages(files, section) {
     const uploaded = [];
     const submissionId = crypto.randomUUID();
@@ -665,6 +685,19 @@ class SupabaseStore {
       email: user.email, displayName: admin?.display_name || assignments?.[0]?.display_name || user.email,
       isSystemAdmin: Boolean(admin), assignments: assignments || [],
     };
+  }
+
+  async changeOwnPassword(currentPassword, newPassword) {
+    const { data: sessionData } = await this.client.auth.getSession();
+    const email = sessionData.session?.user?.email;
+    if (!email) throw new Error("로그인 세션이 없습니다. 다시 로그인해 주세요.");
+
+    const { error: verifyError } = await this.client.auth.signInWithPassword({ email, password: currentPassword });
+    if (verifyError) throw new Error("현재 비밀번호가 올바르지 않습니다.");
+
+    const { error } = await this.client.auth.updateUser({ password: newPassword });
+    if (error) throw error;
+    return true;
   }
 
   async adminUpdateProposal(id, patch) {

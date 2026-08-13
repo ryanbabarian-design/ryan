@@ -23,7 +23,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.3.11";
-import { createStore } from "./services/store.js?v=2.3.11";
+import { createStore } from "./services/store.js?v=2.3.13";
 import {
   appendImageFiles,
   createImageSelection,
@@ -39,6 +39,7 @@ const store = createStore();
 const state = {
   proposals: [],
   employees: [],
+  approvalDepartments: [],
   departmentGoals: [],
   approvalSteps: [],
   approverAssignments: [],
@@ -235,10 +236,10 @@ function showApprovalLoginNotice() {
 }
 
 async function refreshData() {
-  const [proposals, employees, departmentGoals, approvalSteps, admin, approverAssignments] = await Promise.all([
-    store.getProposals(), store.getEmployees(), store.getDepartmentGoals().catch(() => []), store.getApprovalSteps(true).catch(() => []), store.getAdminSession(), store.getApproverAssignments(false).catch(() => []),
+  const [proposals, employees, approvalDepartments, departmentGoals, approvalSteps, admin, approverAssignments] = await Promise.all([
+    store.getProposals(), store.getEmployees(), store.getApprovalDepartments().catch(() => []), store.getDepartmentGoals().catch(() => []), store.getApprovalSteps(true).catch(() => []), store.getAdminSession(), store.getApproverAssignments(false).catch(() => []),
   ]);
-  state.proposals = proposals; state.employees = employees; state.departmentGoals = departmentGoals; state.approvalSteps = approvalSteps; state.admin = admin; state.approverAssignments = approverAssignments;
+  state.proposals = proposals; state.employees = employees; state.approvalDepartments = approvalDepartments; state.departmentGoals = departmentGoals; state.approvalSteps = approvalSteps; state.admin = admin; state.approverAssignments = approverAssignments;
   state.approvalInbox = admin ? await store.getMyApprovalInbox().catch(() => []) : [];
   state.approvalOverdueSummary = admin?.isSystemAdmin ? await store.getApprovalOverdueSummary().catch(() => ({})) : {};
   syncApprovalInboxBadge();
@@ -1305,13 +1306,31 @@ function adminNav(active = "proposals") {
 
 function adminPageHeader(title, description, active) {
   const accountLabel = state.admin?.isSystemAdmin ? "SYSTEM ADMIN" : "APPROVER";
-  return `<section class="page-header"><div><span class="eyebrow">${accountLabel}</span><h1>${escapeHtml(title)}</h1><p>${escapeHtml(description)}</p></div><div class="header-buttons"><button class="button button-secondary" data-action="logout-admin">로그아웃</button></div></section>${adminNav(active)}`;
+  return `<section class="page-header"><div><span class="eyebrow">${accountLabel}</span><h1>${escapeHtml(title)}</h1><p>${escapeHtml(description)}</p></div><div class="header-buttons"><button class="button button-secondary" data-route="admin/password">비밀번호 변경</button><button class="button button-secondary" data-action="logout-admin">로그아웃</button></div></section>${adminNav(active)}`;
+}
+
+function renderPasswordChange() {
+  const email = state.admin?.email || "";
+  main.innerHTML = `${adminPageHeader("비밀번호 변경", "비밀번호 변경은 선택사항입니다. 변경하지 않아도 기존 비밀번호로 계속 이용할 수 있습니다.", "password")}
+    <section class="admin-login-wrap">
+      <form id="passwordChangeForm" class="admin-login">
+        <span class="admin-lock">🔐</span>
+        <span class="eyebrow">ACCOUNT SECURITY</span>
+        <h1>내 비밀번호 변경</h1>
+        <p>결재 아이디 <strong>${escapeHtml(email)}</strong></p>
+        <label class="field">현재 비밀번호<input type="password" name="current_password" required autocomplete="current-password"></label>
+        <label class="field">새 비밀번호<input type="password" name="new_password" required minlength="4" autocomplete="new-password" placeholder="4자 이상"></label>
+        <label class="field">새 비밀번호 확인<input type="password" name="new_password_confirm" required minlength="4" autocomplete="new-password"></label>
+        <button class="button button-primary button-wide" type="submit">비밀번호 변경</button>
+        <small class="demo-help">변경을 원하지 않으면 이 메뉴를 사용하지 않아도 됩니다.</small>
+      </form>
+    </section>`;
 }
 
 function renderAdminGoals() {
   const years = dashboardBreakdown(state.proposals, "all").years;
   const selectedYear = getDashboardYearFromUrl() === "all" ? String(new Date().getFullYear()) : (getDashboardYearFromUrl() || years[0] || String(new Date().getFullYear()));
-  const departments = [...new Set(state.employees.map((e) => e.department).concat(state.proposals.map((p) => p.department)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ko"));
+  const departments = [...(state.approvalDepartments || [])];
   const rows = state.departmentGoals.filter((row) => String(row.year) === String(selectedYear));
   main.innerHTML = `${adminPageHeader("부서 목표관리", "연도별 부서 제안 목표를 설정하고 대시보드 달성률에 반영합니다.", "goals")}
     <section class="admin-config-grid">
@@ -1331,7 +1350,7 @@ function renderAdminGoals() {
 
 function renderAdminApprovals() {
   const steps = state.approvalSteps;
-  const departments = [...new Set(state.employees.map((e) => String(e.department || "").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ko"));
+  const departments = [...(state.approvalDepartments || [])];
   const stepMap = new Map(steps.map((step) => [String(step.id), step]));
   const assignments = (state.approverAssignments || [])
     .filter((row) => row.active !== false && stepMap.get(String(row.step_id))?.active !== false)
@@ -1365,7 +1384,7 @@ function renderAdminApprovals() {
         <label class="field">결재자 이메일<input type="email" name="approver_email" required placeholder="Supabase Auth에 생성한 이메일"></label>
         <label class="field">결재자 이름<input name="display_name" maxlength="50" required placeholder="예: 홍길동"></label>
         <label class="field">본인 결재단계<select name="step_id" required><option value="">단계 선택</option>${manualSteps.map(step=>`<option value="${step.id}">${step.step_order}. ${escapeHtml(step.role_name)}</option>`).join("")}</select></label>
-        <label class="field">적용부서<select name="department"><option value="">전체 부서</option>${departments.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("")}</select></label>
+        <label class="field">적용부서<select name="department"><option value="">전체 부서</option>${departments.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("")}</select></label><small class="form-help">조직도 2026.07.01 기준 부서 마스터만 표시됩니다.</small>
         <small class="form-help">담당은 계정 연결 대상이 아닙니다. 부서장·해당부서 임원은 해당 부서를 지정하고, 대표이사는 전체 부서를 선택하세요.</small>
         <button class="button button-primary button-wide" type="submit">결재자 연결</button>
       </form>
@@ -1460,6 +1479,8 @@ function renderAdmin(action = "", id = "") {
       </section>`;
     return;
   }
+
+  if (action === "password") { renderPasswordChange(); return; }
 
   if (!state.admin.isSystemAdmin) {
     if (action === "review") { void renderApproverReview(id); return; }
@@ -1925,6 +1946,17 @@ document.addEventListener("submit", async (event) => {
       render();
       showToast(account?.isSystemAdmin ? "시스템 관리자 로그인되었습니다." : "결재자 로그인되었습니다.");
       setTimeout(showApprovalLoginNotice, 120);
+    } else if (event.target.id === "passwordChangeForm") {
+      const data = new FormData(event.target);
+      const currentPassword = String(data.get("current_password") || "");
+      const newPassword = String(data.get("new_password") || "");
+      const confirmPassword = String(data.get("new_password_confirm") || "");
+      if (newPassword.length < 4) throw new Error("새 비밀번호는 4자 이상 입력하세요.");
+      if (newPassword !== confirmPassword) throw new Error("새 비밀번호 확인이 일치하지 않습니다.");
+      if (currentPassword === newPassword) throw new Error("현재 비밀번호와 다른 새 비밀번호를 입력하세요.");
+      await store.changeOwnPassword(currentPassword, newPassword);
+      event.target.reset();
+      showToast("비밀번호를 변경했습니다. 다음 로그인부터 새 비밀번호를 사용하세요.");
     } else if (event.target.id === "departmentGoalForm") {
       const data = new FormData(event.target);
       await store.saveDepartmentGoal({ year: Number(data.get("year")), department: data.get("department"), annual_goal: Number(data.get("annual_goal") || 0), note: data.get("note")?.trim() });
