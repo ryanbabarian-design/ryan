@@ -1331,7 +1331,7 @@ function renderAdminGoals() {
 
 function renderAdminApprovals() {
   const steps = state.approvalSteps;
-  const departments = [...new Set(state.employees.map((e) => e.department).concat(state.proposals.map((p) => p.department)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ko"));
+  const departments = [...new Set(state.employees.map((e) => String(e.department || "").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ko"));
   const stepMap = new Map(steps.map((step) => [String(step.id), step]));
   const assignments = (state.approverAssignments || [])
     .filter((row) => row.active !== false && stepMap.get(String(row.step_id))?.active !== false)
