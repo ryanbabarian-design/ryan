@@ -22,8 +22,8 @@ import {
   resolveApprovalPermission,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=2.3.11";
-import { createStore } from "./services/store.js?v=2.3.13";
+} from "./core.js?v=2.3.15";
+import { createStore } from "./services/store.js?v=2.3.15";
 import {
   appendImageFiles,
   createImageSelection,
@@ -33,7 +33,7 @@ import {
   removeSelectedImage,
   totalSelectedImages,
 } from "./image-manager.js?v=2.3.11";
-import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.3.11";
+import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.3.15";
 
 const store = createStore();
 const state = {
@@ -904,9 +904,15 @@ function renderProposalForm(proposalNo = "") {
         <label class="field">기대효과 <b>*</b>
           <textarea name="expected_effect" rows="5" required placeholder="예: 작업시간 1회당 10분 단축, 비산 위험 감소, 불량 방지">${escapeHtml(proposal?.expected_effect || "")}</textarea>
         </label>
-        <label class="field compact">예상 투입비용(원)
-          <input name="cost_amount" type="number" min="0" step="1000" value="${Number(proposal?.cost_amount || 0)}">
-        </label>
+        <div class="form-grid two">
+          <label class="field compact">예상 투입비용(원)
+            <input name="cost_amount" type="number" min="0" step="1000" value="${Number(proposal?.cost_amount || 0)}">
+          </label>
+          <label class="field compact">제안자 예상 효과금액(원)
+            <input name="proposer_effect_amount" type="number" min="0" step="1000" value="${Number(proposal?.proposer_effect_amount || 0)}" placeholder="예: 2920000">
+            <small class="field-help">심사 시 관리자가 산정 근거를 확인하고 최종 효과금액을 확정합니다.</small>
+          </label>
+        </div>
       </section>
 
       <section class="form-section implementation-section">
@@ -983,7 +989,8 @@ function renderDetail(proposalNo) {
       <div><small>점수</small><strong>${proposal.score ?? "-"}${proposal.score != null ? "점" : ""}</strong></div>
       <div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div>
       <div><small>지급상태</small>${statusBadge(proposal.payment_status)}</div>
-      <div><small>효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div>
+      <div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div>
+      <div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div>
     </section>
 
     <section class="detail-comparison">
@@ -1003,7 +1010,10 @@ function renderDetail(proposalNo) {
 
     <section class="detail-effect">
       <div><span class="eyebrow">EXPECTED EFFECT</span><h2>기대효과</h2><p>${escapeHtml(proposal.expected_effect)}</p></div>
-      <div class="effect-cost"><small>예상 투입비용</small><strong>${formatCurrency(proposal.cost_amount)}</strong></div>
+      <div class="effect-cost">
+        <small>예상 투입비용</small><strong>${formatCurrency(proposal.cost_amount)}</strong>
+        <small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong>
+      </div>
     </section>
 
     <section class="detail-operations-grid">
@@ -1193,8 +1203,9 @@ function renderPrint(proposalNo) {
           <div class="print-long-text">${escapeHtml(model.expectedEffect)}</div>
           <dl class="print-money-grid">
             <div><dt>예상 투입비용</dt><dd>${escapeHtml(model.costText)}</dd></div>
+            <div><dt>제안자 예상 효과금액</dt><dd>${escapeHtml(model.proposerEffectText)}</dd></div>
             <div><dt>포상금</dt><dd>${escapeHtml(model.awardText)}</dd></div>
-            <div><dt>효과금액</dt><dd>${escapeHtml(model.effectText)}</dd></div>
+            <div><dt>심사 확정 효과금액</dt><dd>${escapeHtml(model.effectText)}</dd></div>
             <div><dt>지급상태</dt><dd>${escapeHtml(model.paymentStatus)}</dd></div>
           </dl>
         </section>
@@ -1297,6 +1308,7 @@ function adminNav(active = "proposals") {
   return `<nav class="admin-subnav">
     <button class="${active === "proposals" ? "active" : ""}" data-route="admin">제안 심사</button>
     <button class="${active === "inbox" ? "active" : ""}" data-route="admin/inbox">내 결재함${actionableApprovalCount() ? ` <span class="approval-inbox-badge inline">${actionableApprovalCount()}</span>` : ""}</button>
+    <button class="${active === "ceo-submit" ? "active" : ""}" data-route="admin/ceo-submit">대표이사 일괄상신</button>
     <button class="${active === "goals" ? "active" : ""}" data-route="admin/goals">부서 목표관리</button>
     <button class="${active === "approvals" ? "active" : ""}" data-route="admin/approvals">전자결재 설정</button>
     <button class="${active === "notifications" ? "active" : ""}" data-route="admin/notifications">메일알림</button>
@@ -1394,14 +1406,60 @@ function renderAdminApprovals() {
     </section>`;
 }
 
+
+function currentUserHasApprovalRole(roleName) {
+  const stepIds = new Set(
+    (state.approvalSteps || [])
+      .filter((step) => step.active !== false && step.role_name === roleName)
+      .map((step) => String(step.id)),
+  );
+  return (state.admin?.assignments || []).some((assignment) => assignment.active !== false && stepIds.has(String(assignment.step_id)));
+}
+
+function selectedCheckboxIds(selector) {
+  return $$(selector).filter((box) => box.checked).map((box) => box.value).filter(Boolean);
+}
+
+function updateCeoBatchButton(kind) {
+  const isSubmit = kind === "submit";
+  const selector = isSubmit ? ".ceo-submit-checkbox" : ".ceo-approve-checkbox";
+  const button = isSubmit ? $("#ceoSubmitSelectedButton") : $("#ceoBatchApproveButton");
+  if (!button) return;
+  const count = selectedCheckboxIds(selector).length;
+  button.disabled = count === 0;
+  button.textContent = isSubmit ? `선택 ${count}건 대표이사 상신` : `선택 ${count}건 일괄승인`;
+}
+
+async function renderCeoSubmissionQueue() {
+  if (!state.admin?.isSystemAdmin) { void renderApproverInbox(); return; }
+  main.innerHTML = `${adminPageHeader("대표이사 일괄상신", "임원 승인과 관리자 심사가 모두 끝난 제안만 선택하여 대표이사에게 한꺼번에 상신합니다.", "ceo-submit")}<div class="loading-card"><div class="spinner"></div><p>대표이사 상신대기 제안을 불러오는 중입니다.</p></div>`;
+  try {
+    const rows = await store.getCeoSubmissionCandidates();
+    const content = rows.length ? `
+      <section class="section">
+        <div class="section-heading"><div><span class="eyebrow">CEO BATCH SUBMISSION</span><h2>대표이사 상신대기 ${rows.length}건</h2><p>체크한 제안만 대표이사 결재단계가 활성화되고 요약메일 1통이 발송됩니다.</p></div>
+          <div class="header-buttons"><label class="check-label"><input type="checkbox" id="ceoSubmitAll"> 전체 선택</label><button id="ceoSubmitSelectedButton" class="button button-primary" data-action="submit-selected-to-ceo" disabled>선택 0건 대표이사 상신</button></div>
+        </div>
+        <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>선택</th><th>접수번호</th><th>제안명</th><th>제안자</th><th>부서</th><th>심사결과</th><th>점수</th><th>포상금</th><th>제안자 예상 효과금액</th><th>심사 확정 효과금액</th><th>임원 승인일</th></tr></thead><tbody>
+          ${rows.map((row) => `<tr><td><input class="ceo-submit-checkbox" type="checkbox" value="${escapeHtml(row.proposal_id)}" aria-label="${escapeHtml(row.proposal_no)} 선택"></td><td><strong>${escapeHtml(row.proposal_no)}</strong></td><td>${escapeHtml(row.title)}</td><td>${escapeHtml(row.proposer_name)}</td><td>${escapeHtml(row.department)}</td><td>${statusBadge(row.review_result)}</td><td>${row.score == null ? "-" : `${Number(row.score)}점`}</td><td>${formatCurrency(row.award_amount)}</td><td>${formatCurrency(row.proposer_effect_amount)}</td><td><strong>${formatCurrency(row.effect_amount)}</strong></td><td>${escapeHtml(row.executive_approved_at ? new Date(row.executive_approved_at).toLocaleString("ko-KR") : "-")}</td></tr>`).join("")}
+        </tbody></table></div>
+      </section>` : `<div class="empty-state"><h2>대표이사 상신대기 제안이 없습니다.</h2><p>해당부서 임원 승인 + 관리자 심사완료가 모두 끝난 제안이 이곳에 표시됩니다.</p></div>`;
+    main.innerHTML = `${adminPageHeader("대표이사 일괄상신", "임원 승인과 관리자 심사가 모두 끝난 제안만 선택하여 대표이사에게 한꺼번에 상신합니다.", "ceo-submit")}${content}`;
+  } catch (error) {
+    main.innerHTML = `${adminPageHeader("대표이사 일괄상신", "V2.3.15 SQL 적용 후 사용할 수 있습니다.", "ceo-submit")}<div class="empty-state"><h2>상신대기 목록을 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p></div>`;
+  }
+}
+
 async function renderApproverInbox() {
-  main.innerHTML = `${adminPageHeader("내 결재함", "본인 계정에 지정된 결재만 표시됩니다. 이전 단계가 승인되어야 다음 단계가 활성화됩니다.", "inbox")}<div class="loading-card"><div class="spinner"></div><p>결재함을 불러오는 중입니다.</p></div>`;
+  const isCeo = currentUserHasApprovalRole("대표이사");
+  main.innerHTML = `${adminPageHeader("내 결재함", isCeo ? "관리자가 일괄상신한 대표이사 결재건만 표시됩니다. 여러 건을 선택해 일괄승인할 수 있으며 반려는 건별로 처리합니다." : "본인 계정에 지정된 결재만 표시됩니다. 이전 단계가 승인되어야 다음 단계가 활성화됩니다.", "inbox")}<div class="loading-card"><div class="spinner"></div><p>결재함을 불러오는 중입니다.</p></div>`;
   try {
     const rows = await store.getMyApprovalInbox();
-    const body = rows.length ? `<div class="approver-inbox">${rows.map(row=>{ const days=Number(row.pending_days||0); const delay=days>=7?"장기 미결재":days>=3?"결재 지연":days>=1?"결재 필요":"신규 결재"; return `<article class="approver-inbox-card ${row.can_act ? "actionable" : "blocked"} overdue-${Number(row.overdue_level||0)}"><div><span class="eyebrow">${escapeHtml(row.role_name)} · ${escapeHtml(row.department)}</span><h3>${escapeHtml(row.proposal_no)} · ${escapeHtml(row.title)}</h3><p>${escapeHtml(row.proposer_name)} · ${escapeHtml(formatDate(row.received_date))}</p></div><div class="approver-inbox-state"><span class="approval-delay-label">${escapeHtml(delay)}${row.can_act ? ` · ${days}일` : ""}</span>${statusBadge(row.approval_status)}<small>${escapeHtml(row.block_reason||"")}</small><button class="button ${row.can_act ? "button-primary" : "button-secondary"}" data-route="admin/review/${escapeHtml(row.proposal_id)}">${row.can_act ? "결재 검토" : "내용 보기"}</button></div></article>`;}).join("")}</div>` : `<div class="empty-state"><h2>현재 결재 대기 건이 없습니다.</h2><p>V2.3 적용 이후 신규 제안 중 본인 순서가 된 건만 표시됩니다.</p></div>`;
-    main.innerHTML = `${adminPageHeader("내 결재함", "본인 계정에 지정된 결재만 표시됩니다. 이전 단계가 승인되어야 다음 단계가 활성화됩니다.", "inbox")}<section class="section"><div class="section-heading"><div><span class="eyebrow">MY APPROVALS</span><h2>결재 대상</h2></div></div>${body}</section>`;
+    const batchToolbar = isCeo && rows.some((row) => row.can_act) ? `<div class="section-heading ceo-batch-toolbar"><div><span class="eyebrow">CEO BATCH APPROVAL</span><h2>대표이사 결재 대상</h2><p>승인할 건만 선택하세요. 반려는 각 제안의 결재 검토 화면에서 사유를 입력해 처리합니다.</p></div><div class="header-buttons"><label class="check-label"><input type="checkbox" id="ceoApproveAll"> 전체 선택</label><button id="ceoBatchApproveButton" class="button button-primary" data-action="batch-approve-ceo" disabled>선택 0건 일괄승인</button></div></div>` : `<div class="section-heading"><div><span class="eyebrow">MY APPROVALS</span><h2>결재 대상</h2></div></div>`;
+    const body = rows.length ? `<div class="approver-inbox">${rows.map(row=>{ const days=Number(row.pending_days||0); const delay=days>=7?"장기 미결재":days>=3?"결재 지연":days>=1?"결재 필요":"신규 결재"; const checkbox=isCeo&&row.can_act?`<label class="check-label ceo-inbox-check"><input class="ceo-approve-checkbox" type="checkbox" value="${escapeHtml(row.proposal_id)}"> 선택</label>`:""; return `<article class="approver-inbox-card ${row.can_act ? "actionable" : "blocked"} overdue-${Number(row.overdue_level||0)}"><div>${checkbox}<span class="eyebrow">${escapeHtml(row.role_name)} · ${escapeHtml(row.department)}</span><h3>${escapeHtml(row.proposal_no)} · ${escapeHtml(row.title)}</h3><p>${escapeHtml(row.proposer_name)} · ${escapeHtml(formatDate(row.received_date))}</p></div><div class="approver-inbox-state"><span class="approval-delay-label">${escapeHtml(delay)}${row.can_act ? ` · ${days}일` : ""}</span>${statusBadge(row.approval_status)}<small>${escapeHtml(row.block_reason||"")}</small><button class="button ${row.can_act ? "button-primary" : "button-secondary"}" data-route="admin/review/${escapeHtml(row.proposal_id)}">${row.can_act ? "결재 검토" : "내용 보기"}</button></div></article>`;}).join("")}</div>` : `<div class="empty-state"><h2>현재 결재 대기 건이 없습니다.</h2><p>${isCeo ? "관리자가 심사완료 제안을 대표이사에게 일괄상신하면 이곳에 표시됩니다." : "V2.3 적용 이후 신규 제안 중 본인 순서가 된 건만 표시됩니다."}</p></div>`;
+    main.innerHTML = `${adminPageHeader("내 결재함", isCeo ? "관리자가 일괄상신한 대표이사 결재건만 표시됩니다. 선택 일괄승인 또는 건별 검토가 가능합니다." : "본인 계정에 지정된 결재만 표시됩니다. 이전 단계가 승인되어야 다음 단계가 활성화됩니다.", "inbox")}<section class="section">${batchToolbar}${body}</section>`;
   } catch (error) {
-    main.innerHTML = `${adminPageHeader("내 결재함", "V2.1 전자결재 SQL 적용 후 사용할 수 있습니다.", "inbox")}<div class="empty-state"><h2>결재함을 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p></div>`;
+    main.innerHTML = `${adminPageHeader("내 결재함", "V2.3.15 전자결재 SQL 적용 후 사용할 수 있습니다.", "inbox")}<div class="empty-state"><h2>결재함을 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p></div>`;
   }
 }
 
@@ -1423,7 +1481,7 @@ async function renderApproverReview(id) {
   const permission = resolveApprovalPermission(proposal, state.approvalSteps, records, state.admin?.assignments || []);
   main.innerHTML = `${adminPageHeader("전자결재 검토", "제안내용을 확인한 뒤 본인에게 지정된 단계만 승인 또는 반려할 수 있습니다.", "inbox")}
     <section class="approver-review-layout">
-      <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2><p>${escapeHtml(proposal.current_problem)}</p><h2>개선방안</h2><p>${escapeHtml(proposal.improvement_plan)}</p><h2>기대효과</h2><p>${escapeHtml(proposal.expected_effect)}</p><div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div></article>
+      <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2><p>${escapeHtml(proposal.current_problem)}</p><h2>개선방안</h2><p>${escapeHtml(proposal.improvement_plan)}</p><h2>기대효과</h2><p>${escapeHtml(proposal.expected_effect)}</p><div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div><div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div></article>
       <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${renderApprovalProgress(state.approvalSteps, records)}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}</section></aside>
     </section>`;
 }
@@ -1491,6 +1549,7 @@ function renderAdmin(action = "", id = "") {
   if (action === "edit") { renderAdminEdit(id); return; }
   if (action === "review") { void renderApproverReview(id); return; }
   if (action === "inbox") { void renderApproverInbox(); return; }
+  if (action === "ceo-submit") { void renderCeoSubmissionQueue(); return; }
   if (action === "goals") { renderAdminGoals(); return; }
   if (action === "approvals") { renderAdminApprovals(); return; }
   if (action === "notifications") { void renderAdminNotifications(); return; }
@@ -1592,6 +1651,11 @@ function renderAdminEdit(id) {
         <h2>현재 문제점</h2><p>${escapeHtml(proposal.current_problem)}</p>
         <h2>개선방안</h2><p>${escapeHtml(proposal.improvement_plan)}</p>
         <h2>기대효과</h2><p>${escapeHtml(proposal.expected_effect)}</p>
+        <div class="award-preview">
+          <small>제안자 예상 효과금액</small>
+          <strong>${formatCurrency(proposal.proposer_effect_amount)}</strong>
+          <span>제안자가 작성한 원본 금액입니다. 심사 시 근거를 확인한 뒤 우측에서 최종 금액을 확정하세요.</span>
+        </div>
         <div class="admin-image-pair">
           <div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div>
           <div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div>
@@ -1621,16 +1685,17 @@ function renderAdminEdit(id) {
           <label class="field">지급상태
             <select name="payment_status">${PAYMENT_STATUSES.map((v) => `<option ${proposal.payment_status === v ? "selected" : ""}>${v}</option>`).join("")}</select>
           </label>
-          <label class="field">효과금액(원)
-            <input type="number" min="0" name="effect_amount" value="${Number(proposal.effect_amount || 0)}">
+          <label class="field">심사 확정 효과금액(원)
+            <input type="number" min="0" step="1000" name="effect_amount" value="${Number(proposal.effect_amount || 0)}">
+            <small class="field-help">제안자 예상 ${formatCurrency(proposal.proposer_effect_amount)} · 검토 후 최종 확정액을 입력하세요.</small>
           </label>
         </div>
         <label class="field">심사의견
           <textarea name="review_comment" rows="5">${escapeHtml(proposal.review_comment || "")}</textarea>
         </label>
         <div class="award-preview" id="awardPreview">
-          <small>점수 기준 예상 포상</small>
-          <strong>${escapeHtml(proposal.award_grade || "-")} · ${formatCurrency(proposal.award_amount)}</strong>
+          <small>심사결과·점수 기준 예상 포상</small>
+          <strong>${(() => { const award = calculateAward(proposal.score, proposal.category, proposal.review_result); return `${escapeHtml(award.grade || "-")} · ${formatCurrency(award.amount)}`; })()}</strong>
         </div>
         <section class="admin-approval-box">
           <div class="section-heading"><div><span class="eyebrow">APPROVAL</span><h2>전자결재 처리</h2></div></div>
@@ -1682,6 +1747,7 @@ function buildProposalPayload(form) {
     improvement_plan: data.get("improvement_plan")?.trim(),
     expected_effect: data.get("expected_effect")?.trim(),
     cost_amount: Number(data.get("cost_amount") || 0),
+    proposer_effect_amount: Number(data.get("proposer_effect_amount") || 0),
     ...implementation,
     edit_pin: data.get("edit_pin"),
   };
@@ -1904,6 +1970,24 @@ document.addEventListener("click", async (event) => {
       await refreshData();
       go("admin");
       showToast("제안과 첨부 사진을 삭제했습니다.");
+    } else if (action === "submit-selected-to-ceo") {
+      const ids = selectedCheckboxIds(".ceo-submit-checkbox");
+      if (!ids.length) throw new Error("대표이사에게 상신할 제안을 선택하세요.");
+      if (!confirm(`선택한 ${ids.length}건을 대표이사에게 일괄상신하시겠습니까?`)) return;
+      const result = await store.submitProposalsToCeo(ids);
+      await refreshData();
+      await renderCeoSubmissionQueue();
+      const count = Number(result?.submitted_count ?? result?.[0]?.submitted_count ?? ids.length);
+      showToast(`대표이사 일괄상신 완료 · ${count}건`);
+    } else if (action === "batch-approve-ceo") {
+      const ids = selectedCheckboxIds(".ceo-approve-checkbox");
+      if (!ids.length) throw new Error("일괄승인할 제안을 선택하세요.");
+      if (!confirm(`선택한 ${ids.length}건을 대표이사 일괄승인하시겠습니까?`)) return;
+      const result = await store.batchApproveCeo(ids);
+      await refreshData();
+      await renderApproverInbox();
+      const count = Number(result?.approved_count ?? result?.[0]?.approved_count ?? ids.length);
+      showToast(`대표이사 일괄승인 완료 · ${count}건`);
     } else if (action === "reset-demo") {
       if (!confirm("데모 데이터를 최초 상태로 되돌리시겠습니까?")) return;
       await store.resetDemo();
@@ -1984,7 +2068,7 @@ document.addEventListener("submit", async (event) => {
     } else if (event.target.id === "adminReviewForm") {
       const data = new FormData(event.target);
       const proposal = state.proposals.find((p) => p.id === event.target.dataset.id);
-      const award = calculateAward(data.get("score"), proposal.category);
+      const award = calculateAward(data.get("score"), proposal.category, data.get("review_result"));
       const patch = {
         status: data.get("status"),
         review_result: data.get("review_result"),
@@ -2010,6 +2094,30 @@ document.addEventListener("submit", async (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  if (event.target.id === "ceoSubmitAll") {
+    $$(".ceo-submit-checkbox").forEach((box) => { box.checked = event.target.checked; });
+    updateCeoBatchButton("submit");
+    return;
+  }
+  if (event.target.matches?.(".ceo-submit-checkbox")) {
+    const boxes = $$(".ceo-submit-checkbox");
+    const all = $("#ceoSubmitAll");
+    if (all) all.checked = boxes.length > 0 && boxes.every((box) => box.checked);
+    updateCeoBatchButton("submit");
+    return;
+  }
+  if (event.target.id === "ceoApproveAll") {
+    $$(".ceo-approve-checkbox").forEach((box) => { box.checked = event.target.checked; });
+    updateCeoBatchButton("approve");
+    return;
+  }
+  if (event.target.matches?.(".ceo-approve-checkbox")) {
+    const boxes = $$(".ceo-approve-checkbox");
+    const all = $("#ceoApproveAll");
+    if (all) all.checked = boxes.length > 0 && boxes.every((box) => box.checked);
+    updateCeoBatchButton("approve");
+    return;
+  }
   if (event.target.id === "dashboardYearFilter") {
     const year = event.target.value || "all";
     const ranking = getRankingMetricFromUrl();
@@ -2071,9 +2179,10 @@ document.addEventListener("input", (event) => {
       $("#similarResults").innerHTML = renderSimilar(form.elements.title?.value || "", form.dataset.no || "");
     }
   }
-  if (event.target.name === "score" && $("#awardPreview")) {
-    const proposal = state.proposals.find((p) => p.id === $("#adminReviewForm")?.dataset.id);
-    const award = calculateAward(event.target.value, proposal?.category);
+  if (["score", "review_result"].includes(event.target.name) && $("#awardPreview")) {
+    const form = $("#adminReviewForm");
+    const proposal = state.proposals.find((p) => p.id === form?.dataset.id);
+    const award = calculateAward(form?.elements?.score?.value, proposal?.category, form?.elements?.review_result?.value);
     $("#awardPreview strong").textContent = `${award.grade || "-"} · ${formatCurrency(award.amount)}`;
   }
 });

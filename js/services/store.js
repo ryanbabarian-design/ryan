@@ -1,5 +1,5 @@
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
-import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.3.11";
+import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.3.15";
 import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3.11";
 import { mergeEmployeeRoster, normalizeEmployeeImportRows } from "../employee-sync.js?v=2.3.11";
 
@@ -45,7 +45,9 @@ function normalizeProposal(row) {
     score: null,
     award_amount: 0,
     effect_amount: 0,
+    proposer_effect_amount: 0,
     cost_amount: 0,
+    ceo_submission_status: "미상신",
     locked: false,
     review_result: "미심사",
     status: "접수",
@@ -399,6 +401,7 @@ class DemoStore {
       const records = allRecords.filter((row) => row.proposal_id === proposal.id);
       const permission = resolveApprovalPermission(proposal, steps, records, assignments);
       if (!permission.assigned) continue;
+      if (permission.step?.role_name === "대표이사" && proposal.ceo_submission_status !== "상신완료") continue;
       result.push({
         proposal_id: proposal.id, proposal_no: proposal.proposal_no, title: proposal.title, department: proposal.department,
         proposer_name: proposal.proposer_name, received_date: proposal.received_date, step_id: permission.step.id,
@@ -447,13 +450,74 @@ class DemoStore {
     if (!permission.canAct || String(permission.step?.id) !== String(stepId)) throw new Error(permission.reason || "본인 결재단계만 처리할 수 있습니다.");
     const now = new Date().toISOString();
     Object.assign(row, { status, comment, assigned_name: permission.assignment.display_name, approver_name: permission.assignment.display_name, acted_at: now, updated_at: now });
-    if (status === "승인") {
+    if (permission.step?.role_name === "대표이사") {
+      proposal.ceo_submission_status = status === "승인" ? "승인완료" : "반려";
+      localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
+    } else if (status === "승인") {
       const nextStep = steps.filter((step) => step.active !== false && step.auto_author !== true && Number(step.step_order) > Number(permission.step.step_order)).sort((a,b)=>Number(a.step_order)-Number(b.step_order))[0];
       const nextRecord = nextStep ? rows.find((item) => item.proposal_id === proposalId && String(item.step_id) === String(nextStep.id)) : null;
-      if (nextRecord && nextRecord.status === "대기" && !nextRecord.actionable_at) nextRecord.actionable_at = now;
+      if (nextRecord && nextRecord.status === "대기" && nextStep?.role_name !== "대표이사" && !nextRecord.actionable_at) nextRecord.actionable_at = now;
     }
     localStorage.setItem(APPROVAL_RECORDS_KEY, JSON.stringify(rows));
     return row;
+  }
+
+  async getCeoSubmissionCandidates() {
+    const session = await this.getAdminSession();
+    if (!session?.isSystemAdmin) throw new Error("시스템 관리자만 조회할 수 있습니다.");
+    const proposals = await this.getProposals();
+    const steps = await this.getApprovalSteps();
+    const records = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
+    const execStep = steps.find((step) => step.role_name === "해당부서 임원");
+    const ceoStep = steps.find((step) => step.role_name === "대표이사");
+    return proposals.filter((proposal) => {
+      const exec = records.find((r) => r.proposal_id === proposal.id && String(r.step_id) === String(execStep?.id));
+      const ceo = records.find((r) => r.proposal_id === proposal.id && String(r.step_id) === String(ceoStep?.id));
+      return proposal.approval_required === true && proposal.status === "심사완료" && proposal.review_result !== "미심사"
+        && proposal.ceo_submission_status !== "상신완료" && proposal.ceo_submission_status !== "승인완료"
+        && exec?.status === "승인" && ceo?.status === "대기";
+    }).map((proposal) => ({
+      proposal_id: proposal.id, proposal_no: proposal.proposal_no, title: proposal.title, proposer_name: proposal.proposer_name,
+      department: proposal.department, received_date: proposal.received_date, review_result: proposal.review_result, score: proposal.score,
+      award_amount: proposal.award_amount, proposer_effect_amount: proposal.proposer_effect_amount, effect_amount: proposal.effect_amount,
+      executive_approved_at: records.find((r) => r.proposal_id === proposal.id && String(r.step_id) === String(execStep?.id))?.acted_at || null,
+    }));
+  }
+
+  async submitProposalsToCeo(ids = []) {
+    const session = await this.getAdminSession();
+    if (!session?.isSystemAdmin) throw new Error("시스템 관리자만 대표이사 일괄상신을 할 수 있습니다.");
+    const selected = [...new Set(ids.filter(Boolean))];
+    if (!selected.length) throw new Error("상신할 제안을 선택하세요.");
+    const candidates = await this.getCeoSubmissionCandidates();
+    if (selected.some((id) => !candidates.some((row) => row.proposal_id === id))) throw new Error("상신 조건을 충족하지 않는 제안이 있습니다.");
+    const proposals = await this.getProposals();
+    const records = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
+    const steps = await this.getApprovalSteps();
+    const ceoStep = steps.find((step) => step.role_name === "대표이사");
+    const assignments = await this.getApproverAssignments(false);
+    const ceoAssignment = assignments.find((a) => String(a.step_id) === String(ceoStep?.id) && !a.department);
+    if (!ceoAssignment) throw new Error("대표이사 결재자 계정이 지정되지 않았습니다.");
+    const batchId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    for (const proposal of proposals) {
+      if (!selected.includes(proposal.id)) continue;
+      Object.assign(proposal, { ceo_submission_status: "상신완료", ceo_submitted_at: now, ceo_submitted_by_name: session.displayName || session.email, ceo_batch_id: batchId });
+      const rec = records.find((r) => r.proposal_id === proposal.id && String(r.step_id) === String(ceoStep?.id));
+      if (rec) Object.assign(rec, { assigned_name: ceoAssignment.display_name, assigned_user_id: ceoAssignment.user_id, actionable_at: now, updated_at: now });
+    }
+    localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
+    localStorage.setItem(APPROVAL_RECORDS_KEY, JSON.stringify(records));
+    return { batch_id: batchId, submitted_count: selected.length };
+  }
+
+  async batchApproveCeo(ids = []) {
+    const selected = [...new Set(ids.filter(Boolean))];
+    if (!selected.length) throw new Error("승인할 제안을 선택하세요.");
+    const rows = await this.getMyApprovalInbox();
+    const targets = rows.filter((row) => selected.includes(row.proposal_id) && row.role_name === "대표이사" && row.can_act);
+    for (const row of targets) await this.actApproval(row.proposal_id, row.step_id, "승인", "대표이사 일괄승인");
+    return { approved_count: targets.length };
   }
 
   async getApprovalOverdueSummary() {
@@ -705,7 +769,7 @@ class SupabaseStore {
       .from("proposals")
       .update(patch)
       .eq("id", id)
-      .select("id,proposal_no,received_date,category,proposer_name,department,title,current_problem,improvement_plan,expected_effect,cost_amount,before_images,after_images,status,review_result,implementing_department,implementation_status,implemented_date,score,award_grade,award_amount,payment_status,effect_amount,review_comment,locked,created_at,updated_at")
+      .select("id,proposal_no,received_date,category,proposer_name,department,title,current_problem,improvement_plan,expected_effect,cost_amount,proposer_effect_amount,before_images,after_images,status,review_result,implementing_department,implementation_status,implemented_date,score,award_grade,award_amount,payment_status,effect_amount,review_comment,locked,created_at,updated_at,approval_required,ceo_submission_status,ceo_submitted_at,ceo_submitted_by_name,ceo_batch_id")
       .single();
     if (error) throw error;
     return normalizeProposal(data);
@@ -799,6 +863,24 @@ class SupabaseStore {
     const { data, error } = await this.client.rpc("get_my_approval_inbox");
     if (error) throw error;
     return data || [];
+  }
+
+  async getCeoSubmissionCandidates() {
+    const { data, error } = await this.client.rpc("list_ceo_submission_candidates");
+    if (error) throw error;
+    return data || [];
+  }
+
+  async submitProposalsToCeo(ids = []) {
+    const { data, error } = await this.client.rpc("submit_proposals_to_ceo", { p_proposal_ids: [...new Set(ids.filter(Boolean))] });
+    if (error) throw error;
+    return Array.isArray(data) ? (data[0] || {}) : (data || {});
+  }
+
+  async batchApproveCeo(ids = []) {
+    const { data, error } = await this.client.rpc("batch_approve_ceo", { p_proposal_ids: [...new Set(ids.filter(Boolean))] });
+    if (error) throw error;
+    return Array.isArray(data) ? (data[0] || {}) : (data || {});
   }
 
   async getApprovalOverdueSummary() {

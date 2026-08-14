@@ -48,16 +48,24 @@ export function nextProposalNo(proposals, date = new Date()) {
   return `${prefix}${String(maxNo + 1).padStart(3, "0")}`;
 }
 
-export function calculateAward(score, category = "개선") {
-  const numericScore = Number(score);
-  if (!Number.isFinite(numericScore)) return { grade: "", amount: 0 };
+export function calculateAward(score, category = "개선", reviewResult = "미심사") {
+  const result = String(reviewResult ?? "미심사").trim();
+  const numericScore = score === "" || score == null ? NaN : Number(score);
+
+  // 건수처리는 점수와 무관하게 심사결과를 명시적으로 선택한 경우에만 5,000원입니다.
+  if (result === "건수처리") return { grade: "건수처리", amount: 5000 };
+
+  // 미심사/미채택/보류/중복제안 또는 0점은 포상하지 않습니다.
+  if (result !== "채택" || !Number.isFinite(numericScore) || numericScore <= 0) {
+    return { grade: "", amount: 0 };
+  }
 
   if (numericScore >= 90) return { grade: "A", amount: 100000 };
   if (numericScore >= 80) return { grade: "B", amount: 50000 };
   if (numericScore >= 70) return { grade: "C", amount: 30000 };
   if (numericScore >= 60) return { grade: "D", amount: 10000 };
 
-  return { grade: "건수처리", amount: category === "안전" ? 10000 : 5000 };
+  return { grade: "", amount: 0 };
 }
 
 export function isEmployeeEditable(proposal) {

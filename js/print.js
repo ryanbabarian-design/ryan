@@ -46,6 +46,7 @@ export function buildPrintModel(proposal = {}) {
     improvementPlan: display(proposal.improvement_plan, "등록된 개선방안이 없습니다."),
     expectedEffect: display(proposal.expected_effect, "등록된 기대효과가 없습니다."),
     costText: currencyText(proposal.cost_amount),
+    proposerEffectText: currencyText(proposal.proposer_effect_amount),
     awardText: currencyText(proposal.award_amount),
     effectText: currencyText(proposal.effect_amount),
     paymentStatus: display(proposal.payment_status, "미지급"),
