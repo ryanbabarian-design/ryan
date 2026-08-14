@@ -765,14 +765,14 @@ class SupabaseStore {
   }
 
   async adminUpdateProposal(id, patch) {
-    const { data, error } = await this.client
-      .from("proposals")
-      .update(patch)
-      .eq("id", id)
-      .select("id,proposal_no,received_date,category,proposer_name,department,title,current_problem,improvement_plan,expected_effect,cost_amount,proposer_effect_amount,before_images,after_images,status,review_result,implementing_department,implementation_status,implemented_date,score,award_grade,award_amount,payment_status,effect_amount,review_comment,locked,created_at,updated_at,approval_required,ceo_submission_status,ceo_submitted_at,ceo_submitted_by_name,ceo_batch_id")
-      .single();
+    const { data, error } = await this.client.rpc("admin_update_proposal_review_v2316", {
+      p_proposal_id: id,
+      p_patch: patch,
+    });
     if (error) throw error;
-    return normalizeProposal(data);
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error("심사 저장 결과를 확인하지 못했습니다.");
+    return normalizeProposal(row);
   }
 
   async deleteProposal(id) {
