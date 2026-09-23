@@ -23,7 +23,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.3.15";
-import { createStore } from "./services/store.js?v=2.3.16";
+import { createStore } from "./services/store.js?v=2.4";
 import {
   appendImageFiles,
   createImageSelection,
@@ -66,6 +66,71 @@ function ensureImageEditorStyles() {
   link.href = "./css/image-editor.css?v=1.7";
   link.dataset.imageEditorStyle = "true";
   document.head.append(link);
+}
+
+
+function ensureAiEffectStyles() {
+  if (document.querySelector('style[data-ai-effect-style]')) return;
+  const style = document.createElement("style");
+  style.dataset.aiEffectStyle = "true";
+  style.textContent = `
+    .ai-effect-card{margin-top:22px;padding:20px;border:1px solid #d0d5dd;border-radius:16px;background:linear-gradient(180deg,#fff 0%,#f8fafc 100%);box-shadow:0 8px 24px rgba(16,33,59,.06)}
+    .ai-effect-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}.ai-effect-head h2{margin:2px 0 4px}.ai-effect-head p{margin:0;color:#667085;font-size:13px}
+    .ai-effect-disclaimer{padding:10px 12px;border-radius:10px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:12px;margin:12px 0 16px}
+    .ai-effect-money-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0}.ai-effect-money-grid>div{padding:13px;border-radius:12px;background:#fff;border:1px solid #e4e7ec}.ai-effect-money-grid small{display:block;color:#667085;margin-bottom:5px}.ai-effect-money-grid strong{font-size:17px;color:#10213b}
+    .ai-effect-section{margin-top:14px}.ai-effect-section h3{font-size:13px;margin:0 0 6px;color:#344054}.ai-effect-section p{margin:0;white-space:pre-wrap}.ai-effect-list{margin:0;padding-left:18px}.ai-effect-meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;color:#667085;font-size:12px}.ai-effect-chip{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:11px;font-weight:700}.ai-effect-changed{color:#b42318;font-weight:700}.ai-effect-loading{display:flex;gap:10px;align-items:center;color:#475467;padding:18px 0}
+    .ceo-ai-summary{font-size:12px;line-height:1.45}.ceo-ai-summary strong{display:block;color:#10213b}.ceo-ai-summary span{display:block;color:#667085}
+    @media(max-width:800px){.ai-effect-money-grid{grid-template-columns:1fr}.ai-effect-head{flex-direction:column}}
+  `;
+  document.head.append(style);
+}
+
+function aiList(items = []) {
+  return Array.isArray(items) && items.length
+    ? `<ul class="ai-effect-list">${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+    : `<p>-</p>`;
+}
+
+function renderAiEffectAnalysis(proposal, analysis, canRun = false, targetId = "aiEffectAnalysisCard") {
+  const result = analysis?.result || null;
+  const amountText = result?.amount_calculable && analysis?.ai_effect_amount != null
+    ? formatCurrency(analysis.ai_effect_amount)
+    : "추가정보 필요";
+  const buttonText = analysis ? "AI 재분석" : "AI 효과분석";
+  if (!analysis || !result) {
+    return `<section class="ai-effect-card" id="${escapeHtml(targetId)}" data-proposal-id="${escapeHtml(proposal.id)}">
+      <div class="ai-effect-head"><div><span class="eyebrow">AI EFFECT ANALYSIS</span><h2>AI 효과분석 — 심사 참고용</h2><p>제안 텍스트와 개선 전/후 사진을 함께 분석합니다.</p></div>${canRun ? `<button class="button button-primary" type="button" data-action="run-ai-effect-analysis" data-id="${escapeHtml(proposal.id)}">${buttonText}</button>` : ""}</div>
+      <div class="ai-effect-disclaimer">※ AI 분석은 심사 참고자료이며 최종 효과금액 및 심사결과는 심사위원이 결정합니다.</div>
+      <p>아직 AI 효과분석을 실행하지 않았습니다.</p>
+    </section>`;
+  }
+  const types = Array.isArray(result.effect_types) ? result.effect_types : [];
+  return `<section class="ai-effect-card" id="${escapeHtml(targetId)}" data-proposal-id="${escapeHtml(proposal.id)}">
+    <div class="ai-effect-head"><div><span class="eyebrow">AI EFFECT ANALYSIS</span><h2>AI 효과분석 — 심사 참고용</h2><p>${types.map((type) => `<span class="ai-effect-chip">${escapeHtml(type)}</span>`).join(" ")}</p></div>${canRun ? `<button class="button button-secondary" type="button" data-action="run-ai-effect-analysis" data-id="${escapeHtml(proposal.id)}">${buttonText}</button>` : ""}</div>
+    <div class="ai-effect-disclaimer">※ AI 분석은 심사 참고자료이며 최종 효과금액 및 심사결과는 심사위원이 결정합니다.</div>
+    ${analysis.source_changed ? `<p class="ai-effect-changed">제안 내용 또는 사진이 분석 후 변경되었습니다. AI 재분석을 권장합니다.</p>` : ""}
+    <div class="ai-effect-money-grid"><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>AI 추정 효과금액</small><strong>${amountText}</strong></div><div><small>심사 최종 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div>
+    <div class="ai-effect-section"><h3>AI 요약</h3><p>${escapeHtml(result.summary || "-")}</p></div>
+    <div class="ai-effect-section"><h3>산출근거</h3>${aiList(result.calculation_basis)}</div>
+    <div class="ai-effect-section"><h3>정량효과</h3>${aiList(result.quantitative_effects)}</div>
+    <div class="ai-effect-section"><h3>정성효과</h3>${aiList(result.qualitative_effects)}</div>
+    <div class="ai-effect-section"><h3>개선 전 사진 분석</h3>${aiList(result.before_photo_findings)}</div>
+    <div class="ai-effect-section"><h3>개선 후 사진 분석</h3>${aiList(result.after_photo_findings)}</div>
+    <div class="ai-effect-section"><h3>추가 확인 필요사항</h3>${aiList(result.additional_info_needed)}</div>
+    <div class="ai-effect-section"><h3>주의사항</h3>${aiList(result.cautions)}</div>
+    <div class="ai-effect-meta"><span>신뢰도: <strong>${escapeHtml(analysis.confidence || result.confidence || "-")}</strong></span><span>모델: ${escapeHtml(analysis.model_name || "-")}</span><span>분석일시: ${analysis.completed_at ? escapeHtml(new Date(analysis.completed_at).toLocaleString("ko-KR")) : "-"}</span></div>
+  </section>`;
+}
+
+async function hydrateAiEffectAnalysis(proposal, canRun = false, targetId = "aiEffectAnalysisCard") {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  try {
+    const analysis = await store.getLatestAiAnalysis(proposal.id);
+    target.outerHTML = renderAiEffectAnalysis(proposal, analysis, canRun, targetId);
+  } catch (error) {
+    target.innerHTML = `<div class="ai-effect-head"><div><span class="eyebrow">AI EFFECT ANALYSIS</span><h2>AI 효과분석</h2></div></div><p>AI 분석 결과를 불러오지 못했습니다: ${escapeHtml(error.message)}</p>`;
+  }
 }
 
 function initializeFormImageSelections(proposal) {
@@ -1435,13 +1500,15 @@ async function renderCeoSubmissionQueue() {
   main.innerHTML = `${adminPageHeader("대표이사 일괄상신", "임원 승인과 관리자 심사가 모두 끝난 제안만 선택하여 대표이사에게 한꺼번에 상신합니다.", "ceo-submit")}<div class="loading-card"><div class="spinner"></div><p>대표이사 상신대기 제안을 불러오는 중입니다.</p></div>`;
   try {
     const rows = await store.getCeoSubmissionCandidates();
+    const aiSummaries = rows.length ? await store.getAiAnalysisSummaries(rows.map((row) => row.proposal_id)).catch(() => []) : [];
+    const aiSummaryMap = new Map((aiSummaries || []).map((row) => [String(row.proposal_id), row]));
     const content = rows.length ? `
       <section class="section">
         <div class="section-heading"><div><span class="eyebrow">CEO BATCH SUBMISSION</span><h2>대표이사 상신대기 ${rows.length}건</h2><p>체크한 제안만 대표이사 결재단계가 활성화되고 요약메일 1통이 발송됩니다.</p></div>
           <div class="header-buttons"><label class="check-label"><input type="checkbox" id="ceoSubmitAll"> 전체 선택</label><button id="ceoSubmitSelectedButton" class="button button-primary" data-action="submit-selected-to-ceo" disabled>선택 0건 대표이사 상신</button></div>
         </div>
-        <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>선택</th><th>접수번호</th><th>제안명</th><th>제안자</th><th>부서</th><th>심사결과</th><th>점수</th><th>포상금</th><th>제안자 예상 효과금액</th><th>심사 확정 효과금액</th><th>임원 승인일</th></tr></thead><tbody>
-          ${rows.map((row) => `<tr><td><input class="ceo-submit-checkbox" type="checkbox" value="${escapeHtml(row.proposal_id)}" aria-label="${escapeHtml(row.proposal_no)} 선택"></td><td><strong>${escapeHtml(row.proposal_no)}</strong></td><td>${escapeHtml(row.title)}</td><td>${escapeHtml(row.proposer_name)}</td><td>${escapeHtml(row.department)}</td><td>${statusBadge(row.review_result)}</td><td>${row.score == null ? "-" : `${Number(row.score)}점`}</td><td>${formatCurrency(row.award_amount)}</td><td>${formatCurrency(row.proposer_effect_amount)}</td><td><strong>${formatCurrency(row.effect_amount)}</strong></td><td>${escapeHtml(row.executive_approved_at ? new Date(row.executive_approved_at).toLocaleString("ko-KR") : "-")}</td></tr>`).join("")}
+        <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>선택</th><th>접수번호</th><th>제안명</th><th>제안자</th><th>부서</th><th>심사결과</th><th>점수</th><th>포상금</th><th>제안자 예상 효과금액</th><th>심사 확정 효과금액</th><th>AI 참고</th><th>임원 승인일</th></tr></thead><tbody>
+          ${rows.map((row) => `<tr><td><input class="ceo-submit-checkbox" type="checkbox" value="${escapeHtml(row.proposal_id)}" aria-label="${escapeHtml(row.proposal_no)} 선택"></td><td><strong>${escapeHtml(row.proposal_no)}</strong></td><td>${escapeHtml(row.title)}</td><td>${escapeHtml(row.proposer_name)}</td><td>${escapeHtml(row.department)}</td><td>${statusBadge(row.review_result)}</td><td>${row.score == null ? "-" : `${Number(row.score)}점`}</td><td>${formatCurrency(row.award_amount)}</td><td>${formatCurrency(row.proposer_effect_amount)}</td><td><strong>${formatCurrency(row.effect_amount)}</strong></td><td>${(() => { const ai = aiSummaryMap.get(String(row.proposal_id)); return ai ? `<div class="ceo-ai-summary"><strong>${escapeHtml((ai.effect_types || []).join(", ") || "AI 분석")}</strong><span>${ai.ai_effect_amount == null ? "추가정보 필요" : formatCurrency(ai.ai_effect_amount)} · 신뢰도 ${escapeHtml(ai.confidence || "-")}</span></div>` : `<span class="ceo-ai-summary">미분석</span>`; })()}</td><td>${escapeHtml(row.executive_approved_at ? new Date(row.executive_approved_at).toLocaleString("ko-KR") : "-")}</td></tr>`).join("")}
         </tbody></table></div>
       </section>` : `<div class="empty-state"><h2>대표이사 상신대기 제안이 없습니다.</h2><p>해당부서 임원 승인 + 관리자 심사완료가 모두 끝난 제안이 이곳에 표시됩니다.</p></div>`;
     main.innerHTML = `${adminPageHeader("대표이사 일괄상신", "임원 승인과 관리자 심사가 모두 끝난 제안만 선택하여 대표이사에게 한꺼번에 상신합니다.", "ceo-submit")}${content}`;
@@ -1481,9 +1548,10 @@ async function renderApproverReview(id) {
   const permission = resolveApprovalPermission(proposal, state.approvalSteps, records, state.admin?.assignments || []);
   main.innerHTML = `${adminPageHeader("전자결재 검토", "제안내용을 확인한 뒤 본인에게 지정된 단계만 승인 또는 반려할 수 있습니다.", "inbox")}
     <section class="approver-review-layout">
-      <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2><p>${escapeHtml(proposal.current_problem)}</p><h2>개선방안</h2><p>${escapeHtml(proposal.improvement_plan)}</p><h2>기대효과</h2><p>${escapeHtml(proposal.expected_effect)}</p><div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div><div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div></article>
+      <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2><p>${escapeHtml(proposal.current_problem)}</p><h2>개선방안</h2><p>${escapeHtml(proposal.improvement_plan)}</p><h2>기대효과</h2><p>${escapeHtml(proposal.expected_effect)}</p><div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div><div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div>${renderAiEffectAnalysis(proposal, null, false, "approverAiEffectAnalysisCard")}</article>
       <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${renderApprovalProgress(state.approvalSteps, records)}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}</section></aside>
     </section>`;
+  await hydrateAiEffectAnalysis(proposal, false, "approverAiEffectAnalysisCard");
 }
 
 async function renderAdminNotifications() {
@@ -1660,6 +1728,7 @@ function renderAdminEdit(id) {
           <div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div>
           <div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div>
         </div>
+        ${renderAiEffectAnalysis(proposal, null, true)}
       </section>
 
       <section class="admin-review-fields">
@@ -1710,6 +1779,7 @@ function renderAdminEdit(id) {
     </form>
   `;
   hydrateAdminApproval(proposal).catch((error) => console.warn("전자결재 현황을 불러오지 못했습니다.", error));
+  hydrateAiEffectAnalysis(proposal, true).catch((error) => console.warn("AI 효과분석을 불러오지 못했습니다.", error));
 }
 
 async function hydrateAdminApproval(proposal) {
@@ -1941,6 +2011,25 @@ document.addEventListener("click", async (event) => {
       await store.retryNotification(actionButton.dataset.id);
       renderAdminNotifications();
       showToast("메일 재전송 대기열에 넣었습니다.");
+    } else if (action === "run-ai-effect-analysis") {
+      const proposal = state.proposals.find((row) => row.id === actionButton.dataset.id);
+      if (!proposal) throw new Error("제안을 찾지 못했습니다.");
+      const originalLabel = actionButton.textContent;
+      actionButton.disabled = true;
+      actionButton.textContent = "AI 분석 중...";
+      const card = document.getElementById("aiEffectAnalysisCard");
+      if (card) card.insertAdjacentHTML("beforeend", `<div class="ai-effect-loading"><div class="spinner"></div><span>제안 내용과 개선 전/후 사진을 분석 중입니다. 잠시 기다려 주세요.</span></div>`);
+      try {
+        await store.runAiEffectAnalysis(proposal.id);
+        await hydrateAiEffectAnalysis(proposal, true);
+        showToast("AI 효과분석을 완료했습니다. 심사 참고용으로 확인하세요.");
+      } finally {
+        if (actionButton.isConnected) {
+          actionButton.disabled = false;
+          actionButton.textContent = originalLabel;
+          card?.querySelector(".ai-effect-loading")?.remove();
+        }
+      }
     } else if (action === "save-approval-action") {
       const box = $("#approvalActionForm");
       if (!box) return;
@@ -2190,5 +2279,6 @@ document.addEventListener("input", (event) => {
 window.addEventListener("hashchange", render);
 window.addEventListener("DOMContentLoaded", () => {
   ensureImageEditorStyles();
+  ensureAiEffectStyles();
   init();
 });

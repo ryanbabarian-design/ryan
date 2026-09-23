@@ -337,6 +337,36 @@ class DemoStore {
     };
   }
 
+  async getLatestAiAnalysis(proposalId) {
+    const rows = JSON.parse(localStorage.getItem("proposal-system:v24:ai-analyses") || "[]");
+    return rows.filter((row) => row.proposal_id === proposalId && row.analysis_status === "completed").sort((a,b) => String(b.completed_at).localeCompare(String(a.completed_at)))[0] || null;
+  }
+
+  async runAiEffectAnalysis(proposalId) {
+    const admin = await this.getAdminSession();
+    if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 AI 효과분석을 실행할 수 있습니다.");
+    const proposal = (await this.getProposals()).find((row) => row.id === proposalId);
+    if (!proposal) throw new Error("제안을 찾지 못했습니다.");
+    const rows = JSON.parse(localStorage.getItem("proposal-system:v24:ai-analyses") || "[]");
+    const now = new Date().toISOString();
+    const row = {
+      id: crypto.randomUUID(), proposal_id: proposalId, proposal_no: proposal.proposal_no,
+      analysis_status: "completed", model_name: "demo-ai", requested_by_name: admin.displayName,
+      requested_at: now, completed_at: now, ai_effect_amount: null, confidence: "낮음", source_changed: false,
+      result: { effect_types:["기타"], summary:"데모 모드 AI 분석 예시입니다.", amount_calculable:false,
+        calculation_basis:[], quantitative_effects:[], qualitative_effects:[proposal.expected_effect || "기대효과 확인 필요"],
+        before_photo_findings:[], after_photo_findings:[], additional_info_needed:["실제 Supabase 모드에서 OpenAI 분석을 실행하세요."], confidence:"낮음", cautions:["데모 결과는 실제 AI 호출 결과가 아닙니다."] }
+    };
+    rows.push(row); localStorage.setItem("proposal-system:v24:ai-analyses", JSON.stringify(rows)); return row;
+  }
+
+  async getAiAnalysisSummaries(ids = []) {
+    const selected = new Set(ids.map(String));
+    const rows = JSON.parse(localStorage.getItem("proposal-system:v24:ai-analyses") || "[]").filter((row) => selected.has(String(row.proposal_id)) && row.analysis_status === "completed");
+    const latest = new Map(); for (const row of rows.sort((a,b)=>String(a.completed_at).localeCompare(String(b.completed_at)))) latest.set(String(row.proposal_id), row);
+    return [...latest.values()].map((row) => ({ proposal_id:row.proposal_id, ai_effect_amount:row.ai_effect_amount, confidence:row.confidence, effect_types:row.result?.effect_types || [] }));
+  }
+
   async getStatusHistory(proposalId) {
     return JSON.parse(localStorage.getItem(STATUS_HISTORY_KEY) || "[]")
       .filter((row) => row.proposal_id === proposalId)
@@ -781,6 +811,33 @@ class SupabaseStore {
       this.config.storageBucket,
       id,
     );
+  }
+
+  async getLatestAiAnalysis(proposalId) {
+    const { data, error } = await this.client.rpc("get_latest_proposal_ai_analysis_v24", { p_proposal_id: proposalId });
+    if (error) throw error;
+    return Array.isArray(data) ? (data[0] || null) : (data || null);
+  }
+
+  async runAiEffectAnalysis(proposalId) {
+    const session = await this.getAdminSession();
+    if (!session?.isSystemAdmin) throw new Error("시스템 관리자만 AI 효과분석을 실행할 수 있습니다.");
+    const { data, error } = await this.client.functions.invoke("analyze-proposal-effect", { body: { proposal_id: proposalId } });
+    if (error) {
+      let detail = "";
+      try { detail = (await error.context?.json())?.error || ""; } catch (_) { /* 응답 본문이 JSON이 아닐 수 있음 */ }
+      throw new Error(detail || error.message || "AI 효과분석 호출에 실패했습니다.");
+    }
+    if (data?.error) throw new Error(data.error);
+    return data?.analysis || data;
+  }
+
+  async getAiAnalysisSummaries(ids = []) {
+    const proposalIds = [...new Set(ids.filter(Boolean))];
+    if (!proposalIds.length) return [];
+    const { data, error } = await this.client.rpc("list_proposal_ai_analysis_summaries_v24", { p_proposal_ids: proposalIds });
+    if (error) throw error;
+    return data || [];
   }
 
   async importEmployees(rows) {
