@@ -110,7 +110,7 @@ function ensureEvaluationStyles() {
     .proposal-evaluation-title{padding:16px 18px;text-align:center;background:#f8fafc;border-bottom:1px solid #cfd5df}.proposal-evaluation-title h3{margin:0;font-size:22px;letter-spacing:.08em}.proposal-evaluation-title p{margin:6px 0 0;color:#667085;font-size:12px}
     .proposal-evaluation-table{width:100%;border-collapse:collapse;font-size:13px}.proposal-evaluation-table th,.proposal-evaluation-table td{border:1px solid #cfd5df;padding:8px 9px;vertical-align:middle}.proposal-evaluation-table thead th{background:#eef2f6;color:#1d2939;text-align:center;font-weight:800}.proposal-evaluation-table td.eval-no{width:42px;text-align:center;font-weight:800}.proposal-evaluation-table td.eval-label{width:100px;text-align:center;font-weight:800;white-space:pre}.proposal-evaluation-table td.eval-range{width:68px;text-align:center;font-weight:700}.proposal-evaluation-table td.eval-weight{width:64px;text-align:center;font-weight:800}.proposal-evaluation-table td.eval-score{width:92px;text-align:center;background:#fffdf5}.proposal-evaluation-table input.eval-input{width:62px;text-align:center;font-size:16px;font-weight:800;padding:8px;border:1px solid #98a2b3;border-radius:8px}.proposal-evaluation-table .eval-readonly{font-size:17px;font-weight:900;color:#10213b}.proposal-evaluation-table tfoot td{background:#f8fafc;font-weight:900;text-align:center}.proposal-evaluation-table tfoot .eval-total{font-size:22px;color:#b42318}
     .evaluation-lock-note{margin:10px 0 0;padding:10px 12px;border-radius:9px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:12px}.evaluation-ready-note{background:#ecfdf3;border-color:#a6f4c5;color:#067647}.evaluation-compare{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0}.evaluation-compare>div{border:1px solid #e4e7ec;border-radius:12px;padding:12px;background:#fff}.evaluation-compare small{display:block;color:#667085}.evaluation-compare strong{font-size:20px;color:#10213b}
-    .admin-first-evaluation-section{margin:22px 0;padding:18px;border:1px solid #d0d5dd;border-radius:14px;background:#fbfcfe}.admin-first-evaluation-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}.admin-first-evaluation-actions .evaluation-lock-note{flex:1;margin:0}.evaluation-admin-state{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap}.evaluation-admin-state.pending{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.evaluation-admin-state.done{background:#ecfdf3;color:#067647;border:1px solid #a6f4c5}
+    .admin-first-evaluation-section{margin:22px 0;padding:18px;border:1px solid #d0d5dd;border-radius:14px;background:#fbfcfe}.admin-first-evaluation-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}.admin-first-evaluation-actions .evaluation-lock-note{flex:1;margin:0}.evaluation-admin-state{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap}.evaluation-admin-state.pending{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.evaluation-admin-state.done{background:#ecfdf3;color:#067647;border:1px solid #a6f4c5}.first-eval-criteria{margin:10px 0 0;padding:11px 13px;border-radius:10px;font-size:13px;font-weight:800}.first-eval-criteria.neutral{background:#f8fafc;border:1px solid #d0d5dd;color:#475467}.first-eval-criteria.fail{background:#fef3f2;border:1px solid #fecdca;color:#b42318}.first-eval-criteria.pass{background:#ecfdf3;border:1px solid #a6f4c5;color:#067647}.proposer-delete-button{border-color:#fda29b!important;color:#b42318!important}
     fieldset.evaluation-fieldset{border:0;padding:0;margin:0;min-width:0}fieldset.evaluation-fieldset:disabled{opacity:.58}
     @media(max-width:760px){.proposal-evaluation-table{font-size:11px}.proposal-evaluation-table th,.proposal-evaluation-table td{padding:6px 5px}.proposal-evaluation-table td.eval-label{width:74px}.evaluation-compare{grid-template-columns:1fr}}
   `;
@@ -127,6 +127,26 @@ function calculateEvaluationTotal(values = {}) {
     const v = Number(values?.[item.key]);
     return sum + (Number.isFinite(v) ? v * item.weight : 0);
   }, 0);
+}
+
+function firstEvaluationCriteriaMarkup(values = {}, totalOverride = null) {
+  const scores = EVALUATION_CRITERIA.map((item) => evaluationValue(values, item.key));
+  const complete = scores.every((value) => value !== "");
+  const total = totalOverride == null ? calculateEvaluationTotal(values) : Number(totalOverride);
+  if (!complete && totalOverride == null) return `<div class="first-eval-criteria neutral" data-first-eval-criteria>1차 평가 통과기준은 50점 이상입니다.</div>`;
+  if (Number(total) < FIRST_EVALUATION_MIN_PASS) return `<div class="first-eval-criteria fail" data-first-eval-criteria>현재 ${Number(total)}점 · 기준미달입니다. 1차 평가 통과기준은 50점 이상입니다.</div>`;
+  return `<div class="first-eval-criteria pass" data-first-eval-criteria>현재 ${Number(total)}점 · 1차 평가 기준을 충족했습니다.</div>`;
+}
+
+function canProposerDeleteProposal(proposal, approvals = []) {
+  if (!proposal || proposal.locked || proposal.status !== "접수" || proposal.review_result !== "미심사") return false;
+  if (proposal.first_evaluation_completed_at) return false;
+  const stepMap = new Map((state.approvalSteps || []).map((step) => [String(step.id), step]));
+  return !(approvals || []).some((record) => {
+    const step = stepMap.get(String(record.step_id));
+    if (step?.auto_author === true) return false;
+    return record?.acted_at || (record?.status && record.status !== "대기");
+  });
 }
 
 function renderEvaluationTable(prefix, values = {}, { readOnly = false, title = "제안 평가표", subtitle = "" } = {}) {
@@ -159,8 +179,21 @@ function updateEvaluationTotalFromForm(form, prefix) {
   if (!form) return;
   const values = {};
   for (const item of EVALUATION_CRITERIA) values[item.key] = Number(form.elements?.[`${prefix}_eval_${item.key}`]?.value || 0);
+  const total = calculateEvaluationTotal(values);
   const target = form.querySelector(`[data-eval-total="${prefix}"]`);
-  if (target) target.textContent = String(calculateEvaluationTotal(values));
+  if (target) target.textContent = String(total);
+  if (prefix === "first") {
+    const notice = form.querySelector(`[data-first-eval-criteria]`);
+    if (notice) {
+      const complete = EVALUATION_CRITERIA.every((item) => evaluationValue(values, item.key) !== "");
+      notice.className = `first-eval-criteria ${!complete ? "neutral" : total < FIRST_EVALUATION_MIN_PASS ? "fail" : "pass"}`;
+      notice.textContent = !complete
+        ? "1차 평가 통과기준은 50점 이상입니다."
+        : total < FIRST_EVALUATION_MIN_PASS
+          ? `현재 ${total}점 · 기준미달입니다. 1차 평가 통과기준은 50점 이상입니다.`
+          : `현재 ${total}점 · 1차 평가 기준을 충족했습니다.`;
+    }
+  }
 }
 
 function renderEvaluationComparison(proposal) {
@@ -1093,7 +1126,8 @@ function renderProposalForm(proposalNo = "") {
       <section class="form-section evaluation-section">
         <div class="form-section-title"><span>05</span><div><h2>1차 제안평가</h2><p>제안자가 엑셀 평가표와 동일한 기준으로 직접 평가합니다. 6개 항목을 모두 1~10점으로 입력하세요.</p></div></div>
         ${renderEvaluationTable("first", proposal?.first_evaluation || {}, { title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}
-        <div class="evaluation-lock-note evaluation-ready-note">1차 평가는 제안서 제출과 동시에 완료되며, 이후 부서장 → 해당부서 임원 결재에서 참고자료로 표시됩니다.</div>
+        ${firstEvaluationCriteriaMarkup(proposal?.first_evaluation || {})}
+        <div class="evaluation-lock-note evaluation-ready-note">작성자는 점수를 입력하면서 50점 통과기준을 즉시 확인할 수 있습니다. 최종 1차 심사 통과 여부는 관리자 평가로 확정됩니다.</div>
       </section>
 
       <section class="form-section implementation-section">
@@ -1157,8 +1191,9 @@ function renderDetail(proposalNo) {
           ${statusBadge(proposal.status)}
           ${statusBadge(proposal.review_result)}
           <button class="button button-ghost print-open-button" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
-          ${(!proposal.locked && proposal.status === "접수") || requiresFirstEvaluationRewrite(proposal)
-            ? `<button class="button button-secondary" data-route="edit/${escapeHtml(proposal.proposal_no)}">${requiresFirstEvaluationRewrite(proposal) ? "재작성" : "제안자 수정"}</button>`
+          ${!proposal.locked && proposal.status === "접수"
+            ? `<button class="button button-secondary" data-route="edit/${escapeHtml(proposal.proposal_no)}">제안자 수정</button>
+               <button id="proposerDeleteButton" class="button button-ghost proposer-delete-button" data-action="delete-own-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안자 삭제</button>`
             : ""}
         </div>
       </div>
@@ -1177,6 +1212,7 @@ function renderDetail(proposalNo) {
     <section class="detail-operation-card evaluation-summary-card">
       <div class="section-heading"><div><span class="eyebrow">EVALUATION</span><h2>1·2차 평가</h2><p>1차는 제안자 자기평가, 2차는 심사위원회 공동평가이며 최종 심사점수는 2차 평가점수입니다.</p></div></div>
       ${renderEvaluationComparison(proposal)}
+      ${proposal.first_evaluation_total != null ? firstEvaluationCriteriaMarkup(proposal.first_evaluation || {}, proposal.first_evaluation_total) : ""}
       ${proposal.first_evaluation_total != null ? renderEvaluationTable("detail-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" }) : `<div class="analytics-empty">V2.5 이전 제안으로 1차 평가자료가 없습니다.</div>`}
       ${proposal.second_evaluation_total != null ? renderEvaluationTable("detail-second", proposal.second_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 심사위원회 공동평가" }) : ""}
     </section>
@@ -1273,6 +1309,8 @@ async function hydrateDetailOperations(proposal) {
     store.getStatusHistory(proposal.id).catch(() => []),
     store.getApprovalRecords(proposal.id).catch(() => []),
   ]);
+  const proposerDeleteButton = $("#proposerDeleteButton");
+  if (proposerDeleteButton) proposerDeleteButton.hidden = !canProposerDeleteProposal(proposal, approvals);
   const timelineTarget = $("#timelineContent");
   if (timelineTarget) timelineTarget.innerHTML = renderTimelineRows(history.length ? history : buildTimelineFallback(proposal));
   const approvalTarget = $("#approvalContent");
@@ -2241,6 +2279,20 @@ document.addEventListener("click", async (event) => {
       const activeCount = Number(result?.active_count ?? state.employees.length);
       const deactivatedCount = Number(result?.deactivated_count ?? 0);
       showToast(`직원명단 최신화 완료 · 활성 ${activeCount}명${deactivatedCount ? ` · 비활성 ${deactivatedCount}명` : ""}`);
+    } else if (action === "delete-own-proposal") {
+      const proposalNo = actionButton.dataset.no;
+      const proposal = state.proposals.find((row) => row.proposal_no === proposalNo);
+      if (!proposal) throw new Error("제안을 찾지 못했습니다.");
+      const approvals = await store.getApprovalRecords(proposal.id).catch(() => []);
+      if (!canProposerDeleteProposal(proposal, approvals)) throw new Error("결재 또는 1차 관리자 평가가 시작된 제안은 제안자가 삭제할 수 없습니다.");
+      const pin = prompt("제안 삭제를 위해 4자리 수정번호를 입력하세요.");
+      if (pin == null) return;
+      if (!/^\d{4}$/.test(pin)) throw new Error("수정번호는 숫자 4자리로 입력하세요.");
+      if (!confirm(`${proposalNo} 제안을 삭제하시겠습니까? 삭제 후 복구할 수 없습니다.`)) return;
+      await store.deleteProposalWithPin(proposalNo, pin);
+      await refreshData();
+      go("list");
+      showToast("제안이 삭제되었습니다.");
     } else if (action === "delete-proposal") {
       if (!confirm("이 제안을 삭제하시겠습니까? 삭제 후 복구할 수 없습니다.")) return;
       await store.deleteProposal(actionButton.dataset.id);

@@ -69,10 +69,7 @@ export function calculateAward(score, category = "개선", reviewResult = "미�
 }
 
 export function isEmployeeEditable(proposal) {
-  const rewriteRequired = proposal?.review_result === "미심사"
-    && proposal?.first_evaluation_total != null
-    && Number(proposal.first_evaluation_total) < 50;
-  return rewriteRequired || (!proposal.locked && proposal.status !== "심사중" && proposal.status !== "심사완료");
+  return !proposal?.locked && proposal?.status !== "심사중" && proposal?.status !== "심사완료";
 }
 
 export function filterProposals(proposals, filters = {}) {

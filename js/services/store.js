@@ -356,6 +356,28 @@ class DemoStore {
     return proposals[index];
   }
 
+  async deleteProposalWithPin(proposalNo, pin) {
+    const proposals = await this.getProposals();
+    const target = proposals.find((item) => item.proposal_no === proposalNo);
+    if (!target) throw new Error("삭제할 제안을 찾지 못했습니다.");
+    if (!isEmployeeEditable(target) || target.status !== "접수" || target.review_result !== "미심사") {
+      throw new Error("결재 또는 심사가 시작된 제안은 삭제할 수 없습니다.");
+    }
+    if (target.first_evaluation_completed_at) throw new Error("1차 관리자 평가가 시작된 제안은 삭제할 수 없습니다.");
+    const steps = await this.getApprovalSteps();
+    const stepMap = new Map(steps.map((step) => [String(step.id), step]));
+    const records = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
+    const acted = records.some((row) => row.proposal_id === target.id && stepMap.get(String(row.step_id))?.auto_author !== true && (row.acted_at || (row.status && row.status !== "대기")));
+    if (acted) throw new Error("결재가 시작된 제안은 삭제할 수 없습니다.");
+    const pinHash = await sha256(pin);
+    if (!target.edit_pin_hash || pinHash !== target.edit_pin_hash) throw new Error("수정번호가 일치하지 않습니다.");
+    localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals.filter((item) => item.id !== target.id)));
+    localStorage.setItem(APPROVAL_RECORDS_KEY, JSON.stringify(records.filter((row) => row.proposal_id !== target.id)));
+    const history = JSON.parse(localStorage.getItem(STATUS_HISTORY_KEY) || "[]").filter((row) => row.proposal_id !== target.id);
+    localStorage.setItem(STATUS_HISTORY_KEY, JSON.stringify(history));
+    return { proposal_no: proposalNo };
+  }
+
   async deleteProposal(id) {
     const admin = await this.getAdminSession();
     if (!admin) throw new Error("관리자 로그인이 필요합니다.");
@@ -873,6 +895,24 @@ class SupabaseStore {
     const row = Array.isArray(data) ? data[0] : data;
     if (!row) throw new Error("2차 평가 저장 결과를 확인하지 못했습니다.");
     return normalizeProposal(row);
+  }
+
+  async deleteProposalWithPin(proposalNo, pin) {
+    const { data, error } = await this.client.rpc("delete_proposal_with_pin_v254", {
+      p_proposal_no: proposalNo,
+      p_edit_pin: pin,
+    });
+    if (error) throw error;
+    const result = Array.isArray(data) ? (data[0] || {}) : (data || {});
+    const imagePaths = collectProposalImagePaths({
+      before_images: Array.isArray(result.before_images) ? result.before_images : [],
+      after_images: Array.isArray(result.after_images) ? result.after_images : [],
+    }, this.config.storageBucket);
+    if (imagePaths.length) {
+      const { error: storageError } = await this.client.storage.from(this.config.storageBucket).remove(imagePaths);
+      if (storageError) console.warn("삭제된 제안의 첨부사진 정리에 실패했습니다.", storageError);
+    }
+    return result;
   }
 
   async deleteProposal(id) {
