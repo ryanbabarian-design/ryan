@@ -140,7 +140,6 @@ function firstEvaluationCriteriaMarkup(values = {}, totalOverride = null) {
 
 function canProposerDeleteProposal(proposal, approvals = []) {
   if (!proposal || proposal.locked || proposal.status !== "접수" || proposal.review_result !== "미심사") return false;
-  if (proposal.first_evaluation_completed_at) return false;
   const stepMap = new Map((state.approvalSteps || []).map((step) => [String(step.id), step]));
   return !(approvals || []).some((record) => {
     const step = stepMap.get(String(record.step_id));
@@ -1825,7 +1824,7 @@ function renderAdmin(action = "", id = "") {
                   <td>${p.first_evaluation_total == null ? `<span class="evaluation-admin-state pending">미입력</span>` : Number(p.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS ? `<span class="evaluation-admin-state pending">기준 미달 · ${Number(p.first_evaluation_total)}점</span>` : `<span class="evaluation-admin-state done">완료 ${Number(p.first_evaluation_total)}점</span>`}</td>
                   <td>${statusBadge(p.review_result)}</td>
                   <td>${statusBadge(p.implementation_status)}</td>
-                  <td><button class="button button-small button-primary" data-route="admin/edit/${escapeHtml(p.id)}">1차평가/심사</button></td>
+                  <td><button class="button button-small button-primary" data-route="admin/edit/${escapeHtml(p.id)}">심사/2차평가</button></td>
                 </tr>`).join("")}
             </tbody>
           </table>
@@ -1887,14 +1886,10 @@ function renderAdminEdit(id) {
           <span>제안자가 작성한 원본 금액입니다. 심사 시 근거를 확인한 뒤 우측에서 최종 금액을 확정하세요.</span>
         </div>
         <section class="admin-first-evaluation-section">
-          <div class="section-heading"><div><span class="eyebrow">1ST EVALUATION · ADMIN</span><h2>1차 평가</h2><p>심사대기 중인 제안은 시스템 관리자만 1차 평가를 입력·수정할 수 있습니다. 1차 평가는 총점 50점 이상만 저장할 수 있습니다. 2차 평가는 심사위원회 평가이므로 총점이 50점 미만이어도 저장할 수 있습니다.</p></div></div>
-          <fieldset id="firstEvaluationFieldset" class="evaluation-fieldset" ${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? "" : "disabled"}>
-            ${renderEvaluationTable("admin-first", proposal.first_evaluation || {}, { title:"제안 평가표", subtitle:"1차 평가 · 관리자 입력/수정" })}
-          </fieldset>
-          <div class="admin-first-evaluation-actions">
-            <div class="evaluation-lock-note ${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? "evaluation-ready-note" : ""}">${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? (proposal.first_evaluation_total == null ? "관리자 1차 평가 입력 가능 · 통과기준 50점" : Number(proposal.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS ? `현재 ${Number(proposal.first_evaluation_total)}점 · 기준 미달 · 50점 이상으로 재평가 후 저장하세요.` : `관리자 1차 평가 수정 가능 · 현재 ${Number(proposal.first_evaluation_total)}점 · 통과`) : "심사완료 또는 대표이사 상신 이후에는 1차 평가를 수정할 수 없습니다."}</div>
-            <button type="button" class="button button-primary" data-action="save-first-evaluation" data-id="${escapeHtml(proposal.id)}" ${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? "" : "disabled"}>1차 평가 저장</button>
-          </div>
+          <div class="section-heading"><div><span class="eyebrow">1ST EVALUATION · PROPOSER</span><h2>1차 제안자 자기평가</h2><p>1차 평가는 제안자가 작성할 때 직접 평가합니다. 각 항목은 1~10점만 입력할 수 있고, 가중합계 50점 이상이어야 제안 등록이 가능합니다. 관리자는 1차 점수를 수정하지 않고 참고만 합니다.</p></div></div>
+          ${proposal.first_evaluation_total != null
+            ? `${firstEvaluationCriteriaMarkup(proposal.first_evaluation || {}, proposal.first_evaluation_total)}${renderEvaluationTable("admin-first-view", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}`
+            : `<div class="analytics-empty">1차 자기평가 자료가 없습니다.</div>`}
         </section>
         <div class="admin-image-pair">
           <div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div>
@@ -2032,6 +2027,10 @@ async function handleProposalSubmit(form) {
   if (data.get("website")) return;
   const payload = buildProposalPayload(form);
   const isEdit = form.dataset.edit === "true";
+  const firstEvaluationTotal = calculateEvaluationTotal(payload.first_evaluation);
+  if (firstEvaluationTotal < FIRST_EVALUATION_MIN_PASS) {
+    throw new Error(`1차 자기평가 총점이 ${firstEvaluationTotal}점입니다. 기준미달입니다. 50점 이상이어야 제안을 등록할 수 있습니다.`);
+  }
 
   if (!/^\d{4}$/.test(payload.edit_pin)) {
     throw new Error("수정번호는 숫자 4자리로 입력하세요.");
@@ -2284,7 +2283,7 @@ document.addEventListener("click", async (event) => {
       const proposal = state.proposals.find((row) => row.proposal_no === proposalNo);
       if (!proposal) throw new Error("제안을 찾지 못했습니다.");
       const approvals = await store.getApprovalRecords(proposal.id).catch(() => []);
-      if (!canProposerDeleteProposal(proposal, approvals)) throw new Error("결재 또는 1차 관리자 평가가 시작된 제안은 제안자가 삭제할 수 없습니다.");
+      if (!canProposerDeleteProposal(proposal, approvals)) throw new Error("실제 결재가 시작된 제안은 제안자가 삭제할 수 없습니다.");
       const pin = prompt("제안 삭제를 위해 4자리 수정번호를 입력하세요.");
       if (pin == null) return;
       if (!/^\d{4}$/.test(pin)) throw new Error("수정번호는 숫자 4자리로 입력하세요.");
@@ -2508,7 +2507,11 @@ document.addEventListener("input", (event) => {
       $("#similarResults").innerHTML = renderSimilar(form.elements.title?.value || "", form.dataset.no || "");
     }
   }
-  if (event.target.name?.startsWith("first_eval_")) updateEvaluationTotalFromForm($("#proposalForm"), "first");
+  if (event.target.name?.startsWith("first_eval_")) {
+    const value = Number(event.target.value);
+    event.target.setCustomValidity(event.target.value !== "" && (!Number.isInteger(value) || value < 1 || value > 10) ? "자기평가 점수는 각 항목 1~10점만 입력할 수 있습니다." : "");
+    updateEvaluationTotalFromForm($("#proposalForm"), "first");
+  }
   if (event.target.name?.startsWith("second_eval_")) {
     const form = $("#adminReviewForm");
     updateEvaluationTotalFromForm(form, "second");
