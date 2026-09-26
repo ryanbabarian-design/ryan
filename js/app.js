@@ -122,6 +122,20 @@ function evaluationValue(values, key) {
   return Number.isFinite(n) && n >= 1 && n <= 10 ? Math.round(n) : "";
 }
 
+function validateFirstSelfEvaluationValues(values = {}) {
+  for (const item of EVALUATION_CRITERIA) {
+    const value = Number(values?.[item.key]);
+    if (!Number.isInteger(value) || value < 1 || value > 10) {
+      throw new Error(`${item.label.replaceAll(" ", "")} 점수는 1~10점만 입력할 수 있습니다.`);
+    }
+  }
+  const total = calculateEvaluationTotal(values);
+  if (total < FIRST_EVALUATION_MIN_PASS) {
+    throw new Error(`1차 자기평가 총점이 ${total}점입니다. 기준미달입니다. 50점 이상이어야 제안을 등록할 수 있습니다.`);
+  }
+  return total;
+}
+
 function calculateEvaluationTotal(values = {}) {
   return EVALUATION_CRITERIA.reduce((sum, item) => {
     const v = Number(values?.[item.key]);
@@ -2027,10 +2041,7 @@ async function handleProposalSubmit(form) {
   if (data.get("website")) return;
   const payload = buildProposalPayload(form);
   const isEdit = form.dataset.edit === "true";
-  const firstEvaluationTotal = calculateEvaluationTotal(payload.first_evaluation);
-  if (firstEvaluationTotal < FIRST_EVALUATION_MIN_PASS) {
-    throw new Error(`1차 자기평가 총점이 ${firstEvaluationTotal}점입니다. 기준미달입니다. 50점 이상이어야 제안을 등록할 수 있습니다.`);
-  }
+  validateFirstSelfEvaluationValues(payload.first_evaluation);
 
   if (!/^\d{4}$/.test(payload.edit_pin)) {
     throw new Error("수정번호는 숫자 4자리로 입력하세요.");

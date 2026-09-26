@@ -363,7 +363,6 @@ class DemoStore {
     if (!isEmployeeEditable(target) || target.status !== "접수" || target.review_result !== "미심사") {
       throw new Error("결재 또는 심사가 시작된 제안은 삭제할 수 없습니다.");
     }
-    if (target.first_evaluation_completed_at) throw new Error("1차 관리자 평가가 시작된 제안은 삭제할 수 없습니다.");
     const steps = await this.getApprovalSteps();
     const stepMap = new Map(steps.map((step) => [String(step.id), step]));
     const records = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
@@ -898,7 +897,7 @@ class SupabaseStore {
   }
 
   async deleteProposalWithPin(proposalNo, pin) {
-    const { data, error } = await this.client.rpc("delete_proposal_with_pin_v254", {
+    const { data, error } = await this.client.rpc("delete_proposal_with_pin_v256", {
       p_proposal_no: proposalNo,
       p_edit_pin: pin,
     });
