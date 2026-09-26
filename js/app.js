@@ -1140,7 +1140,7 @@ function renderProposalForm(proposalNo = "") {
         <div class="form-section-title"><span>05</span><div><h2>1차 제안평가</h2><p>제안자가 엑셀 평가표와 동일한 기준으로 직접 평가합니다. 6개 항목을 모두 1~10점으로 입력하세요.</p></div></div>
         ${renderEvaluationTable("first", proposal?.first_evaluation || {}, { title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}
         ${firstEvaluationCriteriaMarkup(proposal?.first_evaluation || {})}
-        <div class="evaluation-lock-note evaluation-ready-note">작성자는 점수를 입력하면서 50점 통과기준을 즉시 확인할 수 있습니다. 최종 1차 심사 통과 여부는 관리자 평가로 확정됩니다.</div>
+        <div class="evaluation-lock-note evaluation-ready-note">작성자는 자기평가 점수를 입력하면서 50점 기준을 즉시 확인할 수 있습니다. 자기평가 총점이 50점 이상이어야 등록·수정할 수 있습니다.</div>
       </section>
 
       <section class="form-section implementation-section">
@@ -1997,7 +1997,7 @@ async function hydrateAdminApproval(proposal) {
       : proposal.first_evaluation_total == null
         ? "1차 평가를 먼저 완료하세요. 1차 평가는 50점 이상만 저장됩니다."
         : !firstEvaluationPassed
-          ? `기존 1차 평가 ${Number(proposal.first_evaluation_total)}점은 기준 미달입니다. 관리자가 50점 이상으로 재평가하여 저장해야 합니다.`
+          ? `1차 자기평가 ${Number(proposal.first_evaluation_total)}점은 기준 미달입니다. 제안자가 50점 이상으로 수정해야 합니다.`
           : canEvaluate
             ? "1차 평가 완료 및 임원 승인 완료 · 2차 평가는 점수 하한 없이 심사위원회 평가 결과를 저장할 수 있습니다."
             : "1차 평가 완료 · 해당부서 임원 승인 후 2차 평가 입력이 활성화됩니다.";
@@ -2408,7 +2408,7 @@ document.addEventListener("submit", async (event) => {
       const data = new FormData(event.target);
       const proposal = state.proposals.find((p) => p.id === event.target.dataset.id);
       if (proposal?.first_evaluation_total == null) throw new Error("1차 평가를 먼저 완료하세요.");
-      if (Number(proposal.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS) throw new Error(`기존 1차 평가 ${Number(proposal.first_evaluation_total)}점은 기준 미달입니다. 관리자가 50점 이상으로 1차 평가를 다시 저장하세요.`);
+      if (Number(proposal.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS) throw new Error(`1차 자기평가 ${Number(proposal.first_evaluation_total)}점은 기준 미달입니다. 제안자가 50점 이상으로 수정해야 합니다.`);
       const fieldset = $("#secondEvaluationFieldset");
       if (!fieldset || fieldset.disabled) throw new Error("해당부서 임원 승인 완료 후 2차 평가를 진행하세요.");
       const secondEvaluation = collectEvaluationFromForm(event.target, "second");
