@@ -23,7 +23,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.3.15";
-import { createStore } from "./services/store.js?v=2.4";
+import { createStore } from "./services/store.js?v=2.5";
 import {
   appendImageFiles,
   createImageSelection,
@@ -58,6 +58,108 @@ const toast = $("#toast");
 
 let formImageSelections = null;
 const filePreviewUrls = new WeakMap();
+
+const EVALUATION_CRITERIA = [
+  { key:"originality", no:1, label:"독  창  성", weight:2, rows:[
+    ["1. 상당히 독창적이며 착상도 좋다","8~10"],
+    ["2. 다소 창의적이며 착상도 좋다","5~7"],
+    ["3. 주지의 방법으로서 모방적이다","1~4"],
+  ]},
+  { key:"effort", no:2, label:"노  력  도", weight:2, rows:[
+    ["1. 현저한 노력이 있다","8~10"],
+    ["2. 상당한 노력이 있다","6~7"],
+    ["3. 약간의 노력이 있다","3~5"],
+    ["4. 노력, 연구가 보이지 않는다","1~2"],
+  ]},
+  { key:"feasibility", no:3, label:"실현성", weight:1, rows:[
+    ["1. 제안대로 실시해도 좋다","8~10"],
+    ["2. 30% 정도의 수정이 필요하다","6~7"],
+    ["3. 50% 정도의 수정이 필요하다","3~5"],
+    ["4. 제안대로 실시해서는 안된다","1~2"],
+  ]},
+  { key:"applicability", no:4, label:"응용범위", weight:1, rows:[
+    ["1. 공장 전체에 확대 적용 가능하다.","8~10"],
+    ["2. 타 부서 설비에 적용 가능하다.","5~7"],
+    ["3. 응용범위가 제한적이다.","1~4"],
+  ]},
+  { key:"continuity", no:5, label:"지  속  성", weight:1, rows:[
+    ["1. 지속적으로 사용이 가능하다.","8~10"],
+    ["2. 사용 빈도가 적다.","5~7"],
+    ["3. 한시적이다.(단발성)","1~4"],
+  ]},
+  { key:"tangible_effect", no:6, label:"유형효과", weight:3, rows:[
+    ["1. 획기적인 것(실시효과 500만원 이상)","8~10"],
+    ["2. 현저한 것(실시효과 500만원 미만)","5~7"],
+    ["3. 다소 향상이 되는 것(실시효과 100만원 미만)","1~4"],
+  ]},
+];
+
+function ensureEvaluationStyles() {
+  if (document.querySelector('style[data-evaluation-style]')) return;
+  const style = document.createElement("style");
+  style.dataset.evaluationStyle = "true";
+  style.textContent = `
+    .proposal-evaluation-wrap{margin-top:12px;border:1px solid #cfd5df;border-radius:14px;overflow:hidden;background:#fff}
+    .proposal-evaluation-title{padding:16px 18px;text-align:center;background:#f8fafc;border-bottom:1px solid #cfd5df}.proposal-evaluation-title h3{margin:0;font-size:22px;letter-spacing:.08em}.proposal-evaluation-title p{margin:6px 0 0;color:#667085;font-size:12px}
+    .proposal-evaluation-table{width:100%;border-collapse:collapse;font-size:13px}.proposal-evaluation-table th,.proposal-evaluation-table td{border:1px solid #cfd5df;padding:8px 9px;vertical-align:middle}.proposal-evaluation-table thead th{background:#eef2f6;color:#1d2939;text-align:center;font-weight:800}.proposal-evaluation-table td.eval-no{width:42px;text-align:center;font-weight:800}.proposal-evaluation-table td.eval-label{width:100px;text-align:center;font-weight:800;white-space:pre}.proposal-evaluation-table td.eval-range{width:68px;text-align:center;font-weight:700}.proposal-evaluation-table td.eval-weight{width:64px;text-align:center;font-weight:800}.proposal-evaluation-table td.eval-score{width:92px;text-align:center;background:#fffdf5}.proposal-evaluation-table input.eval-input{width:62px;text-align:center;font-size:16px;font-weight:800;padding:8px;border:1px solid #98a2b3;border-radius:8px}.proposal-evaluation-table .eval-readonly{font-size:17px;font-weight:900;color:#10213b}.proposal-evaluation-table tfoot td{background:#f8fafc;font-weight:900;text-align:center}.proposal-evaluation-table tfoot .eval-total{font-size:22px;color:#b42318}
+    .evaluation-lock-note{margin:10px 0 0;padding:10px 12px;border-radius:9px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:12px}.evaluation-ready-note{background:#ecfdf3;border-color:#a6f4c5;color:#067647}.evaluation-compare{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0}.evaluation-compare>div{border:1px solid #e4e7ec;border-radius:12px;padding:12px;background:#fff}.evaluation-compare small{display:block;color:#667085}.evaluation-compare strong{font-size:20px;color:#10213b}
+    fieldset.evaluation-fieldset{border:0;padding:0;margin:0;min-width:0}fieldset.evaluation-fieldset:disabled{opacity:.58}
+    @media(max-width:760px){.proposal-evaluation-table{font-size:11px}.proposal-evaluation-table th,.proposal-evaluation-table td{padding:6px 5px}.proposal-evaluation-table td.eval-label{width:74px}.evaluation-compare{grid-template-columns:1fr}}
+  `;
+  document.head.append(style);
+}
+
+function evaluationValue(values, key) {
+  const n = Number(values?.[key]);
+  return Number.isFinite(n) && n >= 1 && n <= 10 ? Math.round(n) : "";
+}
+
+function calculateEvaluationTotal(values = {}) {
+  return EVALUATION_CRITERIA.reduce((sum, item) => {
+    const v = Number(values?.[item.key]);
+    return sum + (Number.isFinite(v) ? v * item.weight : 0);
+  }, 0);
+}
+
+function renderEvaluationTable(prefix, values = {}, { readOnly = false, title = "제안 평가표", subtitle = "" } = {}) {
+  const total = calculateEvaluationTotal(values);
+  const body = EVALUATION_CRITERIA.map((item) => item.rows.map((row, index) => `
+    <tr>
+      ${index === 0 ? `<td class="eval-no" rowspan="${item.rows.length}">${item.no}</td><td class="eval-label" rowspan="${item.rows.length}">${escapeHtml(item.label)}</td>` : ""}
+      <td>${escapeHtml(row[0])}</td>
+      <td class="eval-range">${escapeHtml(row[1])}</td>
+      ${index === 0 ? `<td class="eval-weight" rowspan="${item.rows.length}">${item.weight}</td><td class="eval-score" rowspan="${item.rows.length}">${readOnly ? `<span class="eval-readonly">${evaluationValue(values,item.key) || "-"}</span>` : `<input class="eval-input" type="number" min="1" max="10" step="1" name="${prefix}_eval_${item.key}" value="${evaluationValue(values,item.key)}" required aria-label="${escapeHtml(item.label)} 평가점수">`}</td>` : ""}
+    </tr>`).join("")).join("");
+  return `<div class="proposal-evaluation-wrap" data-evaluation-prefix="${escapeHtml(prefix)}">
+    <div class="proposal-evaluation-title"><h3>${escapeHtml(title)}</h3>${subtitle ? `<p>${escapeHtml(subtitle)}</p>` : ""}</div>
+    <table class="proposal-evaluation-table"><thead><tr><th colspan="2">구분</th><th>내용</th><th>배점</th><th>가중치</th><th>평가</th></tr></thead><tbody>${body}</tbody><tfoot><tr><td colspan="3">점수 합계</td><td>합계</td><td>10</td><td class="eval-total" data-eval-total="${escapeHtml(prefix)}">${total}</td></tr></tfoot></table>
+  </div>`;
+}
+
+function collectEvaluationFromForm(form, prefix) {
+  const result = {};
+  for (const item of EVALUATION_CRITERIA) {
+    const raw = form?.elements?.[`${prefix}_eval_${item.key}`]?.value;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 1 || value > 10) throw new Error(`${item.label.replaceAll(" ","")} 점수를 1~10점으로 입력하세요.`);
+    result[item.key] = value;
+  }
+  return result;
+}
+
+function updateEvaluationTotalFromForm(form, prefix) {
+  if (!form) return;
+  const values = {};
+  for (const item of EVALUATION_CRITERIA) values[item.key] = Number(form.elements?.[`${prefix}_eval_${item.key}`]?.value || 0);
+  const target = form.querySelector(`[data-eval-total="${prefix}"]`);
+  if (target) target.textContent = String(calculateEvaluationTotal(values));
+}
+
+function renderEvaluationComparison(proposal) {
+  const first = proposal.first_evaluation_total;
+  const second = proposal.second_evaluation_total;
+  return `<div class="evaluation-compare"><div><small>1차 자기평가</small><strong>${first == null ? "-" : `${Number(first)}점`}</strong></div><div><small>2차 심사위원회 평가</small><strong>${second == null ? "미평가" : `${Number(second)}점`}</strong></div></div>`;
+}
 
 function ensureImageEditorStyles() {
   if (document.querySelector('link[data-image-editor-style]')) return;
@@ -980,8 +1082,14 @@ function renderProposalForm(proposalNo = "") {
         </div>
       </section>
 
+      <section class="form-section evaluation-section">
+        <div class="form-section-title"><span>05</span><div><h2>1차 제안평가</h2><p>제안자가 엑셀 평가표와 동일한 기준으로 직접 평가합니다. 6개 항목을 모두 1~10점으로 입력하세요.</p></div></div>
+        ${renderEvaluationTable("first", proposal?.first_evaluation || {}, { title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}
+        <div class="evaluation-lock-note evaluation-ready-note">1차 평가는 제안서 제출과 동시에 완료되며, 이후 부서장 → 해당부서 임원 결재에서 참고자료로 표시됩니다.</div>
+      </section>
+
       <section class="form-section implementation-section">
-        <div class="form-section-title"><span>05</span><div><h2>제안 실시현황</h2><p>제안이 현재 어느 단계인지 선택하세요. 완료된 경우 실제 실시일을 입력합니다.</p></div></div>
+        <div class="form-section-title"><span>06</span><div><h2>제안 실시현황</h2><p>제안이 현재 어느 단계인지 선택하세요. 완료된 경우 실제 실시일을 입력합니다.</p></div></div>
         <div class="form-grid two implementation-grid">
           <label class="field">실시상태 <b>*</b>
             <select id="implementationStatus" name="implementation_status" required>
@@ -997,7 +1105,7 @@ function renderProposalForm(proposalNo = "") {
 
       ${!isEdit ? `
         <section class="form-section form-section-pin">
-          <div class="form-section-title"><span>06</span><div><h2>수정번호 설정</h2><p>심사 시작 전 본인 제안을 수정할 때 사용합니다.</p></div></div>
+          <div class="form-section-title"><span>07</span><div><h2>수정번호 설정</h2><p>심사 시작 전 본인 제안을 수정할 때 사용합니다.</p></div></div>
           <label class="field compact">4자리 수정번호 <b>*</b>
             <input name="edit_pin" inputmode="numeric" pattern="\\d{4}" maxlength="4" required placeholder="예: 1234">
           </label>
@@ -1056,6 +1164,13 @@ function renderDetail(proposalNo) {
       <div><small>지급상태</small>${statusBadge(proposal.payment_status)}</div>
       <div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div>
       <div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div>
+    </section>
+
+    <section class="detail-operation-card evaluation-summary-card">
+      <div class="section-heading"><div><span class="eyebrow">EVALUATION</span><h2>1·2차 평가</h2><p>1차는 제안자 자기평가, 2차는 심사위원회 공동평가이며 최종 심사점수는 2차 평가점수입니다.</p></div></div>
+      ${renderEvaluationComparison(proposal)}
+      ${proposal.first_evaluation_total != null ? renderEvaluationTable("detail-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" }) : `<div class="analytics-empty">V2.5 이전 제안으로 1차 평가자료가 없습니다.</div>`}
+      ${proposal.second_evaluation_total != null ? renderEvaluationTable("detail-second", proposal.second_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 심사위원회 공동평가" }) : ""}
     </section>
 
     <section class="detail-comparison">
@@ -1548,7 +1663,7 @@ async function renderApproverReview(id) {
   const permission = resolveApprovalPermission(proposal, state.approvalSteps, records, state.admin?.assignments || []);
   main.innerHTML = `${adminPageHeader("전자결재 검토", "제안내용을 확인한 뒤 본인에게 지정된 단계만 승인 또는 반려할 수 있습니다.", "inbox")}
     <section class="approver-review-layout">
-      <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2><p>${escapeHtml(proposal.current_problem)}</p><h2>개선방안</h2><p>${escapeHtml(proposal.improvement_plan)}</p><h2>기대효과</h2><p>${escapeHtml(proposal.expected_effect)}</p><div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div><div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div>${renderAiEffectAnalysis(proposal, null, false, "approverAiEffectAnalysisCard")}</article>
+      <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2><p>${escapeHtml(proposal.current_problem)}</p><h2>개선방안</h2><p>${escapeHtml(proposal.improvement_plan)}</p><h2>기대효과</h2><p>${escapeHtml(proposal.expected_effect)}</p><div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div>${proposal.first_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 자기평가</h2><p>제안자가 제출 시 작성한 평가표입니다. 결재자는 점수를 변경하지 않고 참고만 합니다.</p></div></div>${renderEvaluationTable("approver-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}` : `<div class="analytics-empty">1차 평가자료가 없습니다.</div>`}${proposal.second_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 심사위원회 평가</h2><p>심사위원회가 공동으로 확정한 최종 평가입니다.</p></div></div>${renderEvaluationTable("approver-second", proposal.second_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 심사위원회 공동평가" })}` : ""}<div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div>${renderAiEffectAnalysis(proposal, null, false, "approverAiEffectAnalysisCard")}</article>
       <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${renderApprovalProgress(state.approvalSteps, records)}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}</section></aside>
     </section>`;
   await hydrateAiEffectAnalysis(proposal, false, "approverAiEffectAnalysisCard");
@@ -1663,7 +1778,7 @@ function renderAdmin(action = "", id = "") {
                   <td>${statusBadge(p.status)}</td>
                   <td>${statusBadge(p.review_result)}</td>
                   <td>${statusBadge(p.implementation_status)}</td>
-                  <td><button class="button button-small button-primary" data-route="admin/edit/${escapeHtml(p.id)}">심사</button></td>
+                  <td><button class="button button-small button-primary" data-route="admin/edit/${escapeHtml(p.id)}">2차평가/심사</button></td>
                 </tr>`).join("")}
             </tbody>
           </table>
@@ -1703,7 +1818,7 @@ function renderAdminEdit(id) {
 
   main.innerHTML = `
     <section class="page-header">
-      <div><button class="back-link" data-route="admin">← 관리자 목록</button><span class="eyebrow">ADMIN REVIEW</span><h1>${escapeHtml(proposal.proposal_no)} 심사</h1><p>${escapeHtml(proposal.title)}</p></div>
+      <div><button class="back-link" data-route="admin">← 관리자 목록</button><span class="eyebrow">2ND REVIEW</span><h1>${escapeHtml(proposal.proposal_no)} 2차 평가·심사</h1><p>${escapeHtml(proposal.title)}</p></div>
       <div class="header-buttons">
         <button class="button button-ghost" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
         <button class="button button-ghost" data-route="detail/${escapeHtml(proposal.proposal_no)}">공개 상세보기</button>
@@ -1724,6 +1839,8 @@ function renderAdminEdit(id) {
           <strong>${formatCurrency(proposal.proposer_effect_amount)}</strong>
           <span>제안자가 작성한 원본 금액입니다. 심사 시 근거를 확인한 뒤 우측에서 최종 금액을 확정하세요.</span>
         </div>
+        <div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 자기평가</h2><p>제안자가 제출할 때 작성한 평가표입니다. 2차 심사에서는 참고자료로만 사용합니다.</p></div></div>
+        ${proposal.first_evaluation_total != null ? renderEvaluationTable("admin-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" }) : `<div class="analytics-empty">1차 평가자료가 없습니다.</div>`}
         <div class="admin-image-pair">
           <div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div>
           <div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div>
@@ -1732,9 +1849,18 @@ function renderAdminEdit(id) {
       </section>
 
       <section class="admin-review-fields">
+        <section class="second-evaluation-section">
+          <div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 최종평가</h2><p>부서장 및 해당부서 임원 승인 후, 심사위원들이 한 곳에 모여 엑셀과 동일한 평가표를 공동으로 작성합니다.</p></div></div>
+          ${renderEvaluationComparison(proposal)}
+          <fieldset id="secondEvaluationFieldset" class="evaluation-fieldset" disabled>
+            ${renderEvaluationTable("second", proposal.second_evaluation || {}, { title:"제안 평가표", subtitle:"2차 평가 · 심사위원회 공동평가" })}
+          </fieldset>
+          <div id="secondEvaluationGateMessage" class="evaluation-lock-note">해당부서 임원 승인 완료 후 2차 평가 입력이 활성화됩니다.</div>
+        </section>
         <div class="form-grid two">
           <label class="field">업무상태
-            <select name="status">${WORKFLOW_STATUSES.map((v) => `<option ${proposal.status === v ? "selected" : ""}>${v}</option>`).join("")}</select>
+            <input type="text" value="${proposal.second_evaluation_total == null ? (proposal.status === "심사중" ? "2차 평가대기" : escapeHtml(proposal.status)) : "심사완료"}" readonly>
+            <small class="field-help">2차 평가 완료 시 자동으로 ‘심사완료’ 처리됩니다.</small>
           </label>
           <label class="field">심사결과
             <select name="review_result">${REVIEW_RESULTS.map((v) => `<option ${proposal.review_result === v ? "selected" : ""}>${v}</option>`).join("")}</select>
@@ -1748,8 +1874,9 @@ function renderAdminEdit(id) {
           <label class="field">실시일
             <input type="date" name="implemented_date" value="${escapeHtml(proposal.implemented_date || "")}">
           </label>
-          <label class="field">점수
-            <input type="number" min="0" max="100" name="score" value="${proposal.score ?? ""}" placeholder="0~100">
+          <label class="field">최종 심사점수
+            <input type="text" name="score_display" value="${proposal.second_evaluation_total == null ? "2차 평가 후 자동계산" : `${Number(proposal.second_evaluation_total)}점`}" readonly>
+            <small class="field-help">최종 점수는 2차 심사위원회 평가표의 가중치 환산 총점으로 자동 저장됩니다.</small>
           </label>
           <label class="field">지급상태
             <select name="payment_status">${PAYMENT_STATUSES.map((v) => `<option ${proposal.payment_status === v ? "selected" : ""}>${v}</option>`).join("")}</select>
@@ -1764,7 +1891,7 @@ function renderAdminEdit(id) {
         </label>
         <div class="award-preview" id="awardPreview">
           <small>심사결과·점수 기준 예상 포상</small>
-          <strong>${(() => { const award = calculateAward(proposal.score, proposal.category, proposal.review_result); return `${escapeHtml(award.grade || "-")} · ${formatCurrency(award.amount)}`; })()}</strong>
+          <strong>${(() => { const award = calculateAward(proposal.second_evaluation_total ?? proposal.score, proposal.category, proposal.review_result); return `${escapeHtml(award.grade || "-")} · ${formatCurrency(award.amount)}`; })()}</strong>
         </div>
         <section class="admin-approval-box">
           <div class="section-heading"><div><span class="eyebrow">APPROVAL</span><h2>전자결재 처리</h2></div></div>
@@ -1791,6 +1918,18 @@ async function hydrateAdminApproval(proposal) {
     const permission = resolveApprovalPermission(proposal, state.approvalSteps, records, state.admin?.assignments || []);
     actionTarget.innerHTML = renderApprovalAction(permission, proposal.id);
   }
+  const executiveStep = (state.approvalSteps || []).find((step) => step.active !== false && step.role_name === "해당부서 임원");
+  const executiveRecord = executiveStep ? records.find((row) => String(row.step_id) === String(executiveStep.id)) : null;
+  const fieldset = $("#secondEvaluationFieldset");
+  const gate = $("#secondEvaluationGateMessage");
+  const alreadySubmittedToCeo = ["상신완료","승인완료"].includes(proposal.ceo_submission_status);
+  const canEvaluate = executiveRecord?.status === "승인" && !alreadySubmittedToCeo;
+  if (fieldset) fieldset.disabled = !canEvaluate;
+  if (gate) {
+    gate.classList.toggle("evaluation-ready-note", canEvaluate);
+    gate.textContent = alreadySubmittedToCeo ? "대표이사 상신 이후에는 2차 평가를 수정할 수 없습니다." : canEvaluate ? "임원 승인 완료 · 심사위원회 2차 공동평가를 입력할 수 있습니다." : "해당부서 임원 승인 완료 후 2차 평가 입력이 활성화됩니다.";
+  }
+  if (canEvaluate) updateEvaluationTotalFromForm($("#adminReviewForm"), "second");
 }
 
 function buildProposalPayload(form) {
@@ -1818,6 +1957,7 @@ function buildProposalPayload(form) {
     expected_effect: data.get("expected_effect")?.trim(),
     cost_amount: Number(data.get("cost_amount") || 0),
     proposer_effect_amount: Number(data.get("proposer_effect_amount") || 0),
+    first_evaluation: collectEvaluationFromForm(form, "first"),
     ...implementation,
     edit_pin: data.get("edit_pin"),
   };
@@ -2157,25 +2297,23 @@ document.addEventListener("submit", async (event) => {
     } else if (event.target.id === "adminReviewForm") {
       const data = new FormData(event.target);
       const proposal = state.proposals.find((p) => p.id === event.target.dataset.id);
-      const award = calculateAward(data.get("score"), proposal.category, data.get("review_result"));
+      const fieldset = $("#secondEvaluationFieldset");
+      if (!fieldset || fieldset.disabled) throw new Error("해당부서 임원 승인 완료 후 2차 평가를 진행하세요.");
+      const secondEvaluation = collectEvaluationFromForm(event.target, "second");
+      if (data.get("review_result") === "미심사") throw new Error("2차 평가 완료 시 심사결과를 선택하세요.");
       const patch = {
-        status: data.get("status"),
         review_result: data.get("review_result"),
         implementing_department: data.get("implementing_department")?.trim(),
         implementation_status: data.get("implementation_status"),
         implemented_date: data.get("implemented_date") || null,
-        score: data.get("score") === "" ? null : Number(data.get("score")),
-        award_grade: award.grade,
-        award_amount: award.amount,
         payment_status: data.get("payment_status"),
         effect_amount: Number(data.get("effect_amount") || 0),
         review_comment: data.get("review_comment")?.trim(),
-        locked: ["심사중", "심사완료"].includes(data.get("status")),
       };
-      await store.adminUpdateProposal(event.target.dataset.id, patch);
+      await store.saveSecondEvaluation(event.target.dataset.id, secondEvaluation, patch);
       await refreshData();
       go("admin");
-      showToast("심사정보를 저장했습니다.");
+      showToast(`2차 평가 완료 · 최종 ${calculateEvaluationTotal(secondEvaluation)}점`);
     }
   } catch (error) {
     showError(error);
@@ -2268,10 +2406,24 @@ document.addEventListener("input", (event) => {
       $("#similarResults").innerHTML = renderSimilar(form.elements.title?.value || "", form.dataset.no || "");
     }
   }
-  if (["score", "review_result"].includes(event.target.name) && $("#awardPreview")) {
+  if (event.target.name?.startsWith("first_eval_")) updateEvaluationTotalFromForm($("#proposalForm"), "first");
+  if (event.target.name?.startsWith("second_eval_")) {
+    const form = $("#adminReviewForm");
+    updateEvaluationTotalFromForm(form, "second");
+    if ($("#awardPreview")) {
+      const proposal = state.proposals.find((p) => p.id === form?.dataset.id);
+      const values = {}; EVALUATION_CRITERIA.forEach((item) => { values[item.key] = Number(form?.elements?.[`second_eval_${item.key}`]?.value || 0); });
+      const total = calculateEvaluationTotal(values);
+      const award = calculateAward(total, proposal?.category, form?.elements?.review_result?.value);
+      $("#awardPreview strong").textContent = `${award.grade || "-"} · ${formatCurrency(award.amount)}`;
+      const scoreDisplay = form?.elements?.score_display; if (scoreDisplay) scoreDisplay.value = `${total}점`;
+    }
+  }
+  if (event.target.name === "review_result" && $("#awardPreview")) {
     const form = $("#adminReviewForm");
     const proposal = state.proposals.find((p) => p.id === form?.dataset.id);
-    const award = calculateAward(form?.elements?.score?.value, proposal?.category, form?.elements?.review_result?.value);
+    const values = {}; EVALUATION_CRITERIA.forEach((item) => { values[item.key] = Number(form?.elements?.[`second_eval_${item.key}`]?.value || 0); });
+    const award = calculateAward(calculateEvaluationTotal(values), proposal?.category, event.target.value);
     $("#awardPreview strong").textContent = `${award.grade || "-"} · ${formatCurrency(award.amount)}`;
   }
 });
@@ -2280,5 +2432,6 @@ window.addEventListener("hashchange", render);
 window.addEventListener("DOMContentLoaded", () => {
   ensureImageEditorStyles();
   ensureAiEffectStyles();
+  ensureEvaluationStyles();
   init();
 });

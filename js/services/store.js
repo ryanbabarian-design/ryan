@@ -47,6 +47,13 @@ function normalizeProposal(row) {
     effect_amount: 0,
     proposer_effect_amount: 0,
     cost_amount: 0,
+    first_evaluation: {},
+    first_evaluation_total: null,
+    first_evaluation_completed_at: null,
+    second_evaluation: {},
+    second_evaluation_total: null,
+    second_evaluation_completed_at: null,
+    second_evaluation_by_name: null,
     ceo_submission_status: "미상신",
     locked: false,
     review_result: "미심사",
@@ -307,6 +314,24 @@ class DemoStore {
     if (before.payment_status !== after.payment_status && after.payment_status === "완료") history.push({ proposal_id:id, proposal_no:after.proposal_no, stage:"포상지급", detail:"포상금 지급 완료", actor_name:admin.displayName||admin.email, happened_at:now });
     localStorage.setItem(STATUS_HISTORY_KEY, JSON.stringify(history));
     return after;
+  }
+
+  async saveSecondEvaluation(id, evaluation, reviewPatch) {
+    const admin = await this.getAdminSession();
+    if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 2차 평가를 저장할 수 있습니다.");
+    const proposals = await this.getProposals();
+    const index = proposals.findIndex((item) => item.id === id);
+    if (index < 0) throw new Error("제안을 찾지 못했습니다.");
+    const e = evaluation || {};
+    const keys = ["originality","effort","feasibility","applicability","continuity","tangible_effect"];
+    for (const key of keys) { const v=Number(e[key]); if (!Number.isInteger(v) || v<1 || v>10) throw new Error("평가점수는 각 항목 1~10점으로 입력하세요."); }
+    const total = Number(e.originality)*2 + Number(e.effort)*2 + Number(e.feasibility) + Number(e.applicability) + Number(e.continuity) + Number(e.tangible_effect)*3;
+    const award = reviewPatch.review_result === "건수처리" ? {grade:"건수처리",amount:5000} : reviewPatch.review_result === "채택"
+      ? (total>=90?{grade:"A",amount:100000}:total>=80?{grade:"B",amount:50000}:total>=70?{grade:"C",amount:30000}:total>=60?{grade:"D",amount:10000}:{grade:"",amount:0})
+      : {grade:"",amount:0};
+    proposals[index] = normalizeProposal({ ...proposals[index], ...reviewPatch, second_evaluation:e, second_evaluation_total:total, second_evaluation_completed_at:new Date().toISOString(), second_evaluation_by_name:admin.displayName||admin.email, score:total, status:"심사완료", award_grade:award.grade, award_amount:award.amount, locked:true, ceo_submission_status:"미상신", updated_at:new Date().toISOString() });
+    localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
+    return proposals[index];
   }
 
   async deleteProposal(id) {
@@ -802,6 +827,18 @@ class SupabaseStore {
     if (error) throw error;
     const row = Array.isArray(data) ? data[0] : data;
     if (!row) throw new Error("심사 저장 결과를 확인하지 못했습니다.");
+    return normalizeProposal(row);
+  }
+
+  async saveSecondEvaluation(id, evaluation, reviewPatch) {
+    const { data, error } = await this.client.rpc("save_second_evaluation_v25", {
+      p_proposal_id: id,
+      p_evaluation: evaluation,
+      p_review_patch: reviewPatch,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error("2차 평가 저장 결과를 확인하지 못했습니다.");
     return normalizeProposal(row);
   }
 
