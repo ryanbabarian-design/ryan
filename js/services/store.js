@@ -316,6 +316,25 @@ class DemoStore {
     return after;
   }
 
+  async saveFirstEvaluation(id, evaluation) {
+    const admin = await this.getAdminSession();
+    if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 1차 평가를 저장할 수 있습니다.");
+    const proposals = await this.getProposals();
+    const index = proposals.findIndex((item) => item.id === id);
+    if (index < 0) throw new Error("제안을 찾지 못했습니다.");
+    const proposal = proposals[index];
+    if (proposal.review_result !== "미심사" || proposal.second_evaluation_total != null || ["상신완료","승인완료"].includes(proposal.ceo_submission_status)) {
+      throw new Error("심사대기 중인 제안만 1차 평가를 수정할 수 있습니다.");
+    }
+    const e = evaluation || {};
+    const keys = ["originality","effort","feasibility","applicability","continuity","tangible_effect"];
+    for (const key of keys) { const v=Number(e[key]); if (!Number.isInteger(v) || v<1 || v>10) throw new Error("평가점수는 각 항목 1~10점으로 입력하세요."); }
+    const total = Number(e.originality)*2 + Number(e.effort)*2 + Number(e.feasibility) + Number(e.applicability) + Number(e.continuity) + Number(e.tangible_effect)*3;
+    proposals[index] = normalizeProposal({ ...proposal, first_evaluation:e, first_evaluation_total:total, first_evaluation_completed_at:new Date().toISOString(), updated_at:new Date().toISOString() });
+    localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
+    return proposals[index];
+  }
+
   async saveSecondEvaluation(id, evaluation, reviewPatch) {
     const admin = await this.getAdminSession();
     if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 2차 평가를 저장할 수 있습니다.");
@@ -827,6 +846,17 @@ class SupabaseStore {
     if (error) throw error;
     const row = Array.isArray(data) ? data[0] : data;
     if (!row) throw new Error("심사 저장 결과를 확인하지 못했습니다.");
+    return normalizeProposal(row);
+  }
+
+  async saveFirstEvaluation(id, evaluation) {
+    const { data, error } = await this.client.rpc("admin_save_first_evaluation_v251", {
+      p_proposal_id: id,
+      p_evaluation: evaluation,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error("1차 평가 저장 결과를 확인하지 못했습니다.");
     return normalizeProposal(row);
   }
 

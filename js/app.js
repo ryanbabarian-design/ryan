@@ -103,6 +103,7 @@ function ensureEvaluationStyles() {
     .proposal-evaluation-title{padding:16px 18px;text-align:center;background:#f8fafc;border-bottom:1px solid #cfd5df}.proposal-evaluation-title h3{margin:0;font-size:22px;letter-spacing:.08em}.proposal-evaluation-title p{margin:6px 0 0;color:#667085;font-size:12px}
     .proposal-evaluation-table{width:100%;border-collapse:collapse;font-size:13px}.proposal-evaluation-table th,.proposal-evaluation-table td{border:1px solid #cfd5df;padding:8px 9px;vertical-align:middle}.proposal-evaluation-table thead th{background:#eef2f6;color:#1d2939;text-align:center;font-weight:800}.proposal-evaluation-table td.eval-no{width:42px;text-align:center;font-weight:800}.proposal-evaluation-table td.eval-label{width:100px;text-align:center;font-weight:800;white-space:pre}.proposal-evaluation-table td.eval-range{width:68px;text-align:center;font-weight:700}.proposal-evaluation-table td.eval-weight{width:64px;text-align:center;font-weight:800}.proposal-evaluation-table td.eval-score{width:92px;text-align:center;background:#fffdf5}.proposal-evaluation-table input.eval-input{width:62px;text-align:center;font-size:16px;font-weight:800;padding:8px;border:1px solid #98a2b3;border-radius:8px}.proposal-evaluation-table .eval-readonly{font-size:17px;font-weight:900;color:#10213b}.proposal-evaluation-table tfoot td{background:#f8fafc;font-weight:900;text-align:center}.proposal-evaluation-table tfoot .eval-total{font-size:22px;color:#b42318}
     .evaluation-lock-note{margin:10px 0 0;padding:10px 12px;border-radius:9px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:12px}.evaluation-ready-note{background:#ecfdf3;border-color:#a6f4c5;color:#067647}.evaluation-compare{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0}.evaluation-compare>div{border:1px solid #e4e7ec;border-radius:12px;padding:12px;background:#fff}.evaluation-compare small{display:block;color:#667085}.evaluation-compare strong{font-size:20px;color:#10213b}
+    .admin-first-evaluation-section{margin:22px 0;padding:18px;border:1px solid #d0d5dd;border-radius:14px;background:#fbfcfe}.admin-first-evaluation-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}.admin-first-evaluation-actions .evaluation-lock-note{flex:1;margin:0}.evaluation-admin-state{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap}.evaluation-admin-state.pending{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}.evaluation-admin-state.done{background:#ecfdf3;color:#067647;border:1px solid #a6f4c5}
     fieldset.evaluation-fieldset{border:0;padding:0;margin:0;min-width:0}fieldset.evaluation-fieldset:disabled{opacity:.58}
     @media(max-width:760px){.proposal-evaluation-table{font-size:11px}.proposal-evaluation-table th,.proposal-evaluation-table td{padding:6px 5px}.proposal-evaluation-table td.eval-label{width:74px}.evaluation-compare{grid-template-columns:1fr}}
   `;
@@ -1768,7 +1769,7 @@ function renderAdmin(action = "", id = "") {
         <div class="section-heading"><div><span class="eyebrow">REVIEW QUEUE</span><h2>접수·심사 관리</h2></div></div>
         <div class="admin-table-wrap">
           <table class="admin-table">
-            <thead><tr><th>접수번호</th><th>제안명</th><th>제안자</th><th>심사상태</th><th>결과</th><th>실시</th><th></th></tr></thead>
+            <thead><tr><th>접수번호</th><th>제안명</th><th>제안자</th><th>심사상태</th><th>1차평가</th><th>결과</th><th>실시</th><th></th></tr></thead>
             <tbody>
               ${proposals.map((p) => `
                 <tr>
@@ -1776,9 +1777,10 @@ function renderAdmin(action = "", id = "") {
                   <td><button class="table-title" data-action="detail" data-no="${escapeHtml(p.proposal_no)}">${escapeHtml(p.title)}</button></td>
                   <td>${escapeHtml(p.proposer_name)}<small>${escapeHtml(p.department)}</small></td>
                   <td>${statusBadge(p.status)}</td>
+                  <td>${p.first_evaluation_total == null ? `<span class="evaluation-admin-state pending">미입력</span>` : `<span class="evaluation-admin-state done">완료 ${Number(p.first_evaluation_total)}점</span>`}</td>
                   <td>${statusBadge(p.review_result)}</td>
                   <td>${statusBadge(p.implementation_status)}</td>
-                  <td><button class="button button-small button-primary" data-route="admin/edit/${escapeHtml(p.id)}">2차평가/심사</button></td>
+                  <td><button class="button button-small button-primary" data-route="admin/edit/${escapeHtml(p.id)}">1차평가/심사</button></td>
                 </tr>`).join("")}
             </tbody>
           </table>
@@ -1818,7 +1820,7 @@ function renderAdminEdit(id) {
 
   main.innerHTML = `
     <section class="page-header">
-      <div><button class="back-link" data-route="admin">← 관리자 목록</button><span class="eyebrow">2ND REVIEW</span><h1>${escapeHtml(proposal.proposal_no)} 2차 평가·심사</h1><p>${escapeHtml(proposal.title)}</p></div>
+      <div><button class="back-link" data-route="admin">← 관리자 목록</button><span class="eyebrow">ADMIN REVIEW</span><h1>${escapeHtml(proposal.proposal_no)} 관리자 평가·심사</h1><p>${escapeHtml(proposal.title)}</p></div>
       <div class="header-buttons">
         <button class="button button-ghost" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
         <button class="button button-ghost" data-route="detail/${escapeHtml(proposal.proposal_no)}">공개 상세보기</button>
@@ -1839,8 +1841,16 @@ function renderAdminEdit(id) {
           <strong>${formatCurrency(proposal.proposer_effect_amount)}</strong>
           <span>제안자가 작성한 원본 금액입니다. 심사 시 근거를 확인한 뒤 우측에서 최종 금액을 확정하세요.</span>
         </div>
-        <div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 자기평가</h2><p>제안자가 제출할 때 작성한 평가표입니다. 2차 심사에서는 참고자료로만 사용합니다.</p></div></div>
-        ${proposal.first_evaluation_total != null ? renderEvaluationTable("admin-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" }) : `<div class="analytics-empty">1차 평가자료가 없습니다.</div>`}
+        <section class="admin-first-evaluation-section">
+          <div class="section-heading"><div><span class="eyebrow">1ST EVALUATION · ADMIN</span><h2>1차 평가</h2><p>심사대기 중인 제안은 시스템 관리자만 1차 평가를 입력·수정할 수 있습니다. 저장 후에도 심사결과는 변경되지 않습니다.</p></div></div>
+          <fieldset id="firstEvaluationFieldset" class="evaluation-fieldset" ${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? "" : "disabled"}>
+            ${renderEvaluationTable("admin-first", proposal.first_evaluation || {}, { title:"제안 평가표", subtitle:"1차 평가 · 관리자 입력/수정" })}
+          </fieldset>
+          <div class="admin-first-evaluation-actions">
+            <div class="evaluation-lock-note ${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? "evaluation-ready-note" : ""}">${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? (proposal.first_evaluation_total == null ? "관리자 1차 평가 입력 가능" : `관리자 1차 평가 수정 가능 · 현재 ${Number(proposal.first_evaluation_total)}점`) : "심사완료 또는 대표이사 상신 이후에는 1차 평가를 수정할 수 없습니다."}</div>
+            <button type="button" class="button button-primary" data-action="save-first-evaluation" data-id="${escapeHtml(proposal.id)}" ${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? "" : "disabled"}>1차 평가 저장</button>
+          </div>
+        </section>
         <div class="admin-image-pair">
           <div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div>
           <div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div>
@@ -2169,6 +2179,24 @@ document.addEventListener("click", async (event) => {
           actionButton.textContent = originalLabel;
           card?.querySelector(".ai-effect-loading")?.remove();
         }
+      }
+    } else if (action === "save-first-evaluation") {
+      if (!state.admin?.isSystemAdmin) throw new Error("시스템 관리자만 1차 평가를 수정할 수 있습니다.");
+      const form = $("#adminReviewForm");
+      const fieldset = $("#firstEvaluationFieldset");
+      if (!form || !fieldset || fieldset.disabled) throw new Error("현재 상태에서는 1차 평가를 수정할 수 없습니다.");
+      const proposalId = actionButton.dataset.id || form.dataset.id;
+      const firstEvaluation = collectEvaluationFromForm(form, "admin-first");
+      actionButton.disabled = true;
+      const originalLabel = actionButton.textContent;
+      actionButton.textContent = "저장 중...";
+      try {
+        await store.saveFirstEvaluation(proposalId, firstEvaluation);
+        await refreshData();
+        renderAdmin("edit", proposalId);
+        showToast(`1차 평가 저장 완료 · ${calculateEvaluationTotal(firstEvaluation)}점`);
+      } finally {
+        if (actionButton.isConnected) { actionButton.disabled = false; actionButton.textContent = originalLabel; }
       }
     } else if (action === "save-approval-action") {
       const box = $("#approvalActionForm");
