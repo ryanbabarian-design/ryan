@@ -37,8 +37,8 @@ import {
 const FIRST_EVALUATION_MIN_PASS = 50;
 
 function requiresFirstEvaluationRewrite(proposal) {
-  const total = proposal?.first_evaluation_total;
-  return total != null && Number(total) < FIRST_EVALUATION_MIN_PASS && proposal?.review_result === "미심사";
+  // V2.5.3: 1차 평가는 50점 미만이면 저장 자체를 차단하므로 제안자 재작성 상태를 만들지 않습니다.
+  return false;
 }
 import { buildPrintModel, PRINT_APPROVAL_ROLES } from "./print.js?v=2.3.15";
 
@@ -1784,7 +1784,7 @@ function renderAdmin(action = "", id = "") {
                   <td><button class="table-title" data-action="detail" data-no="${escapeHtml(p.proposal_no)}">${escapeHtml(p.title)}</button></td>
                   <td>${escapeHtml(p.proposer_name)}<small>${escapeHtml(p.department)}</small></td>
                   <td>${statusBadge(p.status)}</td>
-                  <td>${p.first_evaluation_total == null ? `<span class="evaluation-admin-state pending">미입력</span>` : Number(p.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS ? `<span class="evaluation-admin-state pending">재작성 필요 · ${Number(p.first_evaluation_total)}점</span>` : `<span class="evaluation-admin-state done">완료 ${Number(p.first_evaluation_total)}점</span>`}</td>
+                  <td>${p.first_evaluation_total == null ? `<span class="evaluation-admin-state pending">미입력</span>` : Number(p.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS ? `<span class="evaluation-admin-state pending">기준 미달 · ${Number(p.first_evaluation_total)}점</span>` : `<span class="evaluation-admin-state done">완료 ${Number(p.first_evaluation_total)}점</span>`}</td>
                   <td>${statusBadge(p.review_result)}</td>
                   <td>${statusBadge(p.implementation_status)}</td>
                   <td><button class="button button-small button-primary" data-route="admin/edit/${escapeHtml(p.id)}">1차평가/심사</button></td>
@@ -1849,12 +1849,12 @@ function renderAdminEdit(id) {
           <span>제안자가 작성한 원본 금액입니다. 심사 시 근거를 확인한 뒤 우측에서 최종 금액을 확정하세요.</span>
         </div>
         <section class="admin-first-evaluation-section">
-          <div class="section-heading"><div><span class="eyebrow">1ST EVALUATION · ADMIN</span><h2>1차 평가</h2><p>심사대기 중인 제안은 시스템 관리자만 1차 평가를 입력·수정할 수 있습니다. 총점이 50점 미만이면 재작성 대상이 되며 2차 평가로 진행할 수 없습니다.</p></div></div>
+          <div class="section-heading"><div><span class="eyebrow">1ST EVALUATION · ADMIN</span><h2>1차 평가</h2><p>심사대기 중인 제안은 시스템 관리자만 1차 평가를 입력·수정할 수 있습니다. 1차 평가는 총점 50점 이상만 저장할 수 있습니다. 2차 평가는 심사위원회 평가이므로 총점이 50점 미만이어도 저장할 수 있습니다.</p></div></div>
           <fieldset id="firstEvaluationFieldset" class="evaluation-fieldset" ${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? "" : "disabled"}>
             ${renderEvaluationTable("admin-first", proposal.first_evaluation || {}, { title:"제안 평가표", subtitle:"1차 평가 · 관리자 입력/수정" })}
           </fieldset>
           <div class="admin-first-evaluation-actions">
-            <div class="evaluation-lock-note ${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? "evaluation-ready-note" : ""}">${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? (proposal.first_evaluation_total == null ? "관리자 1차 평가 입력 가능 · 통과기준 50점" : Number(proposal.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS ? `현재 ${Number(proposal.first_evaluation_total)}점 · 50점 미만으로 재작성 필요 · 재작성 후 다시 평가하세요.` : `관리자 1차 평가 수정 가능 · 현재 ${Number(proposal.first_evaluation_total)}점 · 통과`) : "심사완료 또는 대표이사 상신 이후에는 1차 평가를 수정할 수 없습니다."}</div>
+            <div class="evaluation-lock-note ${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? "evaluation-ready-note" : ""}">${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? (proposal.first_evaluation_total == null ? "관리자 1차 평가 입력 가능 · 통과기준 50점" : Number(proposal.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS ? `현재 ${Number(proposal.first_evaluation_total)}점 · 기준 미달 · 50점 이상으로 재평가 후 저장하세요.` : `관리자 1차 평가 수정 가능 · 현재 ${Number(proposal.first_evaluation_total)}점 · 통과`) : "심사완료 또는 대표이사 상신 이후에는 1차 평가를 수정할 수 없습니다."}</div>
             <button type="button" class="button button-primary" data-action="save-first-evaluation" data-id="${escapeHtml(proposal.id)}" ${proposal.review_result === "미심사" && proposal.second_evaluation_total == null && !["상신완료","승인완료"].includes(proposal.ceo_submission_status) ? "" : "disabled"}>1차 평가 저장</button>
           </div>
         </section>
@@ -1941,20 +1941,19 @@ async function hydrateAdminApproval(proposal) {
   const gate = $("#secondEvaluationGateMessage");
   const alreadySubmittedToCeo = ["상신완료","승인완료"].includes(proposal.ceo_submission_status);
   const firstEvaluationPassed = proposal.first_evaluation_total != null && Number(proposal.first_evaluation_total) >= FIRST_EVALUATION_MIN_PASS;
-  const firstEvaluationRewriteRequired = requiresFirstEvaluationRewrite(proposal);
   const canEvaluate = executiveRecord?.status === "승인" && firstEvaluationPassed && !alreadySubmittedToCeo;
   if (fieldset) fieldset.disabled = !canEvaluate;
   if (gate) {
     gate.classList.toggle("evaluation-ready-note", canEvaluate);
     gate.textContent = alreadySubmittedToCeo
       ? "대표이사 상신 이후에는 2차 평가를 수정할 수 없습니다."
-      : firstEvaluationRewriteRequired
-        ? `1차 평가 ${Number(proposal.first_evaluation_total)}점 · 50점 미만으로 재작성 대상입니다. 재작성 및 1차 재평가 완료 전에는 2차 평가를 진행할 수 없습니다.`
-        : proposal.first_evaluation_total == null
-          ? "1차 평가를 먼저 완료하세요. 50점 이상인 경우에만 2차 평가로 진행할 수 있습니다."
+      : proposal.first_evaluation_total == null
+        ? "1차 평가를 먼저 완료하세요. 1차 평가는 50점 이상만 저장됩니다."
+        : !firstEvaluationPassed
+          ? `기존 1차 평가 ${Number(proposal.first_evaluation_total)}점은 기준 미달입니다. 관리자가 50점 이상으로 재평가하여 저장해야 합니다.`
           : canEvaluate
-            ? "1차 평가 50점 이상 및 임원 승인 완료 · 심사위원회 2차 공동평가를 입력할 수 있습니다."
-            : "1차 평가 50점 이상 확인 완료 · 해당부서 임원 승인 후 2차 평가 입력이 활성화됩니다.";
+            ? "1차 평가 완료 및 임원 승인 완료 · 2차 평가는 점수 하한 없이 심사위원회 평가 결과를 저장할 수 있습니다."
+            : "1차 평가 완료 · 해당부서 임원 승인 후 2차 평가 입력이 활성화됩니다.";
   }
   if (canEvaluate) updateEvaluationTotalFromForm($("#adminReviewForm"), "second");
 }
@@ -2209,12 +2208,13 @@ document.addEventListener("click", async (event) => {
       actionButton.textContent = "저장 중...";
       try {
         const firstTotal = calculateEvaluationTotal(firstEvaluation);
+        if (firstTotal < FIRST_EVALUATION_MIN_PASS) {
+          throw new Error(`1차 평가 총점이 ${firstTotal}점입니다. 1차 평가는 50점 이상만 저장할 수 있습니다.`);
+        }
         await store.saveFirstEvaluation(proposalId, firstEvaluation);
         await refreshData();
         renderAdmin("edit", proposalId);
-        showToast(firstTotal < FIRST_EVALUATION_MIN_PASS
-          ? `1차 평가 ${firstTotal}점 · 50점 미만으로 재작성 필요`
-          : `1차 평가 저장 완료 · ${firstTotal}점 · 통과`);
+        showToast(`1차 평가 저장 완료 · ${firstTotal}점`);
       } finally {
         if (actionButton.isConnected) { actionButton.disabled = false; actionButton.textContent = originalLabel; }
       }
@@ -2346,7 +2346,7 @@ document.addEventListener("submit", async (event) => {
       const data = new FormData(event.target);
       const proposal = state.proposals.find((p) => p.id === event.target.dataset.id);
       if (proposal?.first_evaluation_total == null) throw new Error("1차 평가를 먼저 완료하세요.");
-      if (Number(proposal.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS) throw new Error(`1차 평가 ${Number(proposal.first_evaluation_total)}점으로 50점 미만입니다. 제안서를 재작성하고 1차 재평가 후 진행하세요.`);
+      if (Number(proposal.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS) throw new Error(`기존 1차 평가 ${Number(proposal.first_evaluation_total)}점은 기준 미달입니다. 관리자가 50점 이상으로 1차 평가를 다시 저장하세요.`);
       const fieldset = $("#secondEvaluationFieldset");
       if (!fieldset || fieldset.disabled) throw new Error("해당부서 임원 승인 완료 후 2차 평가를 진행하세요.");
       const secondEvaluation = collectEvaluationFromForm(event.target, "second");

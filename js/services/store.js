@@ -330,6 +330,7 @@ class DemoStore {
     const keys = ["originality","effort","feasibility","applicability","continuity","tangible_effect"];
     for (const key of keys) { const v=Number(e[key]); if (!Number.isInteger(v) || v<1 || v>10) throw new Error("평가점수는 각 항목 1~10점으로 입력하세요."); }
     const total = Number(e.originality)*2 + Number(e.effort)*2 + Number(e.feasibility) + Number(e.applicability) + Number(e.continuity) + Number(e.tangible_effect)*3;
+    if (total < 50) throw new Error(`1차 평가 총점이 ${total}점입니다. 1차 평가는 50점 이상만 저장할 수 있습니다.`);
     proposals[index] = normalizeProposal({ ...proposal, first_evaluation:e, first_evaluation_total:total, first_evaluation_completed_at:new Date().toISOString(), updated_at:new Date().toISOString() });
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
     return proposals[index];
@@ -342,7 +343,7 @@ class DemoStore {
     const index = proposals.findIndex((item) => item.id === id);
     if (index < 0) throw new Error("제안을 찾지 못했습니다.");
     if (proposals[index].first_evaluation_total == null) throw new Error("1차 평가를 먼저 완료하세요.");
-    if (Number(proposals[index].first_evaluation_total) < 50) throw new Error(`1차 평가 ${Number(proposals[index].first_evaluation_total)}점으로 50점 미만입니다. 재작성 및 1차 재평가 후 진행하세요.`);
+    if (Number(proposals[index].first_evaluation_total) < 50) throw new Error(`기존 1차 평가 ${Number(proposals[index].first_evaluation_total)}점은 기준 미달입니다. 관리자가 50점 이상으로 1차 평가를 다시 저장하세요.`);
     const e = evaluation || {};
     const keys = ["originality","effort","feasibility","applicability","continuity","tangible_effect"];
     for (const key of keys) { const v=Number(e[key]); if (!Number.isInteger(v) || v<1 || v>10) throw new Error("평가점수는 각 항목 1~10점으로 입력하세요."); }
