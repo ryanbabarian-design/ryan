@@ -341,6 +341,8 @@ class DemoStore {
     const proposals = await this.getProposals();
     const index = proposals.findIndex((item) => item.id === id);
     if (index < 0) throw new Error("제안을 찾지 못했습니다.");
+    if (proposals[index].first_evaluation_total == null) throw new Error("1차 평가를 먼저 완료하세요.");
+    if (Number(proposals[index].first_evaluation_total) < 50) throw new Error(`1차 평가 ${Number(proposals[index].first_evaluation_total)}점으로 50점 미만입니다. 재작성 및 1차 재평가 후 진행하세요.`);
     const e = evaluation || {};
     const keys = ["originality","effort","feasibility","applicability","continuity","tangible_effect"];
     for (const key of keys) { const v=Number(e[key]); if (!Number.isInteger(v) || v<1 || v>10) throw new Error("평가점수는 각 항목 1~10점으로 입력하세요."); }
