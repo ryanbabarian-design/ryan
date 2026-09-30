@@ -50,6 +50,10 @@ function normalizeProposal(row) {
     first_evaluation: {},
     first_evaluation_total: null,
     first_evaluation_completed_at: null,
+    team_leader_evaluation: {},
+    team_leader_evaluation_total: null,
+    team_leader_evaluation_completed_at: null,
+    team_leader_evaluation_by_name: null,
     second_evaluation: {},
     second_evaluation_total: null,
     second_evaluation_completed_at: null,
@@ -336,6 +340,25 @@ class DemoStore {
     return proposals[index];
   }
 
+  async saveTeamLeaderEvaluation(id, evaluation) {
+    const admin = await this.getAdminSession();
+    if (!admin) throw new Error("로그인이 필요합니다.");
+    const proposals = await this.getProposals();
+    const index = proposals.findIndex((item) => item.id === id);
+    if (index < 0) throw new Error("제안을 찾지 못했습니다.");
+    const e = evaluation || {};
+    const keys = ["originality","effort","feasibility","applicability","continuity","tangible_effect"];
+    for (const key of keys) { const v=Number(e[key]); if (!Number.isInteger(v) || v<1 || v>10) throw new Error("평가점수는 각 항목 1~10점으로 입력하세요."); }
+    const total = Number(e.originality)*2 + Number(e.effort)*2 + Number(e.feasibility) + Number(e.applicability) + Number(e.continuity) + Number(e.tangible_effect)*3;
+    const patch = { team_leader_evaluation:e, team_leader_evaluation_total:total, team_leader_evaluation_completed_at:new Date().toISOString(), team_leader_evaluation_by_name:admin.displayName||admin.email, updated_at:new Date().toISOString() };
+    if (total < 50) Object.assign(patch,{ review_result:"미채택", status:"심사완료", score:total, award_grade:"", award_amount:0, locked:true });
+    else if (total < 65) Object.assign(patch,{ review_result:"건수처리", status:"심사완료", score:total, award_grade:"건수처리", award_amount:5000, locked:true });
+    else Object.assign(patch,{ review_result:"미심사", status:"심사중", score:null, award_grade:"", award_amount:0, locked:true });
+    proposals[index] = normalizeProposal({ ...proposals[index], ...patch });
+    localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
+    return proposals[index];
+  }
+
   async saveSecondEvaluation(id, evaluation, reviewPatch) {
     const admin = await this.getAdminSession();
     if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 2차 평가를 저장할 수 있습니다.");
@@ -343,7 +366,8 @@ class DemoStore {
     const index = proposals.findIndex((item) => item.id === id);
     if (index < 0) throw new Error("제안을 찾지 못했습니다.");
     if (proposals[index].first_evaluation_total == null) throw new Error("1차 평가를 먼저 완료하세요.");
-    if (Number(proposals[index].first_evaluation_total) < 50) throw new Error(`기존 1차 평가 ${Number(proposals[index].first_evaluation_total)}점은 기준 미달입니다. 관리자가 50점 이상으로 1차 평가를 다시 저장하세요.`);
+    if (Number(proposals[index].first_evaluation_total) < 50) throw new Error(`기존 1차 평가 ${Number(proposals[index].first_evaluation_total)}점은 기준 미달입니다.`);
+    if (proposals[index].team_leader_evaluation_total == null || Number(proposals[index].team_leader_evaluation_total) < 65) throw new Error("2차 팀장평가 65점 이상인 제안만 3차 심사위원 평가를 진행할 수 있습니다.");
     const e = evaluation || {};
     const keys = ["originality","effort","feasibility","applicability","continuity","tangible_effect"];
     for (const key of keys) { const v=Number(e[key]); if (!Number.isInteger(v) || v<1 || v>10) throw new Error("평가점수는 각 항목 1~10점으로 입력하세요."); }
@@ -672,11 +696,7 @@ class SupabaseStore {
   }
 
   async getProposals() {
-    const { data, error } = await this.client
-      .from("proposal_public")
-      .select("*")
-      .order("received_date", { ascending: false })
-      .order("proposal_no", { ascending: false });
+    const { data, error } = await this.client.rpc("get_public_proposals_v258");
     if (error) throw error;
     return (data || []).map(normalizeProposal);
   }
@@ -884,8 +904,19 @@ class SupabaseStore {
     return normalizeProposal(row);
   }
 
+  async saveTeamLeaderEvaluation(id, evaluation) {
+    const { data, error } = await this.client.rpc("save_team_leader_evaluation_v258", {
+      p_proposal_id: id,
+      p_evaluation: evaluation,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error("2차 팀장평가 저장 결과를 확인하지 못했습니다.");
+    return normalizeProposal(row);
+  }
+
   async saveSecondEvaluation(id, evaluation, reviewPatch) {
-    const { data, error } = await this.client.rpc("save_second_evaluation_v25", {
+    const { data, error } = await this.client.rpc("save_third_evaluation_v258", {
       p_proposal_id: id,
       p_evaluation: evaluation,
       p_review_patch: reviewPatch,
