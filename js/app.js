@@ -1835,9 +1835,23 @@ function renderApprovalAction(permission, proposalId) {
   if (!permission?.assigned) return `<div class="approval-permission blocked"><strong>서명 권한 없음</strong><p>${escapeHtml(permission?.reason || "이 제안에 지정된 본인 결재단계가 없습니다.")}</p></div>`;
   if (!permission.canAct) return `<div class="approval-permission waiting"><strong>본인 결재단계: ${escapeHtml(permission.step.role_name)}</strong><p>${escapeHtml(permission.reason)}</p></div>`;
   const isTeamLeader = permission.step?.role_name === "부서장";
+  if (isTeamLeader) {
+    return `<div id="approvalActionForm" data-proposal-id="${escapeHtml(proposalId)}" data-step-id="${permission.step.id}" data-role-name="${escapeHtml(permission.step.role_name)}" class="approval-action-form team-leader-action-form">
+      <div class="approval-own-step"><small>본인 결재단계</small><strong>${permission.step.step_order}. ${escapeHtml(permission.step.role_name)}</strong><span>${escapeHtml(permission.assignment?.department || "전체 부서")}</span></div>
+      <div class="team-leader-evaluation-box">
+        <div class="team-leader-evaluation-head"><strong>2차 팀장평가</strong><p>50점 미만은 기준미달, 50~64점은 자동 건수처리, 65점 이상은 3차 심사위원 평가로 진행됩니다.</p></div>
+        ${renderEvaluationTable("team", {}, { title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}
+        <div class="evaluation-lock-note" id="teamEvaluationGuide">팀장평가 점수를 입력한 뒤 승인 저장하세요.</div>
+      </div>
+      <div class="team-leader-action-controls">
+        <label class="field">처리<select name="approval_status"><option value="승인">승인</option><option value="반려">반려</option></select></label>
+        <label class="field approval-comment">의견<input name="comment" placeholder="결재의견"></label>
+        <button class="button button-primary" type="button" data-action="save-approval-action">본인 전자서명 저장</button>
+      </div>
+    </div>`;
+  }
   return `<div id="approvalActionForm" data-proposal-id="${escapeHtml(proposalId)}" data-step-id="${permission.step.id}" data-role-name="${escapeHtml(permission.step.role_name)}" class="approval-action-form secure-approval-action">
     <div class="approval-own-step"><small>본인 결재단계</small><strong>${permission.step.step_order}. ${escapeHtml(permission.step.role_name)}</strong><span>${escapeHtml(permission.assignment?.department || "전체 부서")}</span></div>
-    ${isTeamLeader ? `<div class="team-leader-evaluation-box"><strong>2차 팀장평가</strong><p>50점 미만은 기준미달, 50~64점은 자동 건수처리, 65점 이상은 3차 심사위원 평가로 진행됩니다.</p>${renderEvaluationTable("team", {}, { title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}<div class="evaluation-lock-note" id="teamEvaluationGuide">팀장평가 점수를 입력한 뒤 승인 저장하세요.</div></div>` : ""}
     <label class="field">처리<select name="approval_status"><option value="승인">승인</option><option value="반려">반려</option></select></label>
     <label class="field approval-comment">의견<input name="comment" placeholder="결재의견"></label>
     <button class="button button-primary" type="button" data-action="save-approval-action">본인 전자서명 저장</button>
