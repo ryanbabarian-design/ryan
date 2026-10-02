@@ -23,7 +23,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.3.15";
-import { createStore } from "./services/store.js?v=2.5.8";
+import { createStore } from "./services/store.js?v=2.5.9";
 import {
   appendImageFiles,
   createImageSelection,
@@ -160,6 +160,15 @@ function canProposerDeleteProposal(proposal, approvals = []) {
     if (step?.auto_author === true) return false;
     return record?.acted_at || (record?.status && record.status !== "대기");
   });
+}
+
+function rejectedApprovalInfo(approvals = []) {
+  const stepMap = new Map((state.approvalSteps || []).map((step) => [String(step.id), step]));
+  const rejected = (approvals || [])
+    .map((record) => ({ record, step: stepMap.get(String(record.step_id)) }))
+    .filter(({ record, step }) => step?.auto_author !== true && record?.status === "반려")
+    .sort((a, b) => Number(a.step?.step_order || 999) - Number(b.step?.step_order || 999));
+  return rejected[0] || null;
 }
 
 function renderEvaluationTable(prefix, values = {}, { readOnly = false, title = "제안 평가표", subtitle = "" } = {}) {
@@ -1041,7 +1050,7 @@ function renderProposalForm(proposalNo = "") {
       <div>
         <span class="eyebrow">${isEdit ? "EDIT PROPOSAL" : "NEW PROPOSAL"}</span>
         <h1>${isEdit ? `${escapeHtml(proposal.proposal_no)} 제안 수정` : "새 제안 작성"}</h1>
-        <p>${isEdit ? "심사중으로 전환되기 전까지만 4자리 수정번호로 변경할 수 있습니다." : "제출 즉시 접수현황에 공개됩니다. 회사 기밀이나 개인정보는 입력하지 마세요."}</p>
+        <p>${isEdit ? "4자리 수정번호로 변경합니다. 결재 반려 건은 수정 저장과 동시에 해당 결재단계로 자동 재상신됩니다." : "제출 즉시 접수현황에 공개됩니다. 회사 기밀이나 개인정보는 입력하지 마세요."}</p>
       </div>
       <button class="button button-ghost" data-route="list">접수현황 보기</button>
     </section>
@@ -1206,9 +1215,10 @@ function renderDetail(proposalNo) {
           ${statusBadge(proposal.review_result)}
           <button class="button button-ghost print-open-button" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
           ${!proposal.locked && proposal.status === "접수"
-            ? `<button class="button button-secondary" data-route="edit/${escapeHtml(proposal.proposal_no)}">제안자 수정</button>
+            ? `<button id="proposerEditButton" class="button button-secondary" data-route="edit/${escapeHtml(proposal.proposal_no)}">제안자 수정</button>
                <button id="proposerDeleteButton" class="button button-ghost proposer-delete-button" data-action="delete-own-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안자 삭제</button>`
             : ""}
+          <button id="rejectedResubmitButton" hidden class="button button-secondary" data-route="edit/${escapeHtml(proposal.proposal_no)}">반려 수정·재상신</button>
         </div>
       </div>
     </section>
@@ -1268,6 +1278,7 @@ function renderDetail(proposalNo) {
 
     <section class="detail-operation-card approval-progress-card">
       <div class="section-heading"><div><span class="eyebrow">APPROVAL</span><h2>전자결재 진행</h2></div></div>
+      <div id="rejectionResubmitNotice"></div>
       <div id="approvalContent">${proposal.approval_required === true ? renderApprovalProgress(state.approvalSteps, []) : `<div class="approval-not-required"><strong>전자결재 대상 아님</strong><p>V2.3 적용 이전 등록 제안은 전자결재·이메일 알림 대상에서 제외됩니다.</p></div>`}</div>
     </section>
 
@@ -1326,6 +1337,23 @@ async function hydrateDetailOperations(proposal) {
   ]);
   const proposerDeleteButton = $("#proposerDeleteButton");
   if (proposerDeleteButton) proposerDeleteButton.hidden = !canProposerDeleteProposal(proposal, approvals);
+  const rejection = rejectedApprovalInfo(approvals);
+  const normalEditButton = $("#proposerEditButton");
+  const rejectedResubmitButton = $("#rejectedResubmitButton");
+  const rejectionNotice = $("#rejectionResubmitNotice");
+  if (rejection) {
+    if (normalEditButton) normalEditButton.hidden = true;
+    if (proposerDeleteButton) proposerDeleteButton.hidden = true;
+    if (rejectedResubmitButton) rejectedResubmitButton.hidden = false;
+    if (rejectionNotice) {
+      const role = rejection.step?.role_name || "결재자";
+      const comment = rejection.record?.comment || "반려사유가 입력되지 않았습니다.";
+      rejectionNotice.innerHTML = `<div class="first-eval-criteria fail"><strong>${escapeHtml(role)} 반려</strong> · ${escapeHtml(comment)}<br><span>제안자가 내용을 수정해 저장하면 기존 반려이력은 남기고 ${escapeHtml(role)} 결재대기로 자동 재상신됩니다.</span></div>`;
+    }
+  } else {
+    if (rejectedResubmitButton) rejectedResubmitButton.hidden = true;
+    if (rejectionNotice) rejectionNotice.innerHTML = "";
+  }
   const timelineTarget = $("#timelineContent");
   if (timelineTarget) timelineTarget.innerHTML = renderTimelineRows(history.length ? history : buildTimelineFallback(proposal));
   const approvalTarget = $("#approvalContent");
@@ -2083,6 +2111,9 @@ async function handleProposalSubmit(form) {
         after_images: getRetainedImages(afterSelection),
       };
       delete patch.edit_pin;
+      const beforeProposal = state.proposals.find((row) => row.proposal_no === form.dataset.no);
+      const beforeApprovals = beforeProposal ? await store.getApprovalRecords(beforeProposal.id).catch(() => []) : [];
+      const wasRejected = Boolean(rejectedApprovalInfo(beforeApprovals));
       saved = await store.updateProposalWithPin(
         form.dataset.no,
         payload.edit_pin,
@@ -2090,7 +2121,7 @@ async function handleProposalSubmit(form) {
         beforeFiles,
         afterFiles,
       );
-      showToast("제안이 수정되었습니다.");
+      showToast(wasRejected ? "제안을 수정하고 반려 결재단계로 재상신했습니다." : "제안이 수정되었습니다.");
     } else {
       const lastSubmit = Number(localStorage.getItem("proposal:last-submit") || 0);
       if (Date.now() - lastSubmit < 15000) {

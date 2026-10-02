@@ -219,7 +219,16 @@ class DemoStore {
     if (index < 0) throw new Error("접수번호를 찾지 못했습니다.");
 
     const current = proposals[index];
-    if (!isEmployeeEditable(current)) {
+    const steps = await this.getApprovalSteps(true);
+    const allApprovalRecords = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
+    const proposalApprovalRecords = allApprovalRecords.filter((row) => row.proposal_id === current.id);
+    const stepMap = new Map(steps.map((step) => [String(step.id), step]));
+    const rejectedRecords = proposalApprovalRecords
+      .map((record) => ({ record, step: stepMap.get(String(record.step_id)) }))
+      .filter(({ record, step }) => step?.auto_author !== true && record?.status === "반려")
+      .sort((a,b)=>Number(a.step?.step_order||999)-Number(b.step?.step_order||999));
+    const rejectedInfo = rejectedRecords[0] || null;
+    if (!isEmployeeEditable(current) && !rejectedInfo) {
       throw new Error("관리자가 심사를 시작하여 제안자 수정이 잠겼습니다.");
     }
 
@@ -244,15 +253,40 @@ class DemoStore {
       patch.implemented_date ?? current.implemented_date,
     );
 
+    const now = new Date().toISOString();
+    const resetPatch = rejectedInfo ? {
+      status: "접수", review_result: "미심사", locked: false,
+      ceo_submission_status: "미상신", score: null, award_grade: null, award_amount: 0,
+    } : {};
+    if (rejectedInfo && rejectedInfo.step?.role_name === "부서장") {
+      Object.assign(resetPatch, {
+        team_leader_evaluation: {}, team_leader_evaluation_total: null, team_leader_evaluation_completed_at: null, team_leader_evaluation_by_name: null,
+        second_evaluation: {}, second_evaluation_total: null, second_evaluation_completed_at: null, second_evaluation_by_name: null,
+      });
+    }
     proposals[index] = normalizeProposal({
       ...current,
       ...patch,
       ...implementation,
+      ...resetPatch,
       before_images: mergeRetainedWithUploaded(retainedBefore, newBefore),
       after_images: mergeRetainedWithUploaded(retainedAfter, newAfter),
-      updated_at: new Date().toISOString(),
+      updated_at: now,
     });
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
+    if (rejectedInfo) {
+      const rejectOrder = Number(rejectedInfo.step?.step_order || 999);
+      for (const entry of allApprovalRecords) {
+        if (entry.proposal_id !== current.id) continue;
+        const step = stepMap.get(String(entry.step_id));
+        if (!step || step.auto_author === true || Number(step.step_order) < rejectOrder) continue;
+        Object.assign(entry, { status: "대기", comment: null, approver_name: null, acted_at: null, updated_at: now, actionable_at: Number(step.step_order) === rejectOrder ? now : null });
+      }
+      localStorage.setItem(APPROVAL_RECORDS_KEY, JSON.stringify(allApprovalRecords));
+      const history = JSON.parse(localStorage.getItem(STATUS_HISTORY_KEY) || "[]");
+      history.push({ id:`${Date.now()}-resubmit`, proposal_id:current.id, proposal_no:current.proposal_no, stage:"재상신", detail:`${rejectedInfo.step?.role_name || "결재"} 반려 후 제안자가 수정·보완하여 재상신`, actor_name:current.proposer_name, happened_at:now });
+      localStorage.setItem(STATUS_HISTORY_KEY, JSON.stringify(history));
+    }
     return proposals[index];
   }
 
