@@ -719,3 +719,16 @@ body {
 }
 .approval-step.auto-author { border-color: rgba(15,139,109,.28); background: rgba(15,139,109,.05); }
 .approval-step.auto-author strong { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+
+/* V2.6.1 team-leader evaluation layout fix */
+.approver-review-layout.team-leader-review .approver-review-side {
+  grid-column: 1 / -1;
+  position: static;
+  grid-template-columns: minmax(260px, .34fr) minmax(0, 1fr);
+  align-items: start;
+}
+.approver-review-layout.team-leader-review .approver-review-side > .side-card { min-width:0; }
+.approver-review-layout.team-leader-review .team-leader-evaluation-box { min-width:0; width:100%; }
+@media (max-width: 1100px) {
+  .approver-review-layout.team-leader-review .approver-review-side { grid-template-columns:1fr; }
+}
