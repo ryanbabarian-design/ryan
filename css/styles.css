@@ -1160,3 +1160,15 @@ img { max-width: 100%; }
 .rich-text-display{line-height:1.7;overflow-x:auto;white-space:normal;overflow-wrap:anywhere}
 .rich-text-empty{color:#98a2b3}
 @media(max-width:640px){.rich-editor-toolbar span{width:100%;margin-left:0}.rich-text-editor{min-height:130px}.rich-text-editor th,.rich-text-editor td,.rich-text-display th,.rich-text-display td{padding:6px;font-size:12px}}
+
+/* V2.6.4 advanced rich editor controls */
+.rich-editor-toolbar{align-items:flex-start}
+.rich-tool-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-right:8px;border-right:1px solid #e1e6ee}
+.rich-tool-group:last-of-type{border-right:0}
+.rich-select{height:31px;border:1px solid #d7dee8;border-radius:7px;background:#fff;color:#344054;padding:0 7px;font-size:12px;font-weight:700}
+.rich-table-tools{background:#f6f9fd;border-radius:8px;padding:4px 6px}
+.rich-text-editor table{table-layout:auto;max-width:none}
+.rich-text-editor td,.rich-text-editor th{position:relative}
+.rich-text-editor td:focus,.rich-text-editor th:focus{outline:2px solid #3b82f6;outline-offset:-2px}
+.rich-text-display table{max-width:100%}
+@media(max-width:900px){.rich-tool-group{border-right:0;width:100%}.rich-editor-toolbar>span{width:100%;margin-left:0}}
