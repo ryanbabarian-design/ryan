@@ -53,7 +53,7 @@ function sanitizeRichStyle(value = "") {
     if (prop === "text-align" && !/^(left|center|right|justify)$/.test(val)) return;
     if (prop === "line-height" && !/^(1|1\.[0-9]|2(?:\.0)?)$/.test(val)) return;
     if (prop === "padding" && !/^(?:[0-9]|1[0-9]|2[0-4])px$/.test(val)) return;
-    if (["width","min-width","height"].includes(prop) && !/^(?:[2-9][0-9]|[1-9][0-9]{2}|1[0-2][0-9]{2})px$/.test(val)) return;
+    if (["width","min-width","height"].includes(prop) && !/^(?:[2-9][0-9]|[1-9][0-9]{2}|1[0-2][0-9]{2})px$/.test(val) && !(prop === "width" && /^(?:auto|[1-9][0-9]?%|100%)$/.test(val))) return;
     if (["margin-left","margin-right"].includes(prop) && !/^(?:auto|0|(?:[0-9]|[1-9][0-9]|[1-4][0-9]{2})px)$/.test(val)) return;
     if (prop === "background-color" && !/^(#[0-9a-f]{3,8}|rgb\([^)]{1,40}\)|rgba\([^)]{1,50}\)|transparent)$/i.test(val)) return;
     safe.push(`${prop}:${val}`);
@@ -87,7 +87,7 @@ function sanitizeRichTextHtml(value = "") {
         for (const attr of Array.from(child.attributes)) {
           const name = attr.name.toLowerCase();
           const allowedCellAttr = ["colspan", "rowspan", "scope"].includes(name) && ["TD","TH"].includes(tag);
-          const allowedStyle = name === "style" && ["P","DIV","SPAN","TABLE","TR","TD","TH"].includes(tag);
+          const allowedStyle = name === "style" && ["P","DIV","SPAN","LI","TABLE","TR","TD","TH"].includes(tag);
           if (allowedStyle) {
             const cleaned = sanitizeRichStyle(attr.value);
             if (cleaned) child.setAttribute("style", cleaned); else child.removeAttribute("style");
@@ -114,57 +114,96 @@ function renderRichText(value = "") {
   return `<div class="rich-text-display">${html || '<p class="rich-text-empty">-</p>'}</div>`;
 }
 
+// V2.6.7: compact, task-based editor menus. Values stay in the existing HTML fields.
+function parseTableDimensions(rowsValue, colsValue) {
+  const valid = (value) => (typeof value === "string" || typeof value === "number") && String(value).trim() !== "" && Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 20;
+  if (!valid(rowsValue) || !valid(colsValue)) throw new Error("행과 열은 각각 1~20 사이의 정수로 입력하세요.");
+  return { rows: Number(rowsValue), cols: Number(colsValue) };
+}
+
+function richIcon(name) {
+  const paths = {
+    text: '<path d="M4 5h16M12 5v14M8 19h8"/>',
+    paragraph: '<path d="M4 5h16M4 10h12M4 15h16M4 20h9"/>',
+    table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16M15 4v16"/>',
+    expand: '<path d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"/>',
+    chevron: '<path d="m7 10 5 5 5-5"/>',
+  };
+  return `<svg class="rich-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.table}</svg>`;
+}
+
+function richMenuToggle(id, kind, label, icon = kind, hidden = false) {
+  return `<button type="button" class="rich-menu-trigger" data-rich-menu-toggle="${kind}" data-rich-target="${id}" aria-haspopup="dialog" aria-expanded="false" aria-controls="${id}-${kind}-menu" ${hidden ? "hidden" : ""}>${richIcon(icon)}<span>${label}</span>${richIcon("chevron")}</button>`;
+}
+
+function richMenuHeading(title, subtitle = "") {
+  return `<div class="rich-menu-heading"><div><strong>${title}</strong>${subtitle ? `<small>${subtitle}</small>` : ""}</div><button type="button" class="rich-menu-close" data-rich-menu-close aria-label="편집 메뉴 닫기">×</button></div>`;
+}
+
+function tablePickerMarkup(id) {
+  const safeId = escapeHtml(id);
+  return `<button type="button" class="rich-menu-trigger" data-rich-menu-toggle="insert" data-rich-table-picker-toggle data-rich-target="${safeId}" aria-haspopup="dialog" aria-expanded="false" aria-controls="${safeId}-table-picker"><svg class="rich-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16M15 4v16"/></svg><span>표 삽입</span><span class="rich-caret" aria-hidden="true">▾</span></button>
+    <div id="${safeId}-table-picker" class="rich-popover rich-table-picker" data-rich-popover data-rich-table-picker data-rich-target="${safeId}" role="dialog" aria-label="표 삽입 설정" hidden>
+      <div class="rich-menu-heading"><div><strong>표 삽입</strong><small>격자에서 원하는 크기를 골라 클릭하세요.</small></div><button type="button" class="rich-menu-close" data-rich-menu-close aria-label="표 삽입 닫기" disabled>×</button></div>
+      <div class="rich-grid-caption"><strong data-rich-table-preview aria-live="polite">3행 × 3열</strong><span>최대 20행 × 20열</span></div>
+      <div class="rich-picker-grid" role="group" aria-label="빠른 크기 선택. 방향키로 이동하고 Enter로 삽입">
+        ${Array.from({ length: 8 }, (_, r) => Array.from({ length: 10 }, (_, c) => `<button type="button" class="rich-picker-cell" data-rich-table-cell data-row="${r + 1}" data-col="${c + 1}" tabindex="${r === 2 && c === 2 ? "0" : "-1"}" aria-label="${r + 1}행 ${c + 1}열 표 삽입" disabled></button>`).join("")).join("")}
+      </div>
+      <div class="rich-menu-section"><h4>크기 직접 입력</h4><div class="rich-size-fields">
+        <label>행 <span class="rich-unit-input"><input type="number" data-rich-table-size="rows" min="1" max="20" step="1" value="3" inputmode="numeric" aria-label="표 행 수" disabled><span>행</span></span></label>
+        <span class="rich-size-times" aria-hidden="true">×</span>
+        <label>열 <span class="rich-unit-input"><input type="number" data-rich-table-size="cols" min="1" max="20" step="1" value="3" inputmode="numeric" aria-label="표 열 수" disabled><span>열</span></span></label>
+      </div><p class="rich-menu-error" data-rich-table-error role="status" hidden></p></div>
+      <button type="button" class="rich-menu-primary" data-rich-table-confirm disabled>3행 × 3열 표 삽입</button>
+    </div>`;
+}
+
 function richEditorMarkup({ id, name, value = "", placeholder = "" }) {
   const safe = sanitizeRichTextHtml(value);
-  return `
-    <div class="rich-editor-shell">
-      <div class="rich-editor-toolbar" role="toolbar" aria-label="문서 편집 도구" data-rich-toolbar-for="${id}">
-        <div class="rich-tool-group">
-          <button type="button" class="rich-tool" data-rich-command="bold" data-rich-target="${id}"><b>B</b></button>
-          <button type="button" class="rich-tool" data-rich-command="italic" data-rich-target="${id}"><i>I</i></button>
-          <button type="button" class="rich-tool" data-rich-command="underline" data-rich-target="${id}"><u>U</u></button>
-          <select class="rich-select" data-rich-format="font-size" data-rich-target="${id}" aria-label="글자 크기">
-            <option value="">글자크기</option><option value="10">10</option><option value="12">12</option><option value="14">14</option><option value="16">16</option><option value="18">18</option><option value="20">20</option><option value="24">24</option><option value="28">28</option><option value="32">32</option>
-          </select>
-          <select class="rich-select" data-rich-format="line-height" data-rich-target="${id}" aria-label="줄 간격">
-            <option value="">줄간격</option><option value="1">1.0</option><option value="1.2">1.2</option><option value="1.4">1.4</option><option value="1.6">1.6</option><option value="1.8">1.8</option><option value="2">2.0</option>
-          </select>
+  const title = ({current_problem:"현재 문제점", improvement_plan:"개선방안", expected_effect:"기대효과"})[name] || "본문";
+  const cmd = (command, text, shortcut = "") => `<button type="button" class="rich-menu-option" data-rich-command="${command}" data-rich-target="${id}" aria-label="${text.replace(/<[^>]+>/g, "")}" title="${shortcut || text.replace(/<[^>]+>/g, "")}" disabled>${text}</button>`;
+  const action = (actionName, label, dangerous = false) => `<button type="button" class="rich-menu-option${dangerous ? " is-danger" : ""}" data-rich-table-action="${actionName}" data-rich-target="${id}" disabled>${label}</button>`;
+  return `<div class="rich-editor-shell" data-rich-shell="${id}">
+      <div class="rich-expanded-heading"><strong>${title} 편집</strong><span>내용은 작성란에 반영됩니다. 완료 후 제안서를 저장하세요.</span></div>
+      <div class="rich-editor-toolbar" role="toolbar" aria-label="${title} 편집 도구" data-rich-toolbar-for="${id}">
+        <div class="rich-primary-tools">
+          ${richMenuToggle(id, "text", "글자")}
+          ${richMenuToggle(id, "paragraph", "문단")}
+          ${tablePickerMarkup(id)}
+          ${richMenuToggle(id, "table", "표 편집", "table", true)}
         </div>
-        <div class="rich-tool-group">
-          <button type="button" class="rich-tool" data-rich-command="justifyLeft" data-rich-target="${id}">왼쪽</button>
-          <button type="button" class="rich-tool" data-rich-command="justifyCenter" data-rich-target="${id}">가운데</button>
-          <button type="button" class="rich-tool" data-rich-command="justifyRight" data-rich-target="${id}">오른쪽</button>
-          <button type="button" class="rich-tool" data-rich-command="insertUnorderedList" data-rich-target="${id}">• 목록</button>
+        <button type="button" class="rich-expand-button" data-rich-expand="${id}" aria-pressed="false" title="넓은 화면에서 편집">${richIcon("expand")}<span>크게 보기</span></button>
+        <div id="${id}-text-menu" class="rich-popover" data-rich-popover data-rich-target="${id}" role="dialog" aria-label="글자 서식" hidden>
+          ${richMenuHeading("글자 서식", "선택한 글자에 적용합니다.")}
+          <div class="rich-menu-section"><label class="rich-setting-row">글자 크기<select data-rich-format="font-size" data-rich-target="${id}" aria-label="글자 크기" disabled><option value="">크기 선택</option>${[10,12,14,16,18,20,24,28,32].map(n=>`<option value="${n}">${n}px</option>`).join("")}</select></label></div>
+          <div class="rich-menu-section"><h4>글자 강조</h4><div class="rich-options three">${cmd("bold", "<b>굵게</b>", "Ctrl+B")}${cmd("italic", "<i>기울임</i>", "Ctrl+I")}${cmd("underline", "<u>밑줄</u>", "Ctrl+U")}</div></div>
+          <p class="rich-menu-note">글자를 드래그해 선택한 뒤 서식을 바꾸세요.<br>글자 크기는 선택이 없으면 현재 문단에 적용됩니다.</p>
         </div>
-        <div class="rich-tool-group rich-table-tools">
-          <select class="rich-select rich-table-size" data-rich-table-size="rows" data-rich-target="${id}" aria-label="표 행 수">
-            <option value="1">1행</option><option value="2">2행</option><option value="3" selected>3행</option><option value="4">4행</option><option value="5">5행</option><option value="6">6행</option><option value="7">7행</option><option value="8">8행</option><option value="9">9행</option><option value="10">10행</option><option value="12">12행</option><option value="15">15행</option><option value="20">20행</option>
-          </select>
-          <select class="rich-select rich-table-size" data-rich-table-size="cols" data-rich-target="${id}" aria-label="표 열 수">
-            <option value="1">1열</option><option value="2">2열</option><option value="3" selected>3열</option><option value="4">4열</option><option value="5">5열</option><option value="6">6열</option><option value="7">7열</option><option value="8">8열</option><option value="9">9열</option><option value="10">10열</option><option value="12">12열</option><option value="15">15열</option><option value="20">20열</option>
-          </select>
-          <button type="button" class="rich-tool" data-rich-command="insert-table" data-rich-target="${id}">표 삽입</button>
-          <button type="button" class="rich-tool" data-rich-table-action="row-add" data-rich-target="${id}">행+</button>
-          <button type="button" class="rich-tool" data-rich-table-action="row-delete" data-rich-target="${id}">행−</button>
-          <button type="button" class="rich-tool" data-rich-table-action="col-add" data-rich-target="${id}">열+</button>
-          <button type="button" class="rich-tool" data-rich-table-action="col-delete" data-rich-target="${id}">열−</button>
-          <button type="button" class="rich-tool" data-rich-table-action="col-move-left" data-rich-target="${id}">열←</button>
-          <button type="button" class="rich-tool" data-rich-table-action="col-move-right" data-rich-target="${id}">열→</button>
-          <button type="button" class="rich-tool" data-rich-table-action="col-narrow" data-rich-target="${id}">열폭−</button>
-          <button type="button" class="rich-tool" data-rich-table-action="col-wide" data-rich-target="${id}">열폭+</button>
-          <select class="rich-select" data-rich-table-format="padding" data-rich-target="${id}" aria-label="셀 여백">
-            <option value="">셀여백</option><option value="4">좁게</option><option value="8">보통</option><option value="12">넓게</option><option value="16">매우넓게</option>
-          </select>
-          <select class="rich-select" data-rich-table-format="row-height" data-rich-target="${id}" aria-label="행 높이">
-            <option value="">행높이</option><option value="28">28</option><option value="36">36</option><option value="44">44</option><option value="56">56</option><option value="72">72</option>
-          </select>
-          <select class="rich-select" data-rich-table-format="table-align" data-rich-target="${id}" aria-label="표 위치">
-            <option value="">표위치</option><option value="left">왼쪽</option><option value="center">가운데</option><option value="right">오른쪽</option>
-          </select>
+        <div id="${id}-paragraph-menu" class="rich-popover" data-rich-popover data-rich-target="${id}" role="dialog" aria-label="문단 정렬과 간격" hidden>
+          ${richMenuHeading("문단", "커서가 있는 문단 또는 선택한 문단에 적용")}
+          <div class="rich-menu-section"><h4>글자 정렬</h4><div class="rich-options three">${cmd("justifyLeft", "왼쪽")}${cmd("justifyCenter", "가운데")}${cmd("justifyRight", "오른쪽")}</div></div>
+          <div class="rich-menu-section"><label class="rich-setting-row">줄 간격<select data-rich-format="line-height" data-rich-target="${id}" aria-label="줄 간격" disabled><option value="">간격 선택</option>${[1,1.2,1.4,1.6,1.8,2].map(n=>`<option value="${n}">${Math.round(n*100)}%</option>`).join("")}</select></label></div>
+          <div class="rich-menu-section"><h4>목록</h4><div class="rich-options two">${cmd("insertUnorderedList", "• 글머리 목록")}${cmd("insertOrderedList", "1. 번호 목록")}</div></div>
         </div>
-        <span>행·열 개수를 선택해 원하는 크기의 표를 만들 수 있습니다. 만든 뒤에도 행+/행−, 열+/열−로 자유롭게 조정할 수 있습니다.</span>
+        <div id="${id}-table-menu" class="rich-popover rich-table-menu" data-rich-popover data-rich-target="${id}" role="dialog" aria-label="표 편집" hidden>
+          ${richMenuHeading("표 편집", "표 안의 셀을 클릭하면 이 메뉴가 나타납니다.")}
+          <div class="rich-cell-context" data-rich-cell-context>표 안의 셀을 선택하세요.</div>
+          <div class="rich-menu-section"><h4>행·열 추가 및 삭제</h4><div class="rich-options two">${action("row-add", "아래 행 추가")}${action("col-add", "오른쪽 열 추가")}${action("row-delete", "선택 행 삭제", true)}${action("col-delete", "선택 열 삭제", true)}</div></div>
+          <div class="rich-menu-section"><h4>선택한 열 이동</h4><div class="rich-options two">${action("col-move-left", "← 왼쪽으로 이동")}${action("col-move-right", "오른쪽으로 이동 →")}</div></div>
+          <div class="rich-menu-section"><h4>크기와 여백</h4>
+            <label class="rich-setting-row">선택한 열 너비<span class="rich-step-controls">${action("col-narrow", "− 좁게")}${action("col-wide", "+ 넓게")}</span></label>
+            <label class="rich-setting-row">선택한 행 높이<select data-rich-table-format="row-height" data-rich-target="${id}" aria-label="선택한 행 높이" disabled><option value="auto">자동</option>${[28,36,44,56,72].map(n=>`<option value="${n}">${n}px</option>`).join("")}</select></label>
+            <label class="rich-setting-row">표 전체 셀 여백<select data-rich-table-format="padding" data-rich-target="${id}" aria-label="표 전체 셀 여백" disabled><option value="">현재 설정</option><option value="4">좁게 · 4px</option><option value="8">보통 · 8px</option><option value="12">넓게 · 12px</option><option value="16">아주 넓게 · 16px</option></select></label>
+          </div>
+          <div class="rich-menu-section"><h4>표 전체 배치</h4>
+            <label class="rich-setting-row">표 너비<select data-rich-table-format="table-width" data-rich-target="${id}" aria-label="표 너비" disabled><option value="100%">본문 전체 · 100%</option><option value="80%">본문의 80%</option><option value="60%">본문의 60%</option><option value="auto">내용에 맞춤</option></select></label>
+            <label class="rich-setting-row">표 위치<select data-rich-table-format="table-align" data-rich-target="${id}" aria-label="표 위치" disabled><option value="left">왼쪽</option><option value="center">가운데</option><option value="right">오른쪽</option></select></label>
+            <p class="rich-menu-note">표 너비가 본문보다 작을 때 좌우 이동이 보입니다.</p>
+          </div>
+        </div>
       </div>
-      <div id="${id}" class="rich-text-editor" contenteditable="true" role="textbox" aria-multiline="true" data-rich-field="${name}" data-placeholder="${escapeHtml(placeholder)}">${safe}</div>
+      <div id="${id}" class="rich-text-editor" contenteditable="true" tabindex="0" role="textbox" aria-label="${title}" aria-multiline="true" data-rich-field="${name}" data-placeholder="${escapeHtml(placeholder)}">${safe}</div>
+      <div class="rich-editor-footer"><span data-rich-context>본문 편집</span><span>Excel 표 붙여넣기 · Ctrl+V</span></div>
       <textarea name="${name}" class="rich-text-storage" hidden>${escapeHtml(safe)}</textarea>
     </div>`;
 }
@@ -183,113 +222,320 @@ function syncAllRichEditors(form) {
 }
 
 const richSelectionRanges = new WeakMap();
+let activeRichPopover = null;
+let expandedRichEditor = null;
+
+function focusRichControl(element) {
+  if (!element) return;
+  // Cancel a pending smooth focus/scroll animation before opening a fixed menu.
+  const x = window.scrollX, y = window.scrollY;
+  window.scrollTo({ left:x, top:y, behavior:"instant" });
+  element.focus({ preventScroll:true });
+  window.scrollTo({ left:x, top:y, behavior:"instant" });
+}
+
 function rememberRichSelection(editor) {
   const selection = window.getSelection();
   if (!editor || !selection?.rangeCount) return;
   const range = selection.getRangeAt(0);
   if (editor.contains(range.commonAncestorContainer)) richSelectionRanges.set(editor, range.cloneRange());
 }
+
 function restoreRichSelection(editor) {
-  const range = richSelectionRanges.get(editor);
-  if (!range) { editor?.focus(); return false; }
+  if (!editor) return false;
+  let range = richSelectionRanges.get(editor);
+  if (!range || !editor.contains(range.commonAncestorContainer)) {
+    range = document.createRange(); range.selectNodeContents(editor); range.collapse(false);
+  }
+  focusRichControl(editor);
   const selection = window.getSelection();
-  selection.removeAllRanges(); selection.addRange(range); editor.focus(); return true;
+  selection.removeAllRanges(); selection.addRange(range);
+  return true;
 }
+
+function closestRichCell(editor) {
+  if (!editor) return null;
+  const selection = window.getSelection();
+  let node = selection?.anchorNode;
+  if (!node || !editor.contains(node)) node = richSelectionRanges.get(editor)?.startContainer;
+  if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
+  const cell = node?.closest?.("td,th");
+  return cell && editor.contains(cell) ? cell : null;
+}
+
+function updateRichContext(editor) {
+  if (!editor?.isConnected) return;
+  const shell = editor.closest(".rich-editor-shell");
+  const cell = closestRichCell(editor);
+  const toggle = shell?.querySelector('[data-rich-menu-toggle="table"]');
+  if (toggle) toggle.hidden = !cell;
+  const context = cell ? `표 ${cell.parentElement.rowIndex + 1}행 · ${cell.cellIndex + 1}열 선택` : "본문 편집";
+  const footer = shell?.querySelector("[data-rich-context]"); if (footer) footer.textContent = context;
+  const tableContext = shell?.querySelector("[data-rich-cell-context]"); if (tableContext) tableContext.textContent = context;
+  shell?.querySelectorAll("[data-rich-command]").forEach(button => {
+    let pressed = false;
+    try { pressed = document.queryCommandState(button.dataset.richCommand); } catch { /* Unsupported command state is not a write failure. */ }
+    button.classList.toggle("is-active", pressed); button.setAttribute("aria-pressed", String(pressed));
+  });
+}
+
+function closeRichPopover(returnFocus = false) {
+  if (!activeRichPopover) return;
+  const { panel, trigger } = activeRichPopover;
+  panel.hidden = true;
+  panel.querySelectorAll("input,select,button").forEach(control => { control.disabled = true; });
+  trigger.setAttribute("aria-expanded", "false");
+  activeRichPopover = null;
+  if (returnFocus && trigger.isConnected) focusRichControl(trigger);
+}
+
+function positionRichPopover() {
+  if (!activeRichPopover) return;
+  const { panel, trigger } = activeRichPopover;
+  if (!trigger.isConnected || trigger.hidden) { closeRichPopover(); return; }
+  const rect = trigger.getBoundingClientRect();
+  const viewport = window.innerWidth;
+  const width = Math.min(panel.classList.contains("rich-table-menu") ? 340 : 316, viewport - 16);
+  panel.style.width = `${width}px`;
+  panel.style.left = `${Math.max(8, Math.min(rect.left, viewport - width - 8))}px`;
+  panel.style.top = `${rect.bottom + 8}px`;
+  panel.style.maxHeight = `${Math.max(100, window.innerHeight - rect.bottom - 20)}px`;
+}
+
+function paintTablePicker(panel, rows, cols) {
+  panel.querySelector("[data-rich-table-preview]").textContent = `${rows}행 × ${cols}열`;
+  panel.querySelectorAll("[data-rich-table-cell]").forEach(cell => {
+    const selected = Number(cell.dataset.row) <= rows && Number(cell.dataset.col) <= cols;
+    cell.classList.toggle("is-selected", selected);
+  });
+}
+
+function validateTablePicker(panel) {
+  const error = panel.querySelector("[data-rich-table-error]");
+  const confirm = panel.querySelector("[data-rich-table-confirm]");
+  try {
+    const size = parseTableDimensions(panel.querySelector('[data-rich-table-size="rows"]').value, panel.querySelector('[data-rich-table-size="cols"]').value);
+    paintTablePicker(panel, size.rows, size.cols);
+    error.hidden = true; error.textContent = "";
+    confirm.disabled = false; confirm.textContent = `${size.rows}행 × ${size.cols}열 표 삽입`;
+    return size;
+  } catch (err) {
+    error.hidden = false; error.textContent = err.message;
+    confirm.disabled = true; confirm.textContent = "표 삽입";
+    return null;
+  }
+}
+
+function openRichPopover(trigger) {
+  const editor = document.getElementById(trigger.dataset.richTarget);
+  if (!editor || trigger.hidden) return;
+  if (activeRichPopover?.trigger === trigger) { closeRichPopover(true); return; }
+  rememberRichSelection(editor);
+  closeRichPopover();
+  const panel = document.getElementById(trigger.getAttribute("aria-controls"));
+  if (!panel) return;
+  // Keep the picker below its trigger even when opening close to the viewport bottom.
+  if (window.innerHeight - trigger.getBoundingClientRect().bottom < 300) trigger.scrollIntoView({ block: "center", behavior: "instant" });
+  panel.hidden = false;
+  panel.querySelectorAll("input,select,button").forEach(control => { control.disabled = false; });
+  activeRichPopover = { editor, panel, trigger };
+  trigger.setAttribute("aria-expanded", "true");
+  if (panel.hasAttribute("data-rich-table-picker")) validateTablePicker(panel);
+  const cell = closestRichCell(editor);
+  if (cell && panel.id.endsWith("-table-menu")) {
+    const table = cell.closest("table");
+    panel.querySelector('[data-rich-table-format="row-height"]').value = parseInt(cell.parentElement.style.height, 10) || "auto";
+    panel.querySelector('[data-rich-table-format="padding"]').value = parseInt(cell.style.padding, 10) || "";
+    panel.querySelector('[data-rich-table-format="table-width"]').value = table.style.width || "100%";
+    panel.querySelector('[data-rich-table-format="table-align"]').value = table.style.marginLeft === "auto" ? (table.style.marginRight === "auto" ? "center" : "right") : "left";
+  }
+  positionRichPopover();
+  const initial = panel.querySelector('[data-rich-table-cell][tabindex="0"]') || panel.querySelector('select,input,button:not([data-rich-menu-close])');
+  focusRichControl(initial);
+}
+
 function insertHtmlAtCursor(html) { document.execCommand("insertHTML", false, html); }
 function tsvToTableHtml(text) {
   const rows = String(text || "").replace(/\r/g, "").split("\n").filter((row) => row.length);
   if (!rows.length || !rows.some((row) => row.includes("\t"))) return "";
   return `<table><tbody>${rows.map((row) => `<tr>${row.split("\t").map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table><p><br></p>`;
 }
-function getRequestedTableSize(editor) {
-  const toolbar = document.querySelector(`[data-rich-toolbar-for="${editor.id}"]`);
-  const rows = Math.max(1, Math.min(20, Number(toolbar?.querySelector('[data-rich-table-size="rows"]')?.value || 3)));
-  const cols = Math.max(1, Math.min(20, Number(toolbar?.querySelector('[data-rich-table-size="cols"]')?.value || 3)));
-  return { rows, cols };
-}
 function buildTableHtml(rows, cols) {
+  const size = parseTableDimensions(rows, cols);
   const headerNames = ["구분", "내용", "비고"];
-  const header = `<tr>${Array.from({ length: cols }, (_, index) => `<th>${escapeHtml(headerNames[index] || `열 ${index + 1}`)}</th>`).join("")}</tr>`;
-  const body = Array.from({ length: Math.max(0, rows - 1) }, () => `<tr>${Array.from({ length: cols }, () => '<td><br></td>').join("")}</tr>`).join("");
+  const header = `<tr>${Array.from({ length: size.cols }, (_, index) => `<th>${escapeHtml(headerNames[index] || `열 ${index + 1}`)}</th>`).join("")}</tr>`;
+  const body = Array.from({ length: size.rows - 1 }, () => `<tr>${Array.from({ length: size.cols }, () => '<td><br></td>').join("")}</tr>`).join("");
   return `<table><tbody>${header}${body}</tbody></table><p><br></p>`;
 }
-function insertDefaultTable(editor) {
-  const { rows, cols } = getRequestedTableSize(editor);
-  restoreRichSelection(editor);
-  insertHtmlAtCursor(buildTableHtml(rows, cols));
-  rememberRichSelection(editor);
-  syncRichEditor(editor);
-  showToast(`${rows}행 × ${cols}열 표를 삽입했습니다.`);
+function insertChosenTable(editor, rows, cols) {
+  const size = parseTableDimensions(rows, cols);
+  closeRichPopover(); restoreRichSelection(editor);
+  insertHtmlAtCursor(buildTableHtml(size.rows, size.cols));
+  rememberRichSelection(editor); syncRichEditor(editor); updateRichContext(editor);
+  showToast(`${size.rows}행 × ${size.cols}열 표를 삽입했습니다.`);
 }
-function closestRichCell(editor) {
-  const selection = window.getSelection();
-  let node = selection?.anchorNode;
-  if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
-  let cell = node?.closest?.("td,th");
-  if (!cell || !editor.contains(cell)) {
-    const range = richSelectionRanges.get(editor); let n = range?.startContainer;
-    if (n?.nodeType === Node.TEXT_NODE) n = n.parentElement;
-    cell = n?.closest?.("td,th");
+
+function selectedRichTextNodes(editor, range) {
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (!node.data.length || !range.intersectsNode(node)) continue;
+    const start = node === range.startContainer ? range.startOffset : 0;
+    const end = node === range.endContainer ? range.endOffset : node.data.length;
+    if (end > start) nodes.push({ node, start, end });
   }
-  return cell && editor.contains(cell) ? cell : null;
+  return nodes;
 }
+
 function applyStyleToSelection(editor, property, value) {
   restoreRichSelection(editor);
   const selection = window.getSelection();
   if (!selection?.rangeCount) return;
   const range = selection.getRangeAt(0);
-  if (range.collapsed) {
-    let node = selection.anchorNode; if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
-    const block = node?.closest?.("p,div,li,td,th") || node;
-    if (block && editor.contains(block)) block.style[property] = value;
+  const nearestBlock = (node) => {
+    const element = node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    const block = element?.closest?.("p,li,td,th,div");
+    return block && block !== editor && editor.contains(block) ? block : null;
+  };
+  if (property !== "fontSize" || range.collapsed) {
+    const nodes = range.collapsed ? [] : selectedRichTextNodes(editor, range);
+    let blocks = [...new Set(nodes.map(({ node }) => nearestBlock(node)).filter(Boolean))];
+    if (!blocks.length) blocks = [nearestBlock(range.startContainer)].filter(Boolean);
+    if (!blocks.length) {
+      // Never style only the contenteditable root: it is not part of saved HTML.
+      const block = document.createElement("div");
+      while (editor.firstChild) block.appendChild(editor.firstChild);
+      if (!block.firstChild) block.innerHTML = "<br>";
+      editor.appendChild(block); blocks = [block];
+      const caret = document.createRange(); caret.selectNodeContents(block); caret.collapse(false);
+      selection.removeAllRanges(); selection.addRange(caret);
+    }
+    blocks.forEach(block => { block.style[property] = value; });
   } else {
-    const span = document.createElement("span"); span.style[property] = value;
-    try { range.surroundContents(span); } catch { const frag = range.extractContents(); span.appendChild(frag); range.insertNode(span); }
-    selection.removeAllRanges(); const r = document.createRange(); r.selectNodeContents(span); selection.addRange(r);
+    // Format text leaves, not a whole HTML range that may include table boundaries.
+    const nodes = selectedRichTextNodes(editor, range);
+    const spans = [];
+    nodes.forEach(({ node, start, end }) => {
+      const part = document.createRange(); part.setStart(node, start); part.setEnd(node, end);
+      const span = document.createElement("span"); span.style[property] = value;
+      part.surroundContents(span); spans.push(span);
+    });
+    if (spans.length) {
+      const updated = document.createRange(); updated.setStartBefore(spans[0]); updated.setEndAfter(spans[spans.length - 1]);
+      selection.removeAllRanges(); selection.addRange(updated);
+    }
   }
-  rememberRichSelection(editor); syncRichEditor(editor);
+  rememberRichSelection(editor); syncRichEditor(editor); updateRichContext(editor);
 }
+
+function focusRichCell(editor, cell) {
+  if (!cell || !editor.contains(cell)) return;
+  focusRichControl(editor);
+  const range = document.createRange(); range.selectNodeContents(cell); range.collapse(true);
+  const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+  rememberRichSelection(editor);
+}
+
 function applyRichTableAction(editor, action) {
   restoreRichSelection(editor);
   const cell = closestRichCell(editor); if (!cell) throw new Error("먼저 수정할 표 셀을 클릭하세요.");
-  const row = cell.parentElement; const table = cell.closest("table"); const cellIndex = Array.from(row.cells).indexOf(cell);
+  const row = cell.parentElement; const table = cell.closest("table"); const cellIndex = cell.cellIndex;
+  if ([...table.querySelectorAll("td,th")].some(c => c.colSpan > 1 || c.rowSpan > 1)) throw new Error("병합된 셀이 있는 표는 행·열 변경을 지원하지 않습니다. 원본에서 병합을 해제한 후 붙여넣어 주세요. 글자와 여백은 그대로 편집할 수 있습니다.");
+  let nextCell = cell;
   if (action === "row-add") {
-    const clone = row.cloneNode(true); Array.from(clone.cells).forEach((c) => { c.innerHTML = "<br>"; }); row.after(clone);
+    const clone = row.cloneNode(true); Array.from(clone.cells).forEach(c => { c.innerHTML = "<br>"; }); row.after(clone);
   } else if (action === "row-delete") {
-    if (table.rows.length <= 1) throw new Error("마지막 행은 삭제할 수 없습니다."); row.remove();
+    if (table.rows.length <= 1) throw new Error("마지막 행은 삭제할 수 없습니다.");
+    const nextRow = table.rows[row.rowIndex + 1] || table.rows[row.rowIndex - 1];
+    nextCell = nextRow.cells[Math.min(cellIndex, nextRow.cells.length - 1)]; row.remove();
   } else if (action === "col-add") {
-    Array.from(table.rows).forEach((r) => { const ref = r.cells[cellIndex]; const n = document.createElement(ref?.tagName?.toLowerCase() === "th" ? "th" : "td"); n.innerHTML = "<br>"; ref?.after(n); });
+    Array.from(table.rows).forEach(r => {
+      const ref = r.cells[cellIndex]; const n = document.createElement(ref?.tagName === "TH" ? "th" : "td");
+      n.innerHTML = "<br>"; if (ref) ref.after(n); else r.appendChild(n);
+    });
   } else if (action === "col-delete") {
-    if (row.cells.length <= 1) throw new Error("마지막 열은 삭제할 수 없습니다."); Array.from(table.rows).forEach((r) => r.cells[cellIndex]?.remove());
+    if (row.cells.length <= 1) throw new Error("마지막 열은 삭제할 수 없습니다.");
+    nextCell = row.cells[cellIndex + 1] || row.cells[cellIndex - 1];
+    Array.from(table.rows).forEach(r => r.cells[cellIndex]?.remove());
   } else if (action === "col-move-left" || action === "col-move-right") {
     const direction = action === "col-move-left" ? -1 : 1;
     const targetIndex = cellIndex + direction;
     if (targetIndex < 0 || targetIndex >= row.cells.length) throw new Error(direction < 0 ? "이미 가장 왼쪽 열입니다." : "이미 가장 오른쪽 열입니다.");
-    Array.from(table.rows).forEach((r) => {
-      const moving = r.cells[cellIndex];
-      const target = r.cells[targetIndex];
-      if (!moving || !target) return;
-      if (direction < 0) r.insertBefore(moving, target);
-      else r.insertBefore(moving, target.nextSibling);
+    Array.from(table.rows).forEach(r => {
+      const moving = r.cells[cellIndex]; const target = r.cells[targetIndex];
+      if (moving && target) r.insertBefore(moving, direction < 0 ? target : target.nextSibling);
     });
   } else if (action === "col-wide" || action === "col-narrow") {
-    const delta = action === "col-wide" ? 30 : -30; const current = Math.max(60, parseInt(cell.style.width || getComputedStyle(cell).width, 10) || 120); const next = Math.min(1200, Math.max(60, current + delta));
-    Array.from(table.rows).forEach((r) => { if (r.cells[cellIndex]) { r.cells[cellIndex].style.width = `${next}px`; r.cells[cellIndex].style.minWidth = `${next}px`; } });
+    const current = Math.max(60, parseInt(cell.style.width || getComputedStyle(cell).width, 10) || 120);
+    const next = Math.min(1200, Math.max(60, current + (action === "col-wide" ? 30 : -30)));
+    Array.from(table.rows).forEach(r => { if (r.cells[cellIndex]) { r.cells[cellIndex].style.width = `${next}px`; r.cells[cellIndex].style.minWidth = `${next}px`; } });
   }
-  syncRichEditor(editor);
+  focusRichCell(editor, nextCell); syncRichEditor(editor); updateRichContext(editor);
 }
+
 function applyRichTableFormat(editor, type, rawValue) {
   restoreRichSelection(editor);
   const cell = closestRichCell(editor); if (!cell) throw new Error("먼저 수정할 표 셀을 클릭하세요.");
-  if (type === "padding") cell.closest("table").querySelectorAll("th,td").forEach((c) => { c.style.padding = `${Number(rawValue)}px`; });
-  if (type === "row-height") cell.parentElement.style.height = `${Number(rawValue)}px`;
+  const table = cell.closest("table");
+  if (type === "padding" && [4,8,12,16].includes(Number(rawValue))) table.querySelectorAll("th,td").forEach(c => { c.style.padding = `${Number(rawValue)}px`; });
+  if (type === "row-height") {
+    if (rawValue === "auto") cell.parentElement.style.removeProperty("height");
+    else if ([28,36,44,56,72].includes(Number(rawValue))) cell.parentElement.style.height = `${Number(rawValue)}px`;
+  }
+  if (type === "table-width" && ["100%", "80%", "60%", "auto"].includes(rawValue)) table.style.width = rawValue;
   if (type === "table-align") {
-    const table = cell.closest("table");
     if (rawValue === "left") { table.style.marginLeft = "0"; table.style.marginRight = "auto"; }
     if (rawValue === "center") { table.style.marginLeft = "auto"; table.style.marginRight = "auto"; }
     if (rawValue === "right") { table.style.marginLeft = "auto"; table.style.marginRight = "0"; }
   }
-  syncRichEditor(editor);
+  rememberRichSelection(editor); syncRichEditor(editor); updateRichContext(editor);
+}
+
+function toggleRichExpanded(editor) {
+  closeRichPopover();
+  const shell = editor?.closest(".rich-editor-shell"); if (!shell) return;
+  if (expandedRichEditor?.editor === editor) { closeRichExpanded(); return; }
+  if (expandedRichEditor) closeRichExpanded();
+  rememberRichSelection(editor);
+  const placeholder = document.createElement("div");
+  placeholder.style.height = `${shell.getBoundingClientRect().height}px`;
+  shell.before(placeholder);
+  const backdrop = document.createElement("div"); backdrop.className = "rich-focus-backdrop"; backdrop.setAttribute("aria-hidden", "true");
+  document.body.appendChild(backdrop);
+  expandedRichEditor = { editor, shell, placeholder, backdrop, scrollX:window.scrollX, scrollY:window.scrollY };
+  document.body.classList.add("rich-focus-mode"); shell.classList.add("is-expanded");
+  shell.setAttribute("role", "dialog"); shell.setAttribute("aria-modal", "true"); shell.setAttribute("aria-label", `${editor.getAttribute("aria-label")} 크게 편집`);
+  const button = shell.querySelector("[data-rich-expand]"); button.setAttribute("aria-pressed", "true"); button.querySelector("span").textContent = "편집 마치기";
+  restoreRichSelection(editor);
+}
+
+function closeRichExpanded() {
+  if (!expandedRichEditor) return;
+  closeRichPopover();
+  const { shell, placeholder, backdrop, editor, scrollX, scrollY } = expandedRichEditor;
+  syncRichEditor(editor); shell.classList.remove("is-expanded"); shell.removeAttribute("role"); shell.removeAttribute("aria-modal"); shell.removeAttribute("aria-label");
+  placeholder.remove(); backdrop.remove(); document.body.classList.remove("rich-focus-mode");
+  const button = shell.querySelector("[data-rich-expand]"); button.setAttribute("aria-pressed", "false"); button.querySelector("span").textContent = "크게 보기";
+  expandedRichEditor = null; window.scrollTo({left:scrollX,top:scrollY,behavior:"instant"}); focusRichControl(button);
+}
+
+function handleRichClick(event) {
+  const toggle = event.target.closest?.("[data-rich-menu-toggle]");
+  if (toggle) { event.preventDefault(); openRichPopover(toggle); return true; }
+  const close = event.target.closest?.("[data-rich-menu-close]");
+  if (close) { event.preventDefault(); closeRichPopover(true); return true; }
+  const expand = event.target.closest?.("[data-rich-expand]");
+  if (expand) { event.preventDefault(); toggleRichExpanded(document.getElementById(expand.dataset.richExpand)); return true; }
+  const grid = event.target.closest?.("[data-rich-table-cell]");
+  if (grid && activeRichPopover) { event.preventDefault(); insertChosenTable(activeRichPopover.editor, grid.dataset.row, grid.dataset.col); return true; }
+  const confirm = event.target.closest?.("[data-rich-table-confirm]");
+  if (confirm && activeRichPopover) {
+    event.preventDefault(); const size = validateTablePicker(activeRichPopover.panel);
+    if (size) insertChosenTable(activeRichPopover.editor, size.rows, size.cols);
+    return true;
+  }
+  return false;
 }
 
 function requiresFirstEvaluationRewrite(proposal) {
@@ -1376,9 +1622,9 @@ function renderProposalForm(proposalNo = "") {
         <div class="comparison-grid">
           <div class="comparison-card before">
             <div class="comparison-label">BEFORE · 개선 전</div>
-            <label class="field">현재 문제점 <b>*</b>
+            <div class="field rich-field"><span class="rich-field-label">현재 문제점 <b>*</b></span>
               ${richEditorMarkup({ id:"currentProblemEditor", name:"current_problem", value:proposal?.current_problem || "", placeholder:"어떤 문제가 있고, 왜 불편하거나 위험한지 작성" })}
-            </label>
+            </div>
             <label class="upload-box image-add-box">개선 전 사진 추가
               <input id="beforeImages" type="file" accept="image/jpeg,image/png,image/webp" multiple>
               <span>한 장씩 여러 번 추가하거나 여러 장을 한꺼번에 선택할 수 있습니다.</span>
@@ -1391,9 +1637,9 @@ function renderProposalForm(proposalNo = "") {
 
           <div class="comparison-card after">
             <div class="comparison-label">AFTER · 개선 후</div>
-            <label class="field">개선방안 <b>*</b>
+            <div class="field rich-field"><span class="rich-field-label">개선방안 <b>*</b></span>
               ${richEditorMarkup({ id:"improvementPlanEditor", name:"improvement_plan", value:proposal?.improvement_plan || "", placeholder:"무엇을 어떻게 바꿀지 구체적으로 작성" })}
-            </label>
+            </div>
             <label class="upload-box image-add-box">개선 후·참고 사진 추가
               <input id="afterImages" type="file" accept="image/jpeg,image/png,image/webp" multiple>
               <span>한 장씩 여러 번 추가할 수 있으며, 실시 전이면 도면·예시 사진도 가능합니다.</span>
@@ -1406,9 +1652,9 @@ function renderProposalForm(proposalNo = "") {
 
       <section class="form-section">
         <div class="form-section-title"><span>04</span><div><h2>효과 및 비용</h2><p>정량효과가 없더라도 안전·품질·작업성 개선 내용을 작성하세요.</p></div></div>
-        <label class="field">기대효과 <b>*</b>
+        <div class="field rich-field"><span class="rich-field-label">기대효과 <b>*</b></span>
           ${richEditorMarkup({ id:"expectedEffectEditor", name:"expected_effect", value:proposal?.expected_effect || "", placeholder:"예: 작업시간 1회당 10분 단축, 비산 위험 감소, 불량 방지" })}
-        </label>
+        </div>
         <div class="form-grid two">
           <label class="field compact">예상 투입비용(원)
             <input name="cost_amount" type="number" min="0" step="1000" value="${Number(proposal?.cost_amount || 0)}">
@@ -2486,6 +2732,7 @@ function downloadCsv(year = "all", month = "") {
 }
 
 document.addEventListener("click", async (event) => {
+  if (handleRichClick(event)) return;
   const richTableTool = event.target.closest?.("[data-rich-table-action]");
   if (richTableTool) {
     event.preventDefault();
@@ -2499,11 +2746,13 @@ document.addEventListener("click", async (event) => {
     const editor = document.getElementById(richTool.dataset.richTarget);
     if (!editor) return;
     const command = richTool.dataset.richCommand;
-    if (command === "insert-table") insertDefaultTable(editor);
+    const alignment = { justifyLeft:"left", justifyCenter:"center", justifyRight:"right" }[command];
+    if (alignment) applyStyleToSelection(editor, "textAlign", alignment);
     else {
       restoreRichSelection(editor);
+      document.execCommand("styleWithCSS", false, false);
       document.execCommand(command, false, null);
-      rememberRichSelection(editor); syncRichEditor(editor);
+      rememberRichSelection(editor); syncRichEditor(editor); updateRichContext(editor);
     }
     return;
   }
@@ -2891,14 +3140,73 @@ document.addEventListener("change", (event) => {
 });
 
 
-document.addEventListener("mousedown", (event) => {
-  if (event.target.closest?.(".rich-editor-toolbar button")) event.preventDefault();
+document.addEventListener("pointerdown", (event) => {
+  const trigger = event.target.closest?.("[data-rich-menu-toggle],[data-rich-expand]");
+  if (trigger) rememberRichSelection(document.getElementById(trigger.dataset.richTarget || trigger.dataset.richExpand));
+  if (activeRichPopover && !activeRichPopover.panel.contains(event.target) && !activeRichPopover.trigger.contains(event.target)) closeRichPopover();
+});
+
+document.addEventListener("mousedown", event => {
+  // Editing actions retain the caret; form inputs and menu triggers stay keyboard-focusable.
+  if (event.target.closest?.("[data-rich-command],[data-rich-table-action]")) event.preventDefault();
 });
 
 document.addEventListener("selectionchange", () => {
-  const selection = window.getSelection(); let node = selection?.anchorNode; if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
-  const editor = node?.closest?.(".rich-text-editor"); if (editor) rememberRichSelection(editor);
+  let node = window.getSelection()?.anchorNode;
+  if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
+  const editor = node?.closest?.(".rich-text-editor");
+  if (editor) { rememberRichSelection(editor); updateRichContext(editor); }
 });
+
+document.addEventListener("pointerover", event => {
+  const cell = event.target.closest?.("[data-rich-table-cell]");
+  if (!cell || !activeRichPopover) return;
+  const panel = activeRichPopover.panel;
+  panel.querySelector('[data-rich-table-size="rows"]').value = cell.dataset.row;
+  panel.querySelector('[data-rich-table-size="cols"]').value = cell.dataset.col;
+  validateTablePicker(panel);
+});
+
+document.addEventListener("input", event => {
+  if (event.target.matches?.("[data-rich-table-size]") && activeRichPopover) validateTablePicker(activeRichPopover.panel);
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") {
+    if (activeRichPopover) { event.preventDefault(); event.stopPropagation(); closeRichPopover(true); return; }
+    if (expandedRichEditor) { event.preventDefault(); closeRichExpanded(); return; }
+  }
+  const toggle = event.target.closest?.("[data-rich-menu-toggle]");
+  if (toggle && event.key === "ArrowDown") { event.preventDefault(); openRichPopover(toggle); return; }
+  const cell = event.target.closest?.("[data-rich-table-cell]");
+  if (cell && activeRichPopover && ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(event.key)) {
+    event.preventDefault();
+    const row = Math.max(1, Math.min(8, Number(cell.dataset.row) + (event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0)));
+    const col = Math.max(1, Math.min(10, Number(cell.dataset.col) + (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0)));
+    const panel = activeRichPopover.panel;
+    panel.querySelectorAll("[data-rich-table-cell]").forEach(c => { c.tabIndex = -1; });
+    const next = panel.querySelector(`[data-row="${row}"][data-col="${col}"]`); next.tabIndex = 0; focusRichControl(next);
+    panel.querySelector('[data-rich-table-size="rows"]').value = row;
+    panel.querySelector('[data-rich-table-size="cols"]').value = col; validateTablePicker(panel); return;
+  }
+  if (event.key === "Enter" && event.target.matches?.("[data-rich-table-size]")) {
+    event.preventDefault(); const size = activeRichPopover && validateTablePicker(activeRichPopover.panel);
+    if (size) insertChosenTable(activeRichPopover.editor, size.rows, size.cols);
+    return;
+  }
+  if (event.key === "Tab") {
+    const scope = activeRichPopover?.panel || expandedRichEditor?.shell;
+    if (scope) {
+      const focusable = [...scope.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),[contenteditable="true"]')].filter(el => el.getClientRects().length && el.tabIndex !== -1);
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && event.target === first) { event.preventDefault(); last?.focus(); }
+      if (!event.shiftKey && event.target === last) { event.preventDefault(); first?.focus(); }
+    }
+  }
+});
+window.addEventListener("resize", positionRichPopover);
+document.addEventListener("scroll", positionRichPopover, true);
+window.addEventListener("hashchange", () => { closeRichPopover(); closeRichExpanded(); });
 
 document.addEventListener("change", (event) => {
   const format = event.target.closest?.("[data-rich-format]");
@@ -2906,13 +3214,12 @@ document.addEventListener("change", (event) => {
     const editor = document.getElementById(format.dataset.richTarget); if (!editor || !format.value) return;
     if (format.dataset.richFormat === "font-size") applyStyleToSelection(editor, "fontSize", `${format.value}px`);
     if (format.dataset.richFormat === "line-height") applyStyleToSelection(editor, "lineHeight", format.value);
-    format.value = ""; return;
+    return;
   }
   const tableFormat = event.target.closest?.("[data-rich-table-format]");
   if (tableFormat) {
     const editor = document.getElementById(tableFormat.dataset.richTarget); if (!editor || !tableFormat.value) return;
     try { applyRichTableFormat(editor, tableFormat.dataset.richTableFormat, tableFormat.value); } catch (error) { showToast(error.message || "표 편집 중 오류가 발생했습니다.", true); }
-    tableFormat.value = ""; return;
   }
 });
 
@@ -2929,13 +3236,13 @@ document.addEventListener("paste", (event) => {
   event.preventDefault();
   editor.focus();
   insertHtmlAtCursor(hasTable ? sanitizeRichTextHtml(html) : tsvTable);
-  syncRichEditor(editor);
+  rememberRichSelection(editor); syncRichEditor(editor); updateRichContext(editor);
 });
 
 document.addEventListener("input", (event) => {
   const richEditor = event.target.closest?.(".rich-text-editor");
   if (richEditor) {
-    syncRichEditor(richEditor);
+    syncRichEditor(richEditor); updateRichContext(richEditor);
     const form = richEditor.closest("#proposalForm");
     if (form) {
       const title = form.querySelector("#proposalTitle")?.value || "";
