@@ -137,7 +137,13 @@ function richEditorMarkup({ id, name, value = "", placeholder = "" }) {
           <button type="button" class="rich-tool" data-rich-command="insertUnorderedList" data-rich-target="${id}">• 목록</button>
         </div>
         <div class="rich-tool-group rich-table-tools">
-          <button type="button" class="rich-tool" data-rich-command="insert-table" data-rich-target="${id}">표 3×3</button>
+          <select class="rich-select rich-table-size" data-rich-table-size="rows" data-rich-target="${id}" aria-label="표 행 수">
+            <option value="1">1행</option><option value="2">2행</option><option value="3" selected>3행</option><option value="4">4행</option><option value="5">5행</option><option value="6">6행</option><option value="7">7행</option><option value="8">8행</option><option value="9">9행</option><option value="10">10행</option><option value="12">12행</option><option value="15">15행</option><option value="20">20행</option>
+          </select>
+          <select class="rich-select rich-table-size" data-rich-table-size="cols" data-rich-target="${id}" aria-label="표 열 수">
+            <option value="1">1열</option><option value="2">2열</option><option value="3" selected>3열</option><option value="4">4열</option><option value="5">5열</option><option value="6">6열</option><option value="7">7열</option><option value="8">8열</option><option value="9">9열</option><option value="10">10열</option><option value="12">12열</option><option value="15">15열</option><option value="20">20열</option>
+          </select>
+          <button type="button" class="rich-tool" data-rich-command="insert-table" data-rich-target="${id}">표 삽입</button>
           <button type="button" class="rich-tool" data-rich-table-action="row-add" data-rich-target="${id}">행+</button>
           <button type="button" class="rich-tool" data-rich-table-action="row-delete" data-rich-target="${id}">행−</button>
           <button type="button" class="rich-tool" data-rich-table-action="col-add" data-rich-target="${id}">열+</button>
@@ -156,7 +162,7 @@ function richEditorMarkup({ id, name, value = "", placeholder = "" }) {
             <option value="">표위치</option><option value="left">왼쪽</option><option value="center">가운데</option><option value="right">오른쪽</option>
           </select>
         </div>
-        <span>표 셀을 클릭한 뒤 열←·열→로 순서를 바꾸거나 표 위치를 왼쪽·가운데·오른쪽으로 이동할 수 있습니다.</span>
+        <span>행·열 개수를 선택해 원하는 크기의 표를 만들 수 있습니다. 만든 뒤에도 행+/행−, 열+/열−로 자유롭게 조정할 수 있습니다.</span>
       </div>
       <div id="${id}" class="rich-text-editor" contenteditable="true" role="textbox" aria-multiline="true" data-rich-field="${name}" data-placeholder="${escapeHtml(placeholder)}">${safe}</div>
       <textarea name="${name}" class="rich-text-storage" hidden>${escapeHtml(safe)}</textarea>
@@ -195,10 +201,25 @@ function tsvToTableHtml(text) {
   if (!rows.length || !rows.some((row) => row.includes("\t"))) return "";
   return `<table><tbody>${rows.map((row) => `<tr>${row.split("\t").map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table><p><br></p>`;
 }
+function getRequestedTableSize(editor) {
+  const toolbar = document.querySelector(`[data-rich-toolbar-for="${editor.id}"]`);
+  const rows = Math.max(1, Math.min(20, Number(toolbar?.querySelector('[data-rich-table-size="rows"]')?.value || 3)));
+  const cols = Math.max(1, Math.min(20, Number(toolbar?.querySelector('[data-rich-table-size="cols"]')?.value || 3)));
+  return { rows, cols };
+}
+function buildTableHtml(rows, cols) {
+  const headerNames = ["구분", "내용", "비고"];
+  const header = `<tr>${Array.from({ length: cols }, (_, index) => `<th>${escapeHtml(headerNames[index] || `열 ${index + 1}`)}</th>`).join("")}</tr>`;
+  const body = Array.from({ length: Math.max(0, rows - 1) }, () => `<tr>${Array.from({ length: cols }, () => '<td><br></td>').join("")}</tr>`).join("");
+  return `<table><tbody>${header}${body}</tbody></table><p><br></p>`;
+}
 function insertDefaultTable(editor) {
+  const { rows, cols } = getRequestedTableSize(editor);
   restoreRichSelection(editor);
-  insertHtmlAtCursor('<table><tbody><tr><th>구분</th><th>내용</th><th>비고</th></tr><tr><td><br></td><td><br></td><td><br></td></tr><tr><td><br></td><td><br></td><td><br></td></tr></tbody></table><p><br></p>');
+  insertHtmlAtCursor(buildTableHtml(rows, cols));
+  rememberRichSelection(editor);
   syncRichEditor(editor);
+  showToast(`${rows}행 × ${cols}열 표를 삽입했습니다.`);
 }
 function closestRichCell(editor) {
   const selection = window.getSelection();
