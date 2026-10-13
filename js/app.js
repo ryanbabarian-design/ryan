@@ -38,7 +38,7 @@ const FIRST_EVALUATION_MIN_PASS = 50;
 
 const RICH_TEXT_ALLOWED_TAGS = new Set(["P","DIV","BR","STRONG","B","EM","I","U","UL","OL","LI","TABLE","THEAD","TBODY","TFOOT","TR","TD","TH","CAPTION","SPAN"]);
 const RICH_TEXT_DROP_TAGS = new Set(["SCRIPT","STYLE","IFRAME","OBJECT","EMBED","FORM","INPUT","BUTTON","SELECT","TEXTAREA","SVG","MATH"]);
-const RICH_TEXT_ALLOWED_STYLES = new Set(["font-size","text-align","line-height","padding","width","min-width","height","background-color"]);
+const RICH_TEXT_ALLOWED_STYLES = new Set(["font-size","text-align","line-height","padding","width","min-width","height","background-color","margin-left","margin-right"]);
 
 function sanitizeRichStyle(value = "") {
   const safe = [];
@@ -54,6 +54,7 @@ function sanitizeRichStyle(value = "") {
     if (prop === "line-height" && !/^(1|1\.[0-9]|2(?:\.0)?)$/.test(val)) return;
     if (prop === "padding" && !/^(?:[0-9]|1[0-9]|2[0-4])px$/.test(val)) return;
     if (["width","min-width","height"].includes(prop) && !/^(?:[2-9][0-9]|[1-9][0-9]{2}|1[0-2][0-9]{2})px$/.test(val)) return;
+    if (["margin-left","margin-right"].includes(prop) && !/^(?:auto|0|(?:[0-9]|[1-9][0-9]|[1-4][0-9]{2})px)$/.test(val)) return;
     if (prop === "background-color" && !/^(#[0-9a-f]{3,8}|rgb\([^)]{1,40}\)|rgba\([^)]{1,50}\)|transparent)$/i.test(val)) return;
     safe.push(`${prop}:${val}`);
   });
@@ -141,6 +142,8 @@ function richEditorMarkup({ id, name, value = "", placeholder = "" }) {
           <button type="button" class="rich-tool" data-rich-table-action="row-delete" data-rich-target="${id}">행−</button>
           <button type="button" class="rich-tool" data-rich-table-action="col-add" data-rich-target="${id}">열+</button>
           <button type="button" class="rich-tool" data-rich-table-action="col-delete" data-rich-target="${id}">열−</button>
+          <button type="button" class="rich-tool" data-rich-table-action="col-move-left" data-rich-target="${id}">열←</button>
+          <button type="button" class="rich-tool" data-rich-table-action="col-move-right" data-rich-target="${id}">열→</button>
           <button type="button" class="rich-tool" data-rich-table-action="col-narrow" data-rich-target="${id}">열폭−</button>
           <button type="button" class="rich-tool" data-rich-table-action="col-wide" data-rich-target="${id}">열폭+</button>
           <select class="rich-select" data-rich-table-format="padding" data-rich-target="${id}" aria-label="셀 여백">
@@ -149,8 +152,11 @@ function richEditorMarkup({ id, name, value = "", placeholder = "" }) {
           <select class="rich-select" data-rich-table-format="row-height" data-rich-target="${id}" aria-label="행 높이">
             <option value="">행높이</option><option value="28">28</option><option value="36">36</option><option value="44">44</option><option value="56">56</option><option value="72">72</option>
           </select>
+          <select class="rich-select" data-rich-table-format="table-align" data-rich-target="${id}" aria-label="표 위치">
+            <option value="">표위치</option><option value="left">왼쪽</option><option value="center">가운데</option><option value="right">오른쪽</option>
+          </select>
         </div>
-        <span>표 셀을 클릭한 뒤 행·열·간격·너비를 조정할 수 있습니다.</span>
+        <span>표 셀을 클릭한 뒤 열←·열→로 순서를 바꾸거나 표 위치를 왼쪽·가운데·오른쪽으로 이동할 수 있습니다.</span>
       </div>
       <div id="${id}" class="rich-text-editor" contenteditable="true" role="textbox" aria-multiline="true" data-rich-field="${name}" data-placeholder="${escapeHtml(placeholder)}">${safe}</div>
       <textarea name="${name}" class="rich-text-storage" hidden>${escapeHtml(safe)}</textarea>
@@ -234,6 +240,17 @@ function applyRichTableAction(editor, action) {
     Array.from(table.rows).forEach((r) => { const ref = r.cells[cellIndex]; const n = document.createElement(ref?.tagName?.toLowerCase() === "th" ? "th" : "td"); n.innerHTML = "<br>"; ref?.after(n); });
   } else if (action === "col-delete") {
     if (row.cells.length <= 1) throw new Error("마지막 열은 삭제할 수 없습니다."); Array.from(table.rows).forEach((r) => r.cells[cellIndex]?.remove());
+  } else if (action === "col-move-left" || action === "col-move-right") {
+    const direction = action === "col-move-left" ? -1 : 1;
+    const targetIndex = cellIndex + direction;
+    if (targetIndex < 0 || targetIndex >= row.cells.length) throw new Error(direction < 0 ? "이미 가장 왼쪽 열입니다." : "이미 가장 오른쪽 열입니다.");
+    Array.from(table.rows).forEach((r) => {
+      const moving = r.cells[cellIndex];
+      const target = r.cells[targetIndex];
+      if (!moving || !target) return;
+      if (direction < 0) r.insertBefore(moving, target);
+      else r.insertBefore(moving, target.nextSibling);
+    });
   } else if (action === "col-wide" || action === "col-narrow") {
     const delta = action === "col-wide" ? 30 : -30; const current = Math.max(60, parseInt(cell.style.width || getComputedStyle(cell).width, 10) || 120); const next = Math.min(1200, Math.max(60, current + delta));
     Array.from(table.rows).forEach((r) => { if (r.cells[cellIndex]) { r.cells[cellIndex].style.width = `${next}px`; r.cells[cellIndex].style.minWidth = `${next}px`; } });
@@ -245,6 +262,12 @@ function applyRichTableFormat(editor, type, rawValue) {
   const cell = closestRichCell(editor); if (!cell) throw new Error("먼저 수정할 표 셀을 클릭하세요.");
   if (type === "padding") cell.closest("table").querySelectorAll("th,td").forEach((c) => { c.style.padding = `${Number(rawValue)}px`; });
   if (type === "row-height") cell.parentElement.style.height = `${Number(rawValue)}px`;
+  if (type === "table-align") {
+    const table = cell.closest("table");
+    if (rawValue === "left") { table.style.marginLeft = "0"; table.style.marginRight = "auto"; }
+    if (rawValue === "center") { table.style.marginLeft = "auto"; table.style.marginRight = "auto"; }
+    if (rawValue === "right") { table.style.marginLeft = "auto"; table.style.marginRight = "0"; }
+  }
   syncRichEditor(editor);
 }
 
