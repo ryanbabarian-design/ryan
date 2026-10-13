@@ -23,7 +23,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.3.15";
-import { createStore } from "./services/store.js?v=2.5.9";
+import { createStore } from "./services/store.js?v=2.6.4";
 import {
   appendImageFiles,
   createImageSelection,
@@ -38,11 +38,31 @@ const FIRST_EVALUATION_MIN_PASS = 50;
 
 const RICH_TEXT_ALLOWED_TAGS = new Set(["P","DIV","BR","STRONG","B","EM","I","U","UL","OL","LI","TABLE","THEAD","TBODY","TFOOT","TR","TD","TH","CAPTION","SPAN"]);
 const RICH_TEXT_DROP_TAGS = new Set(["SCRIPT","STYLE","IFRAME","OBJECT","EMBED","FORM","INPUT","BUTTON","SELECT","TEXTAREA","SVG","MATH"]);
+const RICH_TEXT_ALLOWED_STYLES = new Set(["font-size","text-align","line-height","padding","width","min-width","height","background-color"]);
+
+function sanitizeRichStyle(value = "") {
+  const safe = [];
+  String(value || "").split(";").forEach((part) => {
+    const idx = part.indexOf(":");
+    if (idx < 0) return;
+    const prop = part.slice(0, idx).trim().toLowerCase();
+    let val = part.slice(idx + 1).trim();
+    if (!RICH_TEXT_ALLOWED_STYLES.has(prop)) return;
+    if (/url\s*\(|expression\s*\(|javascript:/i.test(val)) return;
+    if (prop === "font-size" && !/^(?:[8-9]|1[0-9]|2[0-9]|3[0-6])px$/.test(val)) return;
+    if (prop === "text-align" && !/^(left|center|right|justify)$/.test(val)) return;
+    if (prop === "line-height" && !/^(1|1\.[0-9]|2(?:\.0)?)$/.test(val)) return;
+    if (prop === "padding" && !/^(?:[0-9]|1[0-9]|2[0-4])px$/.test(val)) return;
+    if (["width","min-width","height"].includes(prop) && !/^(?:[2-9][0-9]|[1-9][0-9]{2}|1[0-2][0-9]{2})px$/.test(val)) return;
+    if (prop === "background-color" && !/^(#[0-9a-f]{3,8}|rgb\([^)]{1,40}\)|rgba\([^)]{1,50}\)|transparent)$/i.test(val)) return;
+    safe.push(`${prop}:${val}`);
+  });
+  return safe.join(";");
+}
 
 function sanitizeRichTextHtml(value = "") {
   const source = String(value ?? "");
   if (!source.trim()) return "";
-  // 기존 일반 텍스트 데이터는 줄바꿈을 유지해 HTML로 표시합니다.
   if (!/<[a-z][\s\S]*>/i.test(source)) {
     return source.split(/\n{2,}/).map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br>")}</p>`).join("");
   }
@@ -66,7 +86,11 @@ function sanitizeRichTextHtml(value = "") {
         for (const attr of Array.from(child.attributes)) {
           const name = attr.name.toLowerCase();
           const allowedCellAttr = ["colspan", "rowspan", "scope"].includes(name) && ["TD","TH"].includes(tag);
-          if (!allowedCellAttr) child.removeAttribute(attr.name);
+          const allowedStyle = name === "style" && ["P","DIV","SPAN","TABLE","TR","TD","TH"].includes(tag);
+          if (allowedStyle) {
+            const cleaned = sanitizeRichStyle(attr.value);
+            if (cleaned) child.setAttribute("style", cleaned); else child.removeAttribute("style");
+          } else if (!allowedCellAttr) child.removeAttribute(attr.name);
         }
         cleanNode(child);
       } else if (child.nodeType !== Node.TEXT_NODE) {
@@ -93,11 +117,40 @@ function richEditorMarkup({ id, name, value = "", placeholder = "" }) {
   const safe = sanitizeRichTextHtml(value);
   return `
     <div class="rich-editor-shell">
-      <div class="rich-editor-toolbar" role="toolbar" aria-label="문서 편집 도구">
-        <button type="button" class="rich-tool" data-rich-command="bold" data-rich-target="${id}"><b>B</b></button>
-        <button type="button" class="rich-tool" data-rich-command="insertUnorderedList" data-rich-target="${id}">• 목록</button>
-        <button type="button" class="rich-tool" data-rich-command="insert-table" data-rich-target="${id}">표 3×3</button>
-        <span>엑셀·구글시트 표를 복사해서 그대로 붙여넣을 수 있습니다.</span>
+      <div class="rich-editor-toolbar" role="toolbar" aria-label="문서 편집 도구" data-rich-toolbar-for="${id}">
+        <div class="rich-tool-group">
+          <button type="button" class="rich-tool" data-rich-command="bold" data-rich-target="${id}"><b>B</b></button>
+          <button type="button" class="rich-tool" data-rich-command="italic" data-rich-target="${id}"><i>I</i></button>
+          <button type="button" class="rich-tool" data-rich-command="underline" data-rich-target="${id}"><u>U</u></button>
+          <select class="rich-select" data-rich-format="font-size" data-rich-target="${id}" aria-label="글자 크기">
+            <option value="">글자크기</option><option value="10">10</option><option value="12">12</option><option value="14">14</option><option value="16">16</option><option value="18">18</option><option value="20">20</option><option value="24">24</option><option value="28">28</option><option value="32">32</option>
+          </select>
+          <select class="rich-select" data-rich-format="line-height" data-rich-target="${id}" aria-label="줄 간격">
+            <option value="">줄간격</option><option value="1">1.0</option><option value="1.2">1.2</option><option value="1.4">1.4</option><option value="1.6">1.6</option><option value="1.8">1.8</option><option value="2">2.0</option>
+          </select>
+        </div>
+        <div class="rich-tool-group">
+          <button type="button" class="rich-tool" data-rich-command="justifyLeft" data-rich-target="${id}">왼쪽</button>
+          <button type="button" class="rich-tool" data-rich-command="justifyCenter" data-rich-target="${id}">가운데</button>
+          <button type="button" class="rich-tool" data-rich-command="justifyRight" data-rich-target="${id}">오른쪽</button>
+          <button type="button" class="rich-tool" data-rich-command="insertUnorderedList" data-rich-target="${id}">• 목록</button>
+        </div>
+        <div class="rich-tool-group rich-table-tools">
+          <button type="button" class="rich-tool" data-rich-command="insert-table" data-rich-target="${id}">표 3×3</button>
+          <button type="button" class="rich-tool" data-rich-table-action="row-add" data-rich-target="${id}">행+</button>
+          <button type="button" class="rich-tool" data-rich-table-action="row-delete" data-rich-target="${id}">행−</button>
+          <button type="button" class="rich-tool" data-rich-table-action="col-add" data-rich-target="${id}">열+</button>
+          <button type="button" class="rich-tool" data-rich-table-action="col-delete" data-rich-target="${id}">열−</button>
+          <button type="button" class="rich-tool" data-rich-table-action="col-narrow" data-rich-target="${id}">열폭−</button>
+          <button type="button" class="rich-tool" data-rich-table-action="col-wide" data-rich-target="${id}">열폭+</button>
+          <select class="rich-select" data-rich-table-format="padding" data-rich-target="${id}" aria-label="셀 여백">
+            <option value="">셀여백</option><option value="4">좁게</option><option value="8">보통</option><option value="12">넓게</option><option value="16">매우넓게</option>
+          </select>
+          <select class="rich-select" data-rich-table-format="row-height" data-rich-target="${id}" aria-label="행 높이">
+            <option value="">행높이</option><option value="28">28</option><option value="36">36</option><option value="44">44</option><option value="56">56</option><option value="72">72</option>
+          </select>
+        </div>
+        <span>표 셀을 클릭한 뒤 행·열·간격·너비를 조정할 수 있습니다.</span>
       </div>
       <div id="${id}" class="rich-text-editor" contenteditable="true" role="textbox" aria-multiline="true" data-rich-field="${name}" data-placeholder="${escapeHtml(placeholder)}">${safe}</div>
       <textarea name="${name}" class="rich-text-storage" hidden>${escapeHtml(safe)}</textarea>
@@ -117,19 +170,81 @@ function syncAllRichEditors(form) {
   $$(".rich-text-editor", form).forEach(syncRichEditor);
 }
 
-function insertHtmlAtCursor(html) {
-  document.execCommand("insertHTML", false, html);
+const richSelectionRanges = new WeakMap();
+function rememberRichSelection(editor) {
+  const selection = window.getSelection();
+  if (!editor || !selection?.rangeCount) return;
+  const range = selection.getRangeAt(0);
+  if (editor.contains(range.commonAncestorContainer)) richSelectionRanges.set(editor, range.cloneRange());
 }
-
+function restoreRichSelection(editor) {
+  const range = richSelectionRanges.get(editor);
+  if (!range) { editor?.focus(); return false; }
+  const selection = window.getSelection();
+  selection.removeAllRanges(); selection.addRange(range); editor.focus(); return true;
+}
+function insertHtmlAtCursor(html) { document.execCommand("insertHTML", false, html); }
 function tsvToTableHtml(text) {
   const rows = String(text || "").replace(/\r/g, "").split("\n").filter((row) => row.length);
   if (!rows.length || !rows.some((row) => row.includes("\t"))) return "";
   return `<table><tbody>${rows.map((row) => `<tr>${row.split("\t").map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table><p><br></p>`;
 }
-
 function insertDefaultTable(editor) {
-  editor.focus();
+  restoreRichSelection(editor);
   insertHtmlAtCursor('<table><tbody><tr><th>구분</th><th>내용</th><th>비고</th></tr><tr><td><br></td><td><br></td><td><br></td></tr><tr><td><br></td><td><br></td><td><br></td></tr></tbody></table><p><br></p>');
+  syncRichEditor(editor);
+}
+function closestRichCell(editor) {
+  const selection = window.getSelection();
+  let node = selection?.anchorNode;
+  if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
+  let cell = node?.closest?.("td,th");
+  if (!cell || !editor.contains(cell)) {
+    const range = richSelectionRanges.get(editor); let n = range?.startContainer;
+    if (n?.nodeType === Node.TEXT_NODE) n = n.parentElement;
+    cell = n?.closest?.("td,th");
+  }
+  return cell && editor.contains(cell) ? cell : null;
+}
+function applyStyleToSelection(editor, property, value) {
+  restoreRichSelection(editor);
+  const selection = window.getSelection();
+  if (!selection?.rangeCount) return;
+  const range = selection.getRangeAt(0);
+  if (range.collapsed) {
+    let node = selection.anchorNode; if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
+    const block = node?.closest?.("p,div,li,td,th") || node;
+    if (block && editor.contains(block)) block.style[property] = value;
+  } else {
+    const span = document.createElement("span"); span.style[property] = value;
+    try { range.surroundContents(span); } catch { const frag = range.extractContents(); span.appendChild(frag); range.insertNode(span); }
+    selection.removeAllRanges(); const r = document.createRange(); r.selectNodeContents(span); selection.addRange(r);
+  }
+  rememberRichSelection(editor); syncRichEditor(editor);
+}
+function applyRichTableAction(editor, action) {
+  restoreRichSelection(editor);
+  const cell = closestRichCell(editor); if (!cell) throw new Error("먼저 수정할 표 셀을 클릭하세요.");
+  const row = cell.parentElement; const table = cell.closest("table"); const cellIndex = Array.from(row.cells).indexOf(cell);
+  if (action === "row-add") {
+    const clone = row.cloneNode(true); Array.from(clone.cells).forEach((c) => { c.innerHTML = "<br>"; }); row.after(clone);
+  } else if (action === "row-delete") {
+    if (table.rows.length <= 1) throw new Error("마지막 행은 삭제할 수 없습니다."); row.remove();
+  } else if (action === "col-add") {
+    Array.from(table.rows).forEach((r) => { const ref = r.cells[cellIndex]; const n = document.createElement(ref?.tagName?.toLowerCase() === "th" ? "th" : "td"); n.innerHTML = "<br>"; ref?.after(n); });
+  } else if (action === "col-delete") {
+    if (row.cells.length <= 1) throw new Error("마지막 열은 삭제할 수 없습니다."); Array.from(table.rows).forEach((r) => r.cells[cellIndex]?.remove());
+  } else if (action === "col-wide" || action === "col-narrow") {
+    const delta = action === "col-wide" ? 30 : -30; const current = Math.max(60, parseInt(cell.style.width || getComputedStyle(cell).width, 10) || 120); const next = Math.min(1200, Math.max(60, current + delta));
+    Array.from(table.rows).forEach((r) => { if (r.cells[cellIndex]) { r.cells[cellIndex].style.width = `${next}px`; r.cells[cellIndex].style.minWidth = `${next}px`; } });
+  }
+  syncRichEditor(editor);
+}
+function applyRichTableFormat(editor, type, rawValue) {
+  restoreRichSelection(editor);
+  const cell = closestRichCell(editor); if (!cell) throw new Error("먼저 수정할 표 셀을 클릭하세요.");
+  if (type === "padding") cell.closest("table").querySelectorAll("th,td").forEach((c) => { c.style.padding = `${Number(rawValue)}px`; });
+  if (type === "row-height") cell.parentElement.style.height = `${Number(rawValue)}px`;
   syncRichEditor(editor);
 }
 
@@ -613,6 +728,23 @@ function render() {
   else renderDashboard();
 }
 
+function currentEvaluationStage(proposal) {
+  if (proposal.review_result !== "미심사") return proposal.review_result;
+  if (proposal.second_evaluation_total != null) return `3차 평가 완료 · ${Number(proposal.second_evaluation_total)}점`;
+  if (proposal.team_leader_evaluation_total != null) {
+    const total = Number(proposal.team_leader_evaluation_total);
+    if (total >= 65) return `2차 ${total}점 · 3차 심사대기`;
+    if (total >= 50) return `2차 ${total}점 · 건수처리`;
+    return `2차 ${total}점 · 기준미달`;
+  }
+  if (proposal.first_evaluation_total != null) {
+    const total = Number(proposal.first_evaluation_total);
+    return total >= FIRST_EVALUATION_MIN_PASS ? `1차 ${total}점 · 2차 팀장평가 대기` : `1차 ${total}점 · 기준미달`;
+  }
+  if (proposal.legacy_first_evaluation_exempt === true) return "기존 심사대기 이관 · 2차 팀장평가 대기";
+  return "1차 자기평가 보완 필요";
+}
+
 function proposalCard(proposal) {
   return `
     <article class="proposal-card">
@@ -631,6 +763,7 @@ function proposalCard(proposal) {
       <div class="proposal-card-bottom">
         <button class="proposer proposer-link" data-route="person/${encodeURIComponent(proposal.proposer_name)}?year=${encodeURIComponent(String(proposal.received_date || "").slice(0,4) || "all")}"><span class="avatar">${escapeHtml(proposal.proposer_name?.slice(0, 1) || "?")}</span>${escapeHtml(proposal.proposer_name)}</button>
         <div class="card-actions">
+          ${proposal.review_result === "미심사" ? `<span class="evaluation-admin-state ${proposal.legacy_first_evaluation_exempt === true ? "done" : "pending"}">${escapeHtml(currentEvaluationStage(proposal))}</span>` : ""}
           ${statusBadge(proposal.implementation_status)}
           <button class="button button-ghost button-small" data-action="detail" data-no="${escapeHtml(proposal.proposal_no)}">상세보기</button>
         </div>
@@ -1866,7 +1999,7 @@ async function renderApproverReview(id) {
   const isTeamLeaderReview = permission?.step?.role_name === "부서장";
   main.innerHTML = `${adminPageHeader("전자결재 검토", "제안내용을 확인한 뒤 본인에게 지정된 단계만 승인 또는 반려할 수 있습니다.", "inbox")}
     <section class="approver-review-layout${isTeamLeaderReview ? " team-leader-review" : ""}">
-      <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2>${renderRichText(proposal.current_problem)}<h2>개선방안</h2>${renderRichText(proposal.improvement_plan)}<h2>기대효과</h2>${renderRichText(proposal.expected_effect)}<div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div>${proposal.first_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 자기평가</h2><p>제안자가 제출 시 작성한 평가표입니다. 결재자는 점수를 변경하지 않고 참고만 합니다.</p></div></div>${renderEvaluationTable("approver-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}` : `<div class="analytics-empty">1차 평가자료가 없습니다.</div>`}${proposal.team_leader_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 팀장평가</h2><p>팀장이 평가한 점수입니다.</p></div></div>${renderEvaluationTable("approver-team", proposal.team_leader_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}` : ""}${proposal.second_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">3RD EVALUATION</span><h2>3차 심사위원 평가</h2><p>심사위원회가 공동으로 확정한 최종 평가입니다.</p></div></div>${renderEvaluationTable("approver-second", proposal.second_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"3차 평가 · 심사위원회 공동평가" })}` : ""}<div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div>${renderAiEffectAnalysis(proposal, null, false, "approverAiEffectAnalysisCard")}</article>
+      <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2>${renderRichText(proposal.current_problem)}<h2>개선방안</h2>${renderRichText(proposal.improvement_plan)}<h2>기대효과</h2>${renderRichText(proposal.expected_effect)}<div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div>${proposal.first_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 자기평가</h2><p>제안자가 제출 시 작성한 평가표입니다. 결재자는 점수를 변경하지 않고 참고만 합니다.</p></div></div>${renderEvaluationTable("approver-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}` : (proposal.legacy_first_evaluation_exempt === true ? `<div class="analytics-empty"><strong>기존 심사대기 이관건</strong><br>1차 본인평가 면제 · 2차 팀장평가부터 현행 기준 적용</div>` : `<div class="analytics-empty">1차 평가자료가 없습니다.</div>`)}${proposal.team_leader_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 팀장평가</h2><p>팀장이 평가한 점수입니다.</p></div></div>${renderEvaluationTable("approver-team", proposal.team_leader_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}` : ""}${proposal.second_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">3RD EVALUATION</span><h2>3차 심사위원 평가</h2><p>심사위원회가 공동으로 확정한 최종 평가입니다.</p></div></div>${renderEvaluationTable("approver-second", proposal.second_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"3차 평가 · 심사위원회 공동평가" })}` : ""}<div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div>${renderAiEffectAnalysis(proposal, null, false, "approverAiEffectAnalysisCard")}</article>
       <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${renderApprovalProgress(state.approvalSteps, records)}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}</section></aside>
     </section>`;
   await hydrateAiEffectAnalysis(proposal, false, "approverAiEffectAnalysisCard");
@@ -1979,7 +2112,7 @@ function renderAdmin(action = "", id = "") {
                   <td><button class="table-title" data-action="detail" data-no="${escapeHtml(p.proposal_no)}">${escapeHtml(p.title)}</button></td>
                   <td>${escapeHtml(p.proposer_name)}<small>${escapeHtml(p.department)}</small></td>
                   <td>${statusBadge(p.status)}</td>
-                  <td>${p.first_evaluation_total == null ? `<span class="evaluation-admin-state pending">미입력</span>` : Number(p.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS ? `<span class="evaluation-admin-state pending">기준 미달 · ${Number(p.first_evaluation_total)}점</span>` : `<span class="evaluation-admin-state done">완료 ${Number(p.first_evaluation_total)}점</span>`}</td>
+                  <td>${p.first_evaluation_total == null ? (p.legacy_first_evaluation_exempt === true ? `<span class="evaluation-admin-state done">기존건 · 1차 면제</span>` : `<span class="evaluation-admin-state pending">미입력</span>`) : Number(p.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS ? `<span class="evaluation-admin-state pending">기준 미달 · ${Number(p.first_evaluation_total)}점</span>` : `<span class="evaluation-admin-state done">완료 ${Number(p.first_evaluation_total)}점</span>`}</td>
                   <td>${statusBadge(p.review_result)}</td>
                   <td>${statusBadge(p.implementation_status)}</td>
                   <td><button class="button button-small button-primary" data-route="admin/edit/${escapeHtml(p.id)}">심사/2차평가</button></td>
@@ -2047,7 +2180,9 @@ function renderAdminEdit(id) {
           <div class="section-heading"><div><span class="eyebrow">1ST EVALUATION · PROPOSER</span><h2>1차 제안자 자기평가</h2><p>1차 평가는 제안자가 작성할 때 직접 평가합니다. 각 항목은 1~10점만 입력할 수 있고, 가중합계 50점 이상이어야 제안 등록이 가능합니다. 관리자는 1차 점수를 수정하지 않고 참고만 합니다.</p></div></div>
           ${proposal.first_evaluation_total != null
             ? `${firstEvaluationCriteriaMarkup(proposal.first_evaluation || {}, proposal.first_evaluation_total)}${renderEvaluationTable("admin-first-view", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}`
-            : `<div class="analytics-empty">1차 자기평가 자료가 없습니다.</div>`}
+            : proposal.legacy_first_evaluation_exempt === true
+              ? `<div class="analytics-empty"><strong>기존 심사대기 이관건</strong><br>현행 평가구조 적용 전 접수된 건으로 1차 본인평가는 면제하고 2차 팀장평가부터 현재 기준을 적용합니다.</div>`
+              : `<div class="analytics-empty">1차 자기평가 자료가 없습니다.</div>`}
         </section>
         ${proposal.team_leader_evaluation_total != null ? `<section class="admin-first-evaluation-section"><div class="section-heading"><div><span class="eyebrow">2ND EVALUATION · TEAM LEADER</span><h2>2차 팀장평가</h2><p>${Number(proposal.team_leader_evaluation_total) >= 65 ? "65점 이상으로 3차 심사위원 평가 대상입니다." : Number(proposal.team_leader_evaluation_total) >= 50 ? "50~64점으로 자동 건수처리 대상입니다." : "50점 미만으로 기준미달입니다."}</p></div></div>${renderEvaluationTable("admin-team-view", proposal.team_leader_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}</section>` : ""}
         <div class="admin-image-pair">
@@ -2132,7 +2267,7 @@ async function hydrateAdminApproval(proposal) {
   const fieldset = $("#secondEvaluationFieldset");
   const gate = $("#secondEvaluationGateMessage");
   const alreadySubmittedToCeo = ["상신완료","승인완료"].includes(proposal.ceo_submission_status);
-  const firstEvaluationPassed = proposal.first_evaluation_total != null && Number(proposal.first_evaluation_total) >= FIRST_EVALUATION_MIN_PASS;
+  const firstEvaluationPassed = proposal.legacy_first_evaluation_exempt === true || (proposal.first_evaluation_total != null && Number(proposal.first_evaluation_total) >= FIRST_EVALUATION_MIN_PASS);
   const teamEvaluationPassed = proposal.team_leader_evaluation_total != null && Number(proposal.team_leader_evaluation_total) >= 65;
   const canEvaluate = executiveRecord?.status === "승인" && firstEvaluationPassed && teamEvaluationPassed && proposal.review_result === "미심사" && !alreadySubmittedToCeo;
   if (fieldset) fieldset.disabled = !canEvaluate;
@@ -2140,7 +2275,7 @@ async function hydrateAdminApproval(proposal) {
     gate.classList.toggle("evaluation-ready-note", canEvaluate);
     gate.textContent = alreadySubmittedToCeo
       ? "대표이사 상신 이후에는 3차 평가를 수정할 수 없습니다."
-      : proposal.first_evaluation_total == null
+      : proposal.first_evaluation_total == null && proposal.legacy_first_evaluation_exempt !== true
         ? "1차 본인평가를 먼저 완료하세요."
         : !firstEvaluationPassed
           ? `1차 본인평가 ${Number(proposal.first_evaluation_total)}점은 기준 미달입니다.`
@@ -2307,6 +2442,13 @@ function downloadCsv(year = "all", month = "") {
 }
 
 document.addEventListener("click", async (event) => {
+  const richTableTool = event.target.closest?.("[data-rich-table-action]");
+  if (richTableTool) {
+    event.preventDefault();
+    const editor = document.getElementById(richTableTool.dataset.richTarget); if (!editor) return;
+    try { applyRichTableAction(editor, richTableTool.dataset.richTableAction); } catch (error) { showToast(error.message || "표 편집 중 오류가 발생했습니다.", true); }
+    return;
+  }
   const richTool = event.target.closest?.("[data-rich-command]");
   if (richTool) {
     event.preventDefault();
@@ -2315,9 +2457,9 @@ document.addEventListener("click", async (event) => {
     const command = richTool.dataset.richCommand;
     if (command === "insert-table") insertDefaultTable(editor);
     else {
-      editor.focus();
+      restoreRichSelection(editor);
       document.execCommand(command, false, null);
-      syncRichEditor(editor);
+      rememberRichSelection(editor); syncRichEditor(editor);
     }
     return;
   }
@@ -2598,8 +2740,9 @@ document.addEventListener("submit", async (event) => {
     } else if (event.target.id === "adminReviewForm") {
       const data = new FormData(event.target);
       const proposal = state.proposals.find((p) => p.id === event.target.dataset.id);
-      if (proposal?.first_evaluation_total == null) throw new Error("1차 평가를 먼저 완료하세요.");
-      if (Number(proposal.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS) throw new Error(`1차 자기평가 ${Number(proposal.first_evaluation_total)}점은 기준 미달입니다. 제안자가 50점 이상으로 수정해야 합니다.`);
+      const legacyFirstExempt = proposal?.legacy_first_evaluation_exempt === true;
+      if (proposal?.first_evaluation_total == null && !legacyFirstExempt) throw new Error("1차 평가를 먼저 완료하세요.");
+      if (!legacyFirstExempt && Number(proposal.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS) throw new Error(`1차 자기평가 ${Number(proposal.first_evaluation_total)}점은 기준 미달입니다. 제안자가 50점 이상으로 수정해야 합니다.`);
       if (proposal.team_leader_evaluation_total == null || Number(proposal.team_leader_evaluation_total) < 65) throw new Error("2차 팀장평가 65점 이상인 제안만 3차 심사위원 평가를 진행할 수 있습니다.");
       const fieldset = $("#secondEvaluationFieldset");
       if (!fieldset || fieldset.disabled) throw new Error("2차 팀장평가 65점 이상 및 해당부서 임원 승인 완료 후 3차 평가를 진행하세요.");
@@ -2703,6 +2846,31 @@ document.addEventListener("change", (event) => {
   }
 });
 
+
+document.addEventListener("mousedown", (event) => {
+  if (event.target.closest?.(".rich-editor-toolbar button")) event.preventDefault();
+});
+
+document.addEventListener("selectionchange", () => {
+  const selection = window.getSelection(); let node = selection?.anchorNode; if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
+  const editor = node?.closest?.(".rich-text-editor"); if (editor) rememberRichSelection(editor);
+});
+
+document.addEventListener("change", (event) => {
+  const format = event.target.closest?.("[data-rich-format]");
+  if (format) {
+    const editor = document.getElementById(format.dataset.richTarget); if (!editor || !format.value) return;
+    if (format.dataset.richFormat === "font-size") applyStyleToSelection(editor, "fontSize", `${format.value}px`);
+    if (format.dataset.richFormat === "line-height") applyStyleToSelection(editor, "lineHeight", format.value);
+    format.value = ""; return;
+  }
+  const tableFormat = event.target.closest?.("[data-rich-table-format]");
+  if (tableFormat) {
+    const editor = document.getElementById(tableFormat.dataset.richTarget); if (!editor || !tableFormat.value) return;
+    try { applyRichTableFormat(editor, tableFormat.dataset.richTableFormat, tableFormat.value); } catch (error) { showToast(error.message || "표 편집 중 오류가 발생했습니다.", true); }
+    tableFormat.value = ""; return;
+  }
+});
 
 document.addEventListener("paste", (event) => {
   const editor = event.target.closest?.(".rich-text-editor");
