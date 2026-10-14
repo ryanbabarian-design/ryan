@@ -1,3 +1,4 @@
+import { createPerformancePage } from './reports/performance-ui.js?v=2.6.8';
 import {
   calculateAward,
   currentYearProposalCount,
@@ -564,6 +565,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const main = $("#app");
 const toast = $("#toast");
+const performancePage = createPerformancePage({root:main, store, navigate:go, notify:(message,error)=>showToast(message,error?"error":"success")});
 
 let formImageSelections = null;
 const filePreviewUrls = new WeakMap();
@@ -974,6 +976,7 @@ async function refreshData() {
   ]);
   state.proposals = proposals; state.employees = employees; state.approvalDepartments = approvalDepartments; state.departmentGoals = departmentGoals; state.approvalSteps = approvalSteps; state.admin = admin; state.approverAssignments = approverAssignments;
   state.approvalInbox = admin ? await store.getMyApprovalInbox().catch(() => []) : [];
+  performancePage.invalidate();
   state.approvalOverdueSummary = admin?.isSystemAdmin ? await store.getApprovalOverdueSummary().catch(() => ({})) : {};
   syncApprovalInboxBadge();
 }
@@ -1006,7 +1009,8 @@ function render() {
     return;
   }
 
-  if (route === "dashboard") renderDashboard();
+  if (route === "performance") performancePage.render();
+  else if (route === "dashboard") renderDashboard();
   else if (route === "new") renderProposalForm();
   else if (route === "list") renderList();
   else if (route === "detail") renderDetail(routeParts()[1]);
@@ -1200,6 +1204,7 @@ function renderDashboard() {
       </div>
     </section>
 
+    <section class="dashboard-report-entry"><div><h2>직원별 올해 제안실적 · 관리부 제출</h2><p>월별 건수와 0건 직원을 확인하고, 보고용 엑셀 4개 시트를 한 번에 받으세요.</p></div><button class="button button-primary" data-route="performance?year=${currentYear}">개인별 실적 · 엑셀 다운로드 ›</button></section>
     <section class="metric-grid workflow-metric-grid" aria-label="제안 현황 요약">
       <button class="metric-card workflow-card total" data-route="list?year=${dashboardYearParam}&workflow=total">
         <span class="metric-icon" aria-hidden="true">♢</span>
@@ -2071,6 +2076,7 @@ function renderManagementReport() {
         </div>
         <div class="print-toolbar-actions">
           <button class="button button-ghost" data-route="dashboard?year=${encodeURIComponent(year)}">대시보드</button>
+          <button class="button button-secondary" data-route="performance?year=${year === 'all' ? new Date().getFullYear() : encodeURIComponent(year)}">개인별 연간실적 · 엑셀</button>
           <button class="button button-ghost" data-action="export-report-csv" data-year="${escapeHtml(year)}" data-month="${escapeHtml(month)}">CSV 저장</button>
           <button class="button button-primary" data-action="trigger-print">인쇄 / PDF 저장</button>
         </div>
