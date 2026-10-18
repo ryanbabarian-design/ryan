@@ -690,10 +690,16 @@ function renderEvaluationTable(prefix, values = {}, { readOnly = false, title = 
   </div>`;
 }
 
+// Evaluation sections also live in a <div> inside the approval screen.
+// Query within the supplied container; HTMLFormElement.elements is not available on a div.
+function evaluationInputInScope(scope, prefix, key) {
+  return scope?.querySelector(`[name="${prefix}_eval_${key}"]`) || null;
+}
+
 function collectEvaluationFromForm(form, prefix) {
   const result = {};
   for (const item of EVALUATION_CRITERIA) {
-    const raw = form?.elements?.[`${prefix}_eval_${item.key}`]?.value;
+    const raw = evaluationInputInScope(form, prefix, item.key)?.value;
     const value = Number(raw);
     if (!Number.isInteger(value) || value < 1 || value > 10) throw new Error(`${item.label.replaceAll(" ","")} 점수를 1~10점으로 입력하세요.`);
     result[item.key] = value;
@@ -704,10 +710,30 @@ function collectEvaluationFromForm(form, prefix) {
 function updateEvaluationTotalFromForm(form, prefix) {
   if (!form) return;
   const values = {};
-  for (const item of EVALUATION_CRITERIA) values[item.key] = Number(form.elements?.[`${prefix}_eval_${item.key}`]?.value || 0);
+  for (const item of EVALUATION_CRITERIA) values[item.key] = Number(evaluationInputInScope(form, prefix, item.key)?.value || 0);
   const total = calculateEvaluationTotal(values);
   const target = form.querySelector(`[data-eval-total="${prefix}"]`);
   if (target) target.textContent = String(total);
+  if (prefix === "team") {
+    const inputs = EVALUATION_CRITERIA.map((item) => evaluationInputInScope(form, prefix, item.key));
+    const isValid = (input) => !!input && input.value !== "" && Number.isInteger(Number(input.value)) && Number(input.value) >= 1 && Number(input.value) <= 10;
+    const invalid = inputs.some((input) => input && (input.validity?.badInput || (input.value !== "" && !isValid(input))));
+    const complete = inputs.every(isValid);
+    if (invalid && target) target.textContent = "-";
+    const guide = form.querySelector("#teamEvaluationGuide");
+    if (guide) {
+      guide.classList.toggle("evaluation-ready-note", complete && !invalid && total >= 50);
+      guide.textContent = invalid
+        ? "2차 팀장평가는 각 항목에 1~10점의 정수만 입력할 수 있습니다. 잘못된 점수를 수정하세요."
+        : !complete
+          ? `현재 입력 합계 ${total}점 · 6개 항목을 모두 1~10점으로 입력하세요. 아직 저장되지 않았습니다.`
+          : total < 50
+            ? `2차 팀장평가 ${total}점 · 승인 저장 시 기준미달(미채택) 처리됩니다.`
+            : total < 65
+              ? `2차 팀장평가 ${total}점 · 승인 저장 시 자동 건수처리됩니다. 3차 심사는 진행하지 않습니다.`
+              : `2차 팀장평가 ${total}점 · 승인 저장 시 임원 결재로 넘어가며, 임원 승인 후 3차 심사위원 평가를 진행합니다.`;
+    }
+  }
   if (prefix === "first") {
     const notice = form.querySelector(`[data-first-eval-criteria]`);
     if (notice) {
@@ -2270,7 +2296,7 @@ function renderApprovalAction(permission, proposalId) {
       <div class="team-leader-evaluation-box">
         <div class="team-leader-evaluation-head"><strong>2차 팀장평가</strong><p>50점 미만은 기준미달, 50~64점은 자동 건수처리, 65점 이상은 3차 심사위원 평가로 진행됩니다.</p></div>
         ${renderEvaluationTable("team", {}, { title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}
-        <div class="evaluation-lock-note" id="teamEvaluationGuide">팀장평가 점수를 입력한 뒤 승인 저장하세요.</div>
+        <div class="evaluation-lock-note" id="teamEvaluationGuide" role="status" aria-live="polite">팀장평가 점수를 입력한 뒤 승인 저장하세요.</div>
       </div>
       <div class="team-leader-action-controls">
         <label class="field">처리<select name="approval_status"><option value="승인">승인</option><option value="반려">반려</option></select></label>
@@ -2892,6 +2918,7 @@ document.addEventListener("click", async (event) => {
       const comment = box.querySelector('[name="comment"]')?.value?.trim() || "";
       const roleName = box.dataset.roleName || "";
       if (roleName === "부서장" && approvalStatus === "승인") {
+        updateEvaluationTotalFromForm(box, "team");
         const teamEvaluation = collectEvaluationFromForm(box, "team");
         const teamTotal = calculateEvaluationTotal(teamEvaluation);
         if (teamTotal < 50) {
@@ -3244,6 +3271,21 @@ document.addEventListener("paste", (event) => {
   insertHtmlAtCursor(hasTable ? sanitizeRichTextHtml(html) : tsvTable);
   rememberRichSelection(editor); syncRichEditor(editor); updateRichContext(editor);
 });
+
+// Delegate to the dynamically rendered manager section on BOTH approval routes.
+// input covers typing/spinners; change also covers committed edits/autofill.
+function handleTeamEvaluationInput(event) {
+  const input = event.target;
+  if (!input.matches?.('input.eval-input[name^="team_eval_"]')) return;
+  const scope = input.closest("#approvalActionForm");
+  if (!scope || scope.dataset.roleName !== "부서장") return;
+  const value = Number(input.value);
+  input.setCustomValidity(input.value !== "" && (!Number.isInteger(value) || value < 1 || value > 10)
+    ? "2차 팀장평가 점수는 각 항목 1~10점의 정수로 입력하세요." : "");
+  updateEvaluationTotalFromForm(scope, "team");
+}
+document.addEventListener("input", handleTeamEvaluationInput);
+document.addEventListener("change", handleTeamEvaluationInput);
 
 document.addEventListener("input", (event) => {
   const richEditor = event.target.closest?.(".rich-text-editor");
