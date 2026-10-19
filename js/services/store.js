@@ -1,3 +1,4 @@
+import { createOperationsRepository } from "../operations/operations-store.js?v=2.7.0";
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
 import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.3.15";
 import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3.11";
@@ -50,6 +51,7 @@ function normalizeProposal(row) {
     first_evaluation: {},
     first_evaluation_total: null,
     first_evaluation_completed_at: null,
+    legacy_first_evaluation_exempt: false,
     team_leader_evaluation: {},
     team_leader_evaluation_total: null,
     team_leader_evaluation_completed_at: null,
@@ -159,6 +161,7 @@ class DemoStore {
   }
 
   async createProposal(payload, beforeFiles, afterFiles) {
+    await this.operations.assertNewProposalAllowed();
     const proposals = await this.getProposals();
     const pinHash = await sha256(payload.edit_pin);
     const [beforeImages, afterImages] = await Promise.all([
@@ -190,6 +193,8 @@ class DemoStore {
     });
 
     delete proposal.edit_pin;
+    // Attachment processing may outlive a pause action. Re-check before committing demo data.
+    await this.operations.assertNewProposalAllowed();
     proposals.unshift(proposal);
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
     const history = JSON.parse(localStorage.getItem(STATUS_HISTORY_KEY) || "[]");
@@ -780,6 +785,7 @@ class SupabaseStore {
   }
 
   async createProposal(payload, beforeFiles, afterFiles) {
+    await this.operations.assertNewProposalAllowed();
     const implementation = normalizeImplementationDetails(
       payload.implementation_status,
       payload.implemented_date,
@@ -1187,5 +1193,7 @@ export function createStore(config = window.APP_CONFIG) {
     config.supabaseAnonKey &&
     !config.supabaseAnonKey.includes("YOUR_");
 
-  return hasRealConfig ? new SupabaseStore(config) : new DemoStore(config);
+  const store = hasRealConfig ? new SupabaseStore(config) : new DemoStore(config);
+  store.operations = createOperationsRepository({ mode: store.mode, client: store.client, getAdmin: () => store.getAdminSession() });
+  return store;
 }

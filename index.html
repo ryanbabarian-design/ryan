@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="./css/brand-dashboard.css?v=2.6.6">
   <link rel="stylesheet" href="./css/print.css?v=2.3">
   <link rel="stylesheet" href="./css/performance-report.css?v=2.6.8">
+  <link rel="stylesheet" href="./css/operations.css?v=2.7.0">
   <script src="./js/config.js?v=2.3"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -26,9 +27,10 @@
 
     <nav class="main-nav" aria-label="주요 메뉴">
       <button class="nav-link active" data-route="dashboard">대시보드</button>
-      <button class="nav-link" data-route="new">제안 접수</button>
+      <button class="nav-link" data-route="new">제안 접수<span id="intakeNavState" class="ops-status-mini"></span></button>
       <button class="nav-link" data-route="list">접수현황</button>
       <button class="nav-link" data-route="performance">실적·엑셀</button>
+      <button class="nav-link" data-route="notices">공지사항</button>
     </nav>
 
     <div class="header-right">
@@ -36,6 +38,8 @@
       <button class="admin-nav" data-route="admin">관리자·결재 <span id="approvalInboxBadge" class="approval-inbox-badge" hidden>0</span></button>
     </div>
   </header>
+
+  <aside id="intakeStatusBanner" class="intake-banner is-unknown" aria-label="신규 제안 접수 상태"></aside>
 
   <main id="app" aria-live="polite">
     <div class="loading-card">
@@ -65,6 +69,6 @@
     <img id="lightboxImage" alt="확대 사진">
   </dialog>
 
-  <script type="module" src="./js/app.js?v=2.6.9"></script>
+  <script type="module" src="./js/app.js?v=2.7.0"></script>
 </body>
 </html>

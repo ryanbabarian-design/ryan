@@ -1,3 +1,4 @@
+import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
 import { createPerformancePage } from './reports/performance-ui.js?v=2.6.8';
 import {
   calculateAward,
@@ -24,7 +25,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.3.15";
-import { createStore } from "./services/store.js?v=2.6.4";
+import { createStore } from "./services/store.js?v=2.7.0";
 import {
   appendImageFiles,
   createImageSelection,
@@ -567,6 +568,8 @@ const main = $("#app");
 const toast = $("#toast");
 const performancePage = createPerformancePage({root:main, store, navigate:go, notify:(message,error)=>showToast(message,error?"error":"success")});
 
+const operationsUI = createOperationsUI({root:main, repository:store.operations, getAdmin:()=>state.admin, adminHeader:()=>adminPageHeader("접수·공지 관리", "신규 접수 상태와 직원 공지를 한곳에서 관리합니다.", "operations"), notify:(message,error)=>showToast(message,error?"error":"success")});
+
 let formImageSelections = null;
 const filePreviewUrls = new WeakMap();
 
@@ -1005,6 +1008,7 @@ async function refreshData() {
   performancePage.invalidate();
   state.approvalOverdueSummary = admin?.isSystemAdmin ? await store.getApprovalOverdueSummary().catch(() => ({})) : {};
   syncApprovalInboxBadge();
+  await operationsUI.refresh();
 }
 
 async function init() {
@@ -1019,6 +1023,7 @@ async function init() {
 }
 
 function render() {
+  operationsUI.syncChrome();
   const [route = "dashboard"] = routeParts();
   document.body.classList.toggle("print-route", route === "print" || route === "report");
   setActiveNav(["detail", "edit", "print", "person"].includes(route) ? "list" : route === "report" ? "dashboard" : route);
@@ -1035,7 +1040,8 @@ function render() {
     return;
   }
 
-  if (route === "performance") performancePage.render();
+  if (route === "notices") { void operationsUI.renderPublic(); }
+  else if (route === "performance") performancePage.render();
   else if (route === "dashboard") renderDashboard();
   else if (route === "new") renderProposalForm();
   else if (route === "list") renderList();
@@ -1230,6 +1236,7 @@ function renderDashboard() {
       </div>
     </section>
 
+    ${operationsUI.dashboardMarkup()}
     <section class="dashboard-report-entry"><div><h2>직원별 올해 제안실적 · 관리부 제출</h2><p>월별 건수와 0건 직원을 확인하고, 보고용 엑셀 4개 시트를 한 번에 받으세요.</p></div><button class="button button-primary" data-route="performance?year=${currentYear}">개인별 실적 · 엑셀 다운로드 ›</button></section>
     <section class="metric-grid workflow-metric-grid" aria-label="제안 현황 요약">
       <button class="metric-card workflow-card total" data-route="list?year=${dashboardYearParam}&workflow=total">
@@ -1595,6 +1602,7 @@ function renderProposalForm(proposalNo = "") {
   }
 
   const isEdit = Boolean(proposal);
+  if (!isEdit && !operationsUI.canStartNew()) { operationsUI.renderClosedNew(); return; }
   initializeFormImageSelections(proposal);
   main.innerHTML = `
     <section class="page-header">
@@ -1739,6 +1747,7 @@ function renderProposalForm(proposalNo = "") {
   renderFormImagePreview("before");
   renderFormImagePreview("after");
   syncImplementationDateField();
+  operationsUI.syncChrome();
 }
 
 function renderDetail(proposalNo) {
@@ -2130,6 +2139,7 @@ function adminNav(active = "proposals") {
     <button class="${active === "proposals" ? "active" : ""}" data-route="admin">제안 심사</button>
     <button class="${active === "inbox" ? "active" : ""}" data-route="admin/inbox">내 결재함${actionableApprovalCount() ? ` <span class="approval-inbox-badge inline">${actionableApprovalCount()}</span>` : ""}</button>
     <button class="${active === "ceo-submit" ? "active" : ""}" data-route="admin/ceo-submit">대표이사 일괄상신</button>
+    <button class="${active === "operations" ? "active" : ""}" data-route="admin/operations">접수·공지 관리</button>
     <button class="${active === "goals" ? "active" : ""}" data-route="admin/goals">부서 목표관리</button>
     <button class="${active === "approvals" ? "active" : ""}" data-route="admin/approvals">전자결재 설정</button>
     <button class="${active === "notifications" ? "active" : ""}" data-route="admin/notifications">메일알림</button>
@@ -2387,6 +2397,7 @@ function renderAdmin(action = "", id = "") {
     return;
   }
 
+  if (action === "operations") { void operationsUI.renderAdmin(); return; }
   if (action === "edit") { renderAdminEdit(id); return; }
   if (action === "review") { void renderApproverReview(id); return; }
   if (action === "inbox") { void renderApproverInbox(); return; }
@@ -2658,6 +2669,10 @@ async function handleProposalSubmit(form) {
   if (data.get("website")) return;
   const payload = buildProposalPayload(form);
   const isEdit = form.dataset.edit === "true";
+  if (!isEdit) {
+    try { await store.operations.assertNewProposalAllowed(); }
+    catch (error) { await operationsUI.refresh(); throw error; }
+  }
   validateFirstSelfEvaluationValues(payload.first_evaluation);
 
   if (!/^\d{4}$/.test(payload.edit_pin)) {
@@ -2677,6 +2692,7 @@ async function handleProposalSubmit(form) {
 
   const submitButton = form.querySelector('button[type="submit"]');
   submitButton.disabled = true;
+  submitButton.dataset.submitting = "true";
   submitButton.textContent = isEdit ? "수정 저장 중..." : "제출 중...";
 
   try {
@@ -2711,8 +2727,10 @@ async function handleProposalSubmit(form) {
     await refreshData();
     go(`detail/${saved.proposal_no}`);
   } finally {
+    delete submitButton.dataset.submitting;
     submitButton.disabled = false;
     submitButton.textContent = isEdit ? "수정 저장" : "제안 제출";
+    if (!isEdit) await operationsUI.refresh();
   }
 }
 
@@ -3331,6 +3349,7 @@ document.addEventListener("input", (event) => {
 });
 
 window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", () => { void operationsUI.refresh(); });
 window.addEventListener("DOMContentLoaded", () => {
   ensureImageEditorStyles();
   ensureAiEffectStyles();
