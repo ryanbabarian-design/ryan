@@ -25,7 +25,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.3.15";
-import { createStore } from "./services/store.js?v=2.7.0";
+import { createStore } from "./services/store.js?v=2.7.1";
 import {
   appendImageFiles,
   createImageSelection,

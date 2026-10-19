@@ -1,4 +1,4 @@
-import { createOperationsRepository } from "../operations/operations-store.js?v=2.7.0";
+import { createOperationsRepository } from "../operations/operations-store.js?v=2.7.1";
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
 import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.3.15";
 import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3.11";

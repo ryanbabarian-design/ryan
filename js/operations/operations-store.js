@@ -58,8 +58,13 @@ export function createOperationsRepository({mode,client,getAdmin}) {
       await requireAdmin();if(files.length>3)throw new Error('첨부자료는 최대 3개까지 가능합니다.');
       files.forEach(validateAttachmentFile);const added=[];
       try{for(const file of files){const {ext,mime}=validateAttachmentFile(file),path=`${id}/${crypto.randomUUID()}.${ext}`;
-        if(demo){if(file.size>1024*1024)throw new Error('데모에서는 첨부파일 1MB 이하만 검증할 수 있습니다. 운영 환경은 20MB입니다.');const all=JSON.parse(localStorage.getItem(FILE_KEY)||'{}');all[path]=await fromFile(file);localStorage.setItem(FILE_KEY,JSON.stringify(all));}
-        else{const {error}=await client.storage.from(NOTICE_BUCKET).upload(path,file,{contentType:mime,upsert:false});if(error)throw errorFrom(error);}
+        // V2.7.1: Storage's File/Blob upload uses multipart FormData. Setting only
+        // contentType does not replace the MIME type carried by the file part.
+        // Keep the original bytes/name/date, but normalize the File's type too
+        // (e.g. application/haansoftpptx -> the allowed standard PPTX MIME type).
+        const uploadFile=new File([file],file.name,{type:mime,lastModified:file.lastModified});
+        if(demo){if(file.size>1024*1024)throw new Error('데모에서는 첨부파일 1MB 이하만 검증할 수 있습니다. 운영 환경은 20MB입니다.');const all=JSON.parse(localStorage.getItem(FILE_KEY)||'{}');all[path]=await fromFile(uploadFile);localStorage.setItem(FILE_KEY,JSON.stringify(all));}
+        else{const {error}=await client.storage.from(NOTICE_BUCKET).upload(path,uploadFile,{contentType:mime,upsert:false});if(error)throw errorFrom(error);}
         added.push({path,name:file.name,size:file.size,mime});
       }return added;}catch(e){await this.removeUploaded(added).catch(()=>{});throw e;}
     },
