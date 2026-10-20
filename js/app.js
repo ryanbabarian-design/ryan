@@ -723,7 +723,7 @@ function updateEvaluationTotalFromForm(form, prefix) {
     const invalid = inputs.some((input) => input && (input.validity?.badInput || (input.value !== "" && !isValid(input))));
     const complete = inputs.every(isValid);
     if (invalid && target) target.textContent = "-";
-    const guide = form.querySelector("#teamEvaluationGuide");
+    const guide = form.querySelector("#teamEvaluationGuide, [data-team-evaluation-guide]");
     if (guide) {
       guide.classList.toggle("evaluation-ready-note", complete && !invalid && total >= 50);
       guide.textContent = invalid
@@ -735,6 +735,10 @@ function updateEvaluationTotalFromForm(form, prefix) {
             : total < 65
               ? `2차 팀장평가 ${total}점 · 승인 저장 시 자동 건수처리됩니다. 3차 심사는 진행하지 않습니다.`
               : `2차 팀장평가 ${total}점 · 승인 저장 시 임원 결재로 넘어가며, 임원 승인 후 3차 심사위원 평가를 진행합니다.`;
+      if (form.id === "v272PriorEvaluation" && complete && !invalid) {
+        const band = total < 50 ? "50점 미만 · 기준미달 구간" : total < 65 ? "50~64점 · 건수처리 구간" : "65점 이상 · 3차 심사 대상 구간";
+        guide.textContent = `2차 팀장평가 ${total}점 · ${band}입니다. 저장 시 기존 승인 기록은 유지됩니다. 후속 결재가 이미 승인된 경우 심사상태·결과는 자동 변경하지 않습니다.`;
+      }
     }
   }
   if (prefix === "first") {
@@ -2342,10 +2346,12 @@ async function renderApproverReview(id) {
   } catch (_) { /* optional V2.7.2 schema not installed */ }
 
   main.innerHTML = `${adminPageHeader("전자결재 검토", "제안내용을 확인한 뒤 본인에게 지정된 단계만 승인 또는 반려할 수 있습니다.", "inbox")}
-    <section class="approver-review-layout${isTeamLeaderReview ? " team-leader-review" : ""}">
+    <section class="approver-review-layout${(isTeamLeaderReview || priorEvaluation) ? " team-leader-review" : ""}">
       <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2>${renderRichText(proposal.current_problem)}<h2>개선방안</h2>${renderRichText(proposal.improvement_plan)}<h2>기대효과</h2>${renderRichText(proposal.expected_effect)}<div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div>${proposal.first_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 자기평가</h2><p>제안자가 제출 시 작성한 평가표입니다. 결재자는 점수를 변경하지 않고 참고만 합니다.</p></div></div>${renderEvaluationTable("approver-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}` : (proposal.legacy_first_evaluation_exempt === true ? `<div class="analytics-empty"><strong>기존 심사대기 이관건</strong><br>1차 본인평가 면제 · 2차 팀장평가부터 현행 기준 적용</div>` : `<div class="analytics-empty">1차 평가자료가 없습니다.</div>`)}${proposal.team_leader_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 팀장평가</h2><p>팀장이 평가한 점수입니다.</p></div></div>${renderEvaluationTable("approver-team", proposal.team_leader_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}` : ""}${proposal.second_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">3RD EVALUATION</span><h2>3차 심사위원 평가</h2><p>심사위원회가 공동으로 확정한 최종 평가입니다.</p></div></div>${renderEvaluationTable("approver-second", proposal.second_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"3차 평가 · 심사위원회 공동평가" })}` : ""}<div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div>${renderAiEffectAnalysis(proposal, null, false, "approverAiEffectAnalysisCard")}</article>
-      <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${renderApprovalProgress(state.approvalSteps, records)}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}${priorEvaluation ? `<section class="team-leader-evaluation-box" id="v272PriorEvaluation" data-id="${escapeHtml(proposal.id)}"><h3>기존 승인건 · 2차 팀장평가 보완</h3><p>기존 결재는 유지됩니다. 3차 심사 완료건은 수정할 수 없습니다.</p>${renderEvaluationTable('team',proposal.team_leader_evaluation||{},{title:'2차 팀장평가',subtitle:'기존 승인자 평가'})}<button class="button button-primary" data-action="v272-save-prior-evaluation" data-id="${escapeHtml(proposal.id)}">2차 평가점수 저장</button></section>` : ''}</section></aside>
+      <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${renderApprovalProgress(state.approvalSteps, records)}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}${priorEvaluation ? `<section class="team-leader-evaluation-box" id="v272PriorEvaluation" data-role-name="부서장" data-id="${escapeHtml(proposal.id)}"><h3>기존 승인건 · 2차 팀장평가 보완</h3><p>기존 결재는 유지됩니다. 3차 심사 완료건은 수정할 수 없습니다.</p>${renderEvaluationTable('team',proposal.team_leader_evaluation||{},{title:'2차 팀장평가',subtitle:'기존 승인자 평가'})}<div class="evaluation-lock-note" data-team-evaluation-guide role="status" aria-live="polite"></div><button type="button" class="button button-primary" data-action="v272-save-prior-evaluation" data-id="${escapeHtml(proposal.id)}">2차 평가점수 저장</button></section>` : ''}</section></aside>
     </section>`;
+  // Historical-approval editor is separate from the regular approval form.
+  if (priorEvaluation) updateEvaluationTotalFromForm($("#v272PriorEvaluation"), "team");
   await hydrateAiEffectAnalysis(proposal, false, "approverAiEffectAnalysisCard");
 }
 
@@ -2982,13 +2988,29 @@ document.addEventListener("click", async (event) => {
     } else if (action === "v272-save-prior-evaluation") {
       const panel = $("#v272PriorEvaluation");
       if (!panel) throw new Error("평가 입력 영역을 찾지 못했습니다.");
+      if (actionButton.disabled) return;
+      updateEvaluationTotalFromForm(panel, "team");
       const evaluation = collectEvaluationFromForm(panel,"team");
       const total = calculateEvaluationTotal(evaluation);
       if (!confirm(`2차 평가 ${total}점을 저장하시겠습니까? 기존 승인 기록은 유지됩니다.`)) return;
-      await store.saveV272ApprovedEvaluation(actionButton.dataset.id,evaluation);
-      await refreshData();
-      await renderApproverReview(actionButton.dataset.id);
-      showToast(`2차 평가 ${total}점 저장 완료`);
+      actionButton.disabled = true;
+      const proposalId = actionButton.dataset.id;
+      try {
+        const savedTotal = await store.saveV272ApprovedEvaluation(proposalId, evaluation);
+        if (savedTotal == null || Number(savedTotal) !== total) {
+          throw new Error("서버 저장 결과의 합계를 확인하지 못했습니다. 성공 처리하지 않았으니 제안을 다시 조회해 주세요.");
+        }
+        await refreshData();
+        const saved = state.proposals.find(item => item.id === proposalId);
+        if (!saved || Number(saved.team_leader_evaluation_total) !== total ||
+            EVALUATION_CRITERIA.some(item => Number(saved.team_leader_evaluation?.[item.key]) !== evaluation[item.key])) {
+          throw new Error("저장 요청은 처리됐으나 재조회한 점수가 입력값과 다릅니다. 성공 처리하지 않았으니 관리자에게 확인해 주세요.");
+        }
+        await renderApproverReview(proposalId);
+        showToast(`2차 평가 ${total}점 저장 완료`);
+      } finally {
+        actionButton.disabled = false;
+      }
     } else if (action === "v272-reset-pin") {
       if (!state.admin?.isSystemAdmin) throw new Error("시스템 관리자만 수정번호를 재설정할 수 있습니다.");
       const pin = prompt("새로운 수정번호 숫자 4자리를 입력하세요. 기존 번호는 무효화됩니다.");
@@ -3326,7 +3348,7 @@ document.addEventListener("paste", (event) => {
 function handleTeamEvaluationInput(event) {
   const input = event.target;
   if (!input.matches?.('input.eval-input[name^="team_eval_"]')) return;
-  const scope = input.closest("#approvalActionForm");
+  const scope = input.closest("#approvalActionForm, #v272PriorEvaluation");
   if (!scope || scope.dataset.roleName !== "부서장") return;
   const value = Number(input.value);
   input.setCustomValidity(input.value !== "" && (!Number.isInteger(value) || value < 1 || value > 10)
