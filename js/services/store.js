@@ -1096,6 +1096,22 @@ class SupabaseStore {
     if (error) throw error;
   }
 
+  async getV272ApprovalHistory() {
+    const { data, error } = await this.client.rpc("v272_my_approval_history");
+    if (error) throw error;
+    return data || [];
+  }
+  async saveV272ApprovedEvaluation(id, evaluation) {
+    const { data, error } = await this.client.rpc("v272_save_approved_team_evaluation", { p_proposal_id:id, p_evaluation:evaluation });
+    if (error) throw error;
+    return data;
+  }
+  async resetV272Pin(id, pin) {
+    const { data, error } = await this.client.rpc("v272_admin_reset_edit_pin", { p_proposal_id:id, p_new_pin:pin });
+    if (error) throw error;
+    return data;
+  }
+
   async getMyApprovalInbox() {
     const { data, error } = await this.client.rpc("get_my_approval_inbox");
     if (error) throw error;

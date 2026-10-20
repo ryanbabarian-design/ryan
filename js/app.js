@@ -25,7 +25,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.3.15";
-import { createStore } from "./services/store.js?v=2.7.1";
+import { createStore } from "./services/store.js?v=2.7.2";
 import {
   appendImageFiles,
   createImageSelection,
@@ -2288,9 +2288,15 @@ async function renderApproverInbox() {
   main.innerHTML = `${adminPageHeader("내 결재함", isCeo ? "관리자가 일괄상신한 대표이사 결재건만 표시됩니다. 여러 건을 선택해 일괄승인할 수 있으며 반려는 건별로 처리합니다." : "본인 계정에 지정된 결재만 표시됩니다. 이전 단계가 승인되어야 다음 단계가 활성화됩니다.", "inbox")}<div class="loading-card"><div class="spinner"></div><p>결재함을 불러오는 중입니다.</p></div>`;
   try {
     const rows = await store.getMyApprovalInbox();
+    let history = [];
+    try { history = await store.getV272ApprovalHistory(); } catch (err) { console.warn("V2.7.2 SQL 확인 필요", err); }
+    const selectedView = new URLSearchParams(location.hash.split("?")[1] || "").get("view") || "pending";
+    const historyTabs = `<div class="header-buttons" style="margin-bottom:16px;flex-wrap:wrap">${[["pending","결재대기"],["evaluation","기존 승인건 평가 필요"],["completed","결재완료"],["rejected","반려·보완"]].map(([key,label])=>`<button class="button ${selectedView===key?'button-primary':'button-secondary'}" data-route="admin/inbox?view=${key}">${label}</button>`).join("")}</div>`;
+    const filteredHistory = history.filter(r => selectedView === "evaluation" ? r.role_name === "부서장" && r.can_evaluate && r.team_total == null : selectedView === "completed" ? r.approval_status === "승인" : r.approval_status === "반려");
+    const historyBody = filteredHistory.length ? `<div class="approver-inbox">${filteredHistory.map(r=>`<article class="approver-inbox-card"><div><span class="eyebrow">${escapeHtml(r.role_name)} · ${escapeHtml(r.department)}</span><h3>${escapeHtml(r.proposal_no)} · ${escapeHtml(r.title)}</h3><p>${escapeHtml(r.proposer_name)} · ${escapeHtml(r.acted_at ? new Date(r.acted_at).toLocaleString('ko-KR') : '-')}</p></div><div class="approver-inbox-state"><strong>${escapeHtml(r.approval_status)}</strong><small>2차평가 ${r.team_total == null ? '미입력' : r.team_total+'점'}</small><button class="button button-primary" data-route="admin/review/${escapeHtml(r.proposal_id)}">${r.can_evaluate && r.role_name==='부서장' ? '2차 평가 입력·수정' : '결재 내역 확인'}</button></div></article>`).join('')}</div>` : `<div class="empty-state"><h2>해당 내역이 없습니다.</h2></div>`;
     const batchToolbar = isCeo && rows.some((row) => row.can_act) ? `<div class="section-heading ceo-batch-toolbar"><div><span class="eyebrow">CEO BATCH APPROVAL</span><h2>대표이사 결재 대상</h2><p>승인할 건만 선택하세요. 반려는 각 제안의 결재 검토 화면에서 사유를 입력해 처리합니다.</p></div><div class="header-buttons"><label class="check-label"><input type="checkbox" id="ceoApproveAll"> 전체 선택</label><button id="ceoBatchApproveButton" class="button button-primary" data-action="batch-approve-ceo" disabled>선택 0건 일괄승인</button></div></div>` : `<div class="section-heading"><div><span class="eyebrow">MY APPROVALS</span><h2>결재 대상</h2></div></div>`;
     const body = rows.length ? `<div class="approver-inbox">${rows.map(row=>{ const days=Number(row.pending_days||0); const delay=days>=7?"장기 미결재":days>=3?"결재 지연":days>=1?"결재 필요":"신규 결재"; const checkbox=isCeo&&row.can_act?`<label class="check-label ceo-inbox-check"><input class="ceo-approve-checkbox" type="checkbox" value="${escapeHtml(row.proposal_id)}"> 선택</label>`:""; return `<article class="approver-inbox-card ${row.can_act ? "actionable" : "blocked"} overdue-${Number(row.overdue_level||0)}"><div>${checkbox}<span class="eyebrow">${escapeHtml(row.role_name)} · ${escapeHtml(row.department)}</span><h3>${escapeHtml(row.proposal_no)} · ${escapeHtml(row.title)}</h3><p>${escapeHtml(row.proposer_name)} · ${escapeHtml(formatDate(row.received_date))}</p></div><div class="approver-inbox-state"><span class="approval-delay-label">${escapeHtml(delay)}${row.can_act ? ` · ${days}일` : ""}</span>${statusBadge(row.approval_status)}<small>${escapeHtml(row.block_reason||"")}</small><button class="button ${row.can_act ? "button-primary" : "button-secondary"}" data-route="admin/review/${escapeHtml(row.proposal_id)}">${row.can_act ? "결재 검토" : "내용 보기"}</button></div></article>`;}).join("")}</div>` : `<div class="empty-state"><h2>현재 결재 대기 건이 없습니다.</h2><p>${isCeo ? "관리자가 심사완료 제안을 대표이사에게 일괄상신하면 이곳에 표시됩니다." : "V2.3 적용 이후 신규 제안 중 본인 순서가 된 건만 표시됩니다."}</p></div>`;
-    main.innerHTML = `${adminPageHeader("내 결재함", isCeo ? "관리자가 일괄상신한 대표이사 결재건만 표시됩니다. 선택 일괄승인 또는 건별 검토가 가능합니다." : "본인 계정에 지정된 결재만 표시됩니다. 이전 단계가 승인되어야 다음 단계가 활성화됩니다.", "inbox")}<section class="section">${batchToolbar}${body}</section>`;
+    main.innerHTML = `${adminPageHeader("내 결재함", isCeo ? "관리자가 일괄상신한 대표이사 결재건만 표시됩니다. 선택 일괄승인 또는 건별 검토가 가능합니다." : "본인 계정에 지정된 결재만 표시됩니다. 이전 단계가 승인되어야 다음 단계가 활성화됩니다.", "inbox")}<section class="section">${historyTabs}${selectedView === "pending" ? batchToolbar+body : historyBody}</section>`;
   } catch (error) {
     main.innerHTML = `${adminPageHeader("내 결재함", "V2.3.15 전자결재 SQL 적용 후 사용할 수 있습니다.", "inbox")}<div class="empty-state"><h2>결재함을 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p></div>`;
   }
@@ -2329,10 +2335,16 @@ async function renderApproverReview(id) {
   const records = await store.getApprovalRecords(proposal.id).catch(() => []);
   const permission = resolveApprovalPermission(proposal, state.approvalSteps, records, state.admin?.assignments || []);
   const isTeamLeaderReview = permission?.step?.role_name === "부서장";
+  let priorEvaluation = false;
+  try {
+    const history = await store.getV272ApprovalHistory();
+    priorEvaluation = history.some(r=>r.proposal_id===proposal.id && r.role_name==='부서장' && r.can_evaluate);
+  } catch (_) { /* optional V2.7.2 schema not installed */ }
+
   main.innerHTML = `${adminPageHeader("전자결재 검토", "제안내용을 확인한 뒤 본인에게 지정된 단계만 승인 또는 반려할 수 있습니다.", "inbox")}
     <section class="approver-review-layout${isTeamLeaderReview ? " team-leader-review" : ""}">
       <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2>${renderRichText(proposal.current_problem)}<h2>개선방안</h2>${renderRichText(proposal.improvement_plan)}<h2>기대효과</h2>${renderRichText(proposal.expected_effect)}<div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div>${proposal.first_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 자기평가</h2><p>제안자가 제출 시 작성한 평가표입니다. 결재자는 점수를 변경하지 않고 참고만 합니다.</p></div></div>${renderEvaluationTable("approver-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}` : (proposal.legacy_first_evaluation_exempt === true ? `<div class="analytics-empty"><strong>기존 심사대기 이관건</strong><br>1차 본인평가 면제 · 2차 팀장평가부터 현행 기준 적용</div>` : `<div class="analytics-empty">1차 평가자료가 없습니다.</div>`)}${proposal.team_leader_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 팀장평가</h2><p>팀장이 평가한 점수입니다.</p></div></div>${renderEvaluationTable("approver-team", proposal.team_leader_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}` : ""}${proposal.second_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">3RD EVALUATION</span><h2>3차 심사위원 평가</h2><p>심사위원회가 공동으로 확정한 최종 평가입니다.</p></div></div>${renderEvaluationTable("approver-second", proposal.second_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"3차 평가 · 심사위원회 공동평가" })}` : ""}<div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div>${renderAiEffectAnalysis(proposal, null, false, "approverAiEffectAnalysisCard")}</article>
-      <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${renderApprovalProgress(state.approvalSteps, records)}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}</section></aside>
+      <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${renderApprovalProgress(state.approvalSteps, records)}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}${priorEvaluation ? `<section class="team-leader-evaluation-box" id="v272PriorEvaluation" data-id="${escapeHtml(proposal.id)}"><h3>기존 승인건 · 2차 팀장평가 보완</h3><p>기존 결재는 유지됩니다. 3차 심사 완료건은 수정할 수 없습니다.</p>${renderEvaluationTable('team',proposal.team_leader_evaluation||{},{title:'2차 팀장평가',subtitle:'기존 승인자 평가'})}<button class="button button-primary" data-action="v272-save-prior-evaluation" data-id="${escapeHtml(proposal.id)}">2차 평가점수 저장</button></section>` : ''}</section></aside>
     </section>`;
   await hydrateAiEffectAnalysis(proposal, false, "approverAiEffectAnalysisCard");
 }
@@ -2490,6 +2502,7 @@ function renderAdminEdit(id) {
     <section class="page-header">
       <div><button class="back-link" data-route="admin">← 관리자 목록</button><span class="eyebrow">ADMIN REVIEW</span><h1>${escapeHtml(proposal.proposal_no)} 관리자 평가·심사</h1><p>${escapeHtml(proposal.title)}</p></div>
       <div class="header-buttons">
+        <button class="button button-secondary" data-action="v272-reset-pin" data-id="${escapeHtml(proposal.id)}">수정번호 재설정</button>
         <button class="button button-ghost" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
         <button class="button button-ghost" data-route="detail/${escapeHtml(proposal.proposal_no)}">공개 상세보기</button>
       </div>
@@ -2966,6 +2979,24 @@ document.addEventListener("click", async (event) => {
       const activeCount = Number(result?.active_count ?? state.employees.length);
       const deactivatedCount = Number(result?.deactivated_count ?? 0);
       showToast(`직원명단 최신화 완료 · 활성 ${activeCount}명${deactivatedCount ? ` · 비활성 ${deactivatedCount}명` : ""}`);
+    } else if (action === "v272-save-prior-evaluation") {
+      const panel = $("#v272PriorEvaluation");
+      if (!panel) throw new Error("평가 입력 영역을 찾지 못했습니다.");
+      const evaluation = collectEvaluationFromForm(panel,"team");
+      const total = calculateEvaluationTotal(evaluation);
+      if (!confirm(`2차 평가 ${total}점을 저장하시겠습니까? 기존 승인 기록은 유지됩니다.`)) return;
+      await store.saveV272ApprovedEvaluation(actionButton.dataset.id,evaluation);
+      await refreshData();
+      await renderApproverReview(actionButton.dataset.id);
+      showToast(`2차 평가 ${total}점 저장 완료`);
+    } else if (action === "v272-reset-pin") {
+      if (!state.admin?.isSystemAdmin) throw new Error("시스템 관리자만 수정번호를 재설정할 수 있습니다.");
+      const pin = prompt("새로운 수정번호 숫자 4자리를 입력하세요. 기존 번호는 무효화됩니다.");
+      if (pin == null) return;
+      if (!/^\d{4}$/.test(pin)) throw new Error("숫자 4자리를 입력하세요.");
+      if (!confirm("수정번호를 재설정하시겠습니까? 변경 이력이 남습니다.")) return;
+      await store.resetV272Pin(actionButton.dataset.id,pin);
+      showToast("수정번호를 재설정했습니다.");
     } else if (action === "delete-own-proposal") {
       const proposalNo = actionButton.dataset.no;
       const proposal = state.proposals.find((row) => row.proposal_no === proposalNo);
