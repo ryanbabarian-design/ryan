@@ -4,6 +4,32 @@ import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normaliz
 import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3.11";
 import { mergeEmployeeRoster, normalizeEmployeeImportRows } from "../employee-sync.js?v=2.3.11";
 
+// V2.7.4: content-only corrections are separate from review/PIN APIs.
+const ADMIN_CONTENT_FIELDS = ["title", "current_problem", "improvement_plan", "expected_effect", "cost_amount", "proposer_effect_amount"];
+const ADMIN_CONTENT_HISTORY_KEY = "proposal-system:v274:content-history";
+function validateAdminContentPatch(patch, reason) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("수정 내용을 확인하세요.");
+  if (Object.keys(patch).some(key => !ADMIN_CONTENT_FIELDS.includes(key))) throw new Error("수정할 수 없는 항목이 포함되어 있습니다.");
+  const normalized = {};
+  for (const key of ADMIN_CONTENT_FIELDS) {
+    if (!Object.hasOwn(patch, key)) throw new Error("수정 내용 항목이 누락되었습니다. 화면을 다시 여세요.");
+    if (key.endsWith("_amount")) {
+      if (typeof patch[key] !== "number" || !Number.isSafeInteger(patch[key]) || patch[key] < 0) throw new Error("금액은 0 이상의 정수로 입력하세요.");
+      normalized[key] = patch[key];
+    } else {
+      if (typeof patch[key] !== "string" || !patch[key].trim()) throw new Error("제안명·문제점·개선방안·기대효과를 입력하세요.");
+      const limit = key === "title" ? 120 : 200000;
+      if (patch[key].length > limit) throw new Error(`입력 내용이 너무 깁니다. ${key === "title" ? "제안명은 120자" : "본문은 200,000자"} 이내로 입력하세요.`);
+      normalized[key] = key === "title" ? patch[key].trim() : patch[key];
+    }
+  }
+  const normalizedReason = String(reason || "").trim();
+  if (normalizedReason.length < 5 || normalizedReason.length > 1000) throw new Error("수정 사유는 5~1,000자로 입력하세요.");
+  return { patch: normalized, reason: normalizedReason };
+}
+function contentSnapshot(row) { return Object.fromEntries(ADMIN_CONTENT_FIELDS.map(key => [key, row[key] ?? (key.endsWith("_amount") ? 0 : "")])); }
+function safeAdminContentRow(row) { const result = clone(row); delete result.edit_pin_hash; delete result.reviewer_id; return result; }
+
 const PROPOSAL_KEY = "proposal-system:v1:proposals";
 const EMPLOYEE_KEY = "proposal-system:v1:employees";
 const ADMIN_KEY = "proposal-system:v1:admin";
@@ -41,6 +67,8 @@ function asArray(value) {
 
 function normalizeProposal(row) {
   return {
+    admin_content_revision: 0,
+    admin_content_updated_at: null,
     before_images: [],
     after_images: [],
     score: null,
@@ -320,6 +348,45 @@ class DemoStore {
 
   async changeOwnPassword() {
     throw new Error("데모 모드에서는 비밀번호를 변경할 수 없습니다.");
+  }
+
+  async getAdminContent(id) {
+    const admin = await this.getAdminSession();
+    if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 내용을 수정할 수 있습니다.");
+    const row = (await this.getProposals()).find(row => row.id === id);
+    if (!row) throw new Error("제안을 찾지 못했습니다.");
+    return safeAdminContentRow(row);
+  }
+
+  async getAdminContentHistory(id) {
+    const admin = await this.getAdminSession();
+    if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 수정 이력을 볼 수 있습니다.");
+    return JSON.parse(localStorage.getItem(ADMIN_CONTENT_HISTORY_KEY) || "[]").filter(row => row.proposal_id === id).slice(-50).reverse();
+  }
+
+  async adminUpdateContent(id, patch, reason, expectedUpdatedAt) {
+    const admin = await this.getAdminSession();
+    if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 내용을 수정할 수 있습니다.");
+    const input = validateAdminContentPatch(patch, reason);
+    const rows = await this.getProposals();
+    const index = rows.findIndex(row => row.id === id);
+    if (index < 0) throw new Error("제안을 찾지 못했습니다.");
+    const before = rows[index];
+    if ((before.updated_at ?? null) !== (expectedUpdatedAt ?? null)) throw new Error("다른 사용자가 제안을 변경했습니다. 작성 내용을 복사한 뒤 화면을 다시 열어 확인하세요.");
+    const beforeContent = contentSnapshot(before);
+    if (ADMIN_CONTENT_FIELDS.every(key => beforeContent[key] === input.patch[key])) throw new Error("변경된 내용이 없습니다.");
+    const now = new Date(Math.max(Date.now(), (Date.parse(before.updated_at) || 0) + 1)).toISOString();
+    const revision = Number(before.admin_content_revision || 0) + 1;
+    const history = { id: crypto.randomUUID(), proposal_id:id, proposal_no:before.proposal_no, reason:input.reason,
+      actor_name:admin.displayName || admin.email, created_at:now, revision,
+      before_content:beforeContent, after_content:input.patch, original_status:before.status, original_review_result:before.review_result };
+    rows[index] = { ...before, ...input.patch, updated_at:now, admin_content_revision:revision, admin_content_updated_at:now };
+    const logs = JSON.parse(localStorage.getItem(ADMIN_CONTENT_HISTORY_KEY) || "[]");
+    logs.push(history);
+    const original = localStorage.getItem(PROPOSAL_KEY);
+    try { localStorage.setItem(PROPOSAL_KEY, JSON.stringify(rows)); localStorage.setItem(ADMIN_CONTENT_HISTORY_KEY, JSON.stringify(logs)); }
+    catch (error) { localStorage.setItem(PROPOSAL_KEY, original); throw error; }
+    return { proposal:safeAdminContentRow(rows[index]), history_id:history.id };
   }
 
   async adminUpdateProposal(id, patch) {
@@ -920,6 +987,29 @@ class SupabaseStore {
     const { error } = await this.client.auth.updateUser({ password: newPassword });
     if (error) throw error;
     return true;
+  }
+
+  async getAdminContent(id) {
+    const { data, error } = await this.client.rpc("v274_get_admin_content", { p_proposal_id:id });
+    if (error) throw error;
+    if (!data?.id) throw new Error("제안 내용을 불러오지 못했습니다.");
+    return normalizeProposal(data);
+  }
+
+  async getAdminContentHistory(id) {
+    const { data, error } = await this.client.rpc("v274_get_admin_content_history", { p_proposal_id:id });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async adminUpdateContent(id, patch, reason, expectedUpdatedAt) {
+    const input = validateAdminContentPatch(patch, reason);
+    const { data, error } = await this.client.rpc("v274_admin_update_proposal_content", {
+      p_proposal_id:id, p_patch:input.patch, p_reason:input.reason, p_expected_updated_at:expectedUpdatedAt ?? null,
+    });
+    if (error) throw error;
+    if (!data?.proposal?.id || !data?.history_id) throw new Error("저장 응답을 확인하지 못했습니다. 중복 저장하지 말고 다시 조회하세요.");
+    return { ...data, proposal:normalizeProposal(data.proposal) };
   }
 
   async adminUpdateProposal(id, patch) {

@@ -25,7 +25,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.3.15";
-import { createStore } from "./services/store.js?v=2.7.2";
+import { createStore } from "./services/store.js?v=2.7.4";
 import {
   appendImageFiles,
   createImageSelection,
@@ -1782,11 +1782,13 @@ function renderDetail(proposalNo) {
             ? `<button id="proposerEditButton" class="button button-secondary" data-route="edit/${escapeHtml(proposal.proposal_no)}">제안자 수정</button>
                <button id="proposerDeleteButton" class="button button-ghost proposer-delete-button" data-action="delete-own-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안자 삭제</button>`
             : ""}
+          ${state.admin?.isSystemAdmin ? `<button class="button button-primary" data-route="admin/content/${escapeHtml(proposal.id)}">관리자 내용 수정</button>` : ""}
           <button id="rejectedResubmitButton" hidden class="button button-secondary" data-route="edit/${escapeHtml(proposal.proposal_no)}">반려 수정·재상신</button>
         </div>
       </div>
     </section>
 
+    ${contentCorrectionNotice(proposal)}
     <section class="detail-summary-grid">
       <div><small>심사결과</small>${statusBadge(proposal.review_result)}</div>
       <div><small>실시상태</small>${statusBadge(proposal.implementation_status)}</div>
@@ -2347,7 +2349,7 @@ async function renderApproverReview(id) {
 
   main.innerHTML = `${adminPageHeader("전자결재 검토", "제안내용을 확인한 뒤 본인에게 지정된 단계만 승인 또는 반려할 수 있습니다.", "inbox")}
     <section class="approver-review-layout${(isTeamLeaderReview || priorEvaluation) ? " team-leader-review" : ""}">
-      <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1><h2>현재 문제점</h2>${renderRichText(proposal.current_problem)}<h2>개선방안</h2>${renderRichText(proposal.improvement_plan)}<h2>기대효과</h2>${renderRichText(proposal.expected_effect)}<div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div>${proposal.first_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 자기평가</h2><p>제안자가 제출 시 작성한 평가표입니다. 결재자는 점수를 변경하지 않고 참고만 합니다.</p></div></div>${renderEvaluationTable("approver-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}` : (proposal.legacy_first_evaluation_exempt === true ? `<div class="analytics-empty"><strong>기존 심사대기 이관건</strong><br>1차 본인평가 면제 · 2차 팀장평가부터 현행 기준 적용</div>` : `<div class="analytics-empty">1차 평가자료가 없습니다.</div>`)}${proposal.team_leader_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 팀장평가</h2><p>팀장이 평가한 점수입니다.</p></div></div>${renderEvaluationTable("approver-team", proposal.team_leader_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}` : ""}${proposal.second_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">3RD EVALUATION</span><h2>3차 심사위원 평가</h2><p>심사위원회가 공동으로 확정한 최종 평가입니다.</p></div></div>${renderEvaluationTable("approver-second", proposal.second_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"3차 평가 · 심사위원회 공동평가" })}` : ""}<div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div>${renderAiEffectAnalysis(proposal, null, false, "approverAiEffectAnalysisCard")}</article>
+      <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1>${contentCorrectionNotice(proposal)}<h2>현재 문제점</h2>${renderRichText(proposal.current_problem)}<h2>개선방안</h2>${renderRichText(proposal.improvement_plan)}<h2>기대효과</h2>${renderRichText(proposal.expected_effect)}<div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div>${proposal.first_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 자기평가</h2><p>제안자가 제출 시 작성한 평가표입니다. 결재자는 점수를 변경하지 않고 참고만 합니다.</p></div></div>${renderEvaluationTable("approver-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}` : (proposal.legacy_first_evaluation_exempt === true ? `<div class="analytics-empty"><strong>기존 심사대기 이관건</strong><br>1차 본인평가 면제 · 2차 팀장평가부터 현행 기준 적용</div>` : `<div class="analytics-empty">1차 평가자료가 없습니다.</div>`)}${proposal.team_leader_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 팀장평가</h2><p>팀장이 평가한 점수입니다.</p></div></div>${renderEvaluationTable("approver-team", proposal.team_leader_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}` : ""}${proposal.second_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">3RD EVALUATION</span><h2>3차 심사위원 평가</h2><p>심사위원회가 공동으로 확정한 최종 평가입니다.</p></div></div>${renderEvaluationTable("approver-second", proposal.second_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"3차 평가 · 심사위원회 공동평가" })}` : ""}<div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div>${renderAiEffectAnalysis(proposal, null, false, "approverAiEffectAnalysisCard")}</article>
       <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${renderApprovalProgress(state.approvalSteps, records)}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}${priorEvaluation ? `<section class="team-leader-evaluation-box" id="v272PriorEvaluation" data-role-name="부서장" data-id="${escapeHtml(proposal.id)}"><h3>기존 승인건 · 2차 팀장평가 보완</h3><p>기존 결재는 유지됩니다. 3차 심사 완료건은 수정할 수 없습니다.</p>${renderEvaluationTable('team',proposal.team_leader_evaluation||{},{title:'2차 팀장평가',subtitle:'기존 승인자 평가'})}<div class="evaluation-lock-note" data-team-evaluation-guide role="status" aria-live="polite"></div><button type="button" class="button button-primary" data-action="v272-save-prior-evaluation" data-id="${escapeHtml(proposal.id)}">2차 평가점수 저장</button></section>` : ''}</section></aside>
     </section>`;
   // Historical-approval editor is separate from the regular approval form.
@@ -2416,6 +2418,7 @@ function renderAdmin(action = "", id = "") {
   }
 
   if (action === "operations") { void operationsUI.renderAdmin(); return; }
+  if (action === "content") { void renderAdminContent(id); return; }
   if (action === "edit") { renderAdminEdit(id); return; }
   if (action === "review") { void renderApproverReview(id); return; }
   if (action === "inbox") { void renderApproverInbox(); return; }
@@ -2497,6 +2500,102 @@ function renderAdmin(action = "", id = "") {
   `;
 }
 
+// V2.7.4 — administrative text corrections, never review/approval changes.
+const ADMIN_CONTENT_LABELS = { title:"제안명", current_problem:"현재 문제점", improvement_plan:"개선방안", expected_effect:"기대효과", cost_amount:"예상 투입비용", proposer_effect_amount:"제안자 예상 효과금액" };
+function contentCorrectionNotice(proposal) {
+  const revision = Number(proposal.admin_content_revision || 0);
+  if (!revision) return "";
+  const time = proposal.admin_content_updated_at ? new Date(proposal.admin_content_updated_at).toLocaleString("ko-KR") : "";
+  return `<div class="evaluation-lock-note" data-content-correction-notice><strong>관리자 내용 수정 ${revision}회</strong> · ${escapeHtml(time)}<br>제안 본문이 수정되었습니다. 내용 수정은 기존 평가·결재를 다시 승인한 것이 아닙니다.</div>`;
+}
+function contentHistoryMarkup(logs) {
+  if (!logs.length) return `<p class="field-help">관리자 내용 수정 이력이 없습니다. 이번 버전 적용 이후의 수정부터 기록됩니다.</p>`;
+  return logs.map(log => {
+    const keys = Object.keys(ADMIN_CONTENT_LABELS).filter(key => JSON.stringify(log.before_content?.[key]) !== JSON.stringify(log.after_content?.[key]));
+    const value = (obj, key) => key.endsWith("_amount") ? `<p>${formatCurrency(obj?.[key])}</p>` : key === "title" ? `<p>${escapeHtml(obj?.[key] || "")}</p>` : renderRichText(obj?.[key] || "");
+    return `<details class="form-section"><summary><strong>${Number(log.revision)}차 내용 수정</strong> · ${escapeHtml(log.actor_name)} · ${escapeHtml(new Date(log.created_at).toLocaleString("ko-KR"))}</summary>
+      <p><strong>수정 사유:</strong> ${escapeHtml(log.reason)}</p>
+      <p class="field-help">수정 당시: ${escapeHtml(log.original_status || "-")} / ${escapeHtml(log.original_review_result || "-")}. 해당 시점 평가·결재 기록은 유지했습니다.</p>
+      ${keys.map(key => `<h3>${ADMIN_CONTENT_LABELS[key]}</h3><div class="comparison-grid"><div class="comparison-card before"><strong>수정 전</strong>${value(log.before_content,key)}</div><div class="comparison-arrow">→</div><div class="comparison-card after"><strong>수정 후</strong>${value(log.after_content,key)}</div></div>`).join("")}
+    </details>`;
+  }).join("");
+}
+async function renderAdminContent(id) {
+  if (!state.admin?.isSystemAdmin) { main.innerHTML = `<div class="empty-state"><h2>시스템 관리자 전용 기능입니다.</h2></div>`; return; }
+  const route = location.hash;
+  main.innerHTML = `<div class="loading-card"><div class="spinner"></div><p>최신 제안 내용과 수정 이력을 불러옵니다.</p></div>`;
+  try {
+    const [proposal, logs] = await Promise.all([store.getAdminContent(id), store.getAdminContentHistory(id)]);
+    if (location.hash !== route) return;
+    state.proposals = state.proposals.map(row => row.id === id ? {...row,...proposal} : row);
+    main.innerHTML = `
+      <section class="page-header"><div><span class="eyebrow">ADMIN CONTENT EDIT</span><h1 style="color:#fff">${escapeHtml(proposal.proposal_no)} 관리자 내용 수정</h1><p style="color:#cbd5e1">수정번호 없이 본문을 정정합니다. 기존 접수·심사대기·승인완료 건에 적용됩니다.</p></div><button class="button button-ghost" data-route="admin/edit/${escapeHtml(id)}">평가·심사 화면으로</button></section>
+      <form id="adminContentForm" class="proposal-form" data-id="${escapeHtml(id)}" data-expected-at="${escapeHtml(proposal.updated_at || "")}">
+        <section class="form-section form-section-pin">
+          <div class="form-section-title"><span>!</span><div><h2>내용만 수정 · 평가와 결재는 유지</h2><p>재상신·재승인·재심사 처리와는 별개입니다. 확정 실적이나 포상금도 바뀌지 않습니다.</p></div></div>
+          <div class="evaluation-lock-note">${escapeHtml(proposal.proposer_name)} · ${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안<br>현재 상태: ${escapeHtml(proposal.status)} / ${escapeHtml(proposal.review_result)}<br>작성자·부서·제안종류·사진·1/2/3차 점수·결재·포상정보는 이 화면에서 수정하지 않습니다.</div>
+          <label class="field">수정 사유 <b>*</b><textarea name="admin_content_reason" rows="2" minlength="5" maxlength="1000" required placeholder="예: 누락된 개선방안 표와 기대효과 산출근거 보완"></textarea><small class="field-help">5~1,000자. 수정 전후 내용과 관리자·수정일시가 함께 기록됩니다.</small></label>
+        </section>
+        <section class="form-section"><div class="form-section-title"><span>01</span><div><h2>제안 핵심내용</h2><p>수정된 내용은 상세보기와 제안서 인쇄에도 반영됩니다.</p></div></div>
+          <label class="field">제안명 <b>*</b><input name="title" maxlength="120" required value="${escapeHtml(proposal.title)}"></label>
+        </section>
+        <section class="form-section comparison-section"><div class="form-section-title"><span>02</span><div><h2>개선 전·후 비교</h2><p>글자·문단·표 편집과 크게 보기를 기존과 동일하게 사용할 수 있습니다.</p></div></div>
+          <div class="comparison-grid"><div class="comparison-card before"><div class="comparison-label">BEFORE · 현재 문제점</div>${richEditorMarkup({id:"adminProblemEditor",name:"current_problem",value:proposal.current_problem})}</div><div class="comparison-arrow">→</div><div class="comparison-card after"><div class="comparison-label">AFTER · 개선방안</div>${richEditorMarkup({id:"adminPlanEditor",name:"improvement_plan",value:proposal.improvement_plan})}</div></div>
+        </section>
+        <section class="form-section"><div class="form-section-title"><span>03</span><div><h2>기대효과 및 예상금액</h2><p>제안자 예상금액만 정정합니다. 심사 확정 효과금액·포상금은 유지됩니다.</p></div></div>
+          <div class="field rich-field"><span class="rich-field-label">기대효과 <b>*</b></span>${richEditorMarkup({id:"adminEffectEditor",name:"expected_effect",value:proposal.expected_effect})}</div>
+          <div class="form-grid two"><label class="field">예상 투입비용(원)<input type="number" min="0" step="1" max="9007199254740991" name="cost_amount" required value="${Number(proposal.cost_amount || 0)}"></label><label class="field">제안자 예상 효과금액(원)<input type="number" min="0" step="1" max="9007199254740991" name="proposer_effect_amount" required value="${Number(proposal.proposer_effect_amount || 0)}"></label></div>
+        </section>
+        <div class="form-submit-bar"><label class="check-label"><input name="content_acknowledged" type="checkbox" required> 내용만 정정하며 기존 평가·결재를 재승인하지 않는다는 점을 확인했습니다.</label><div><button type="button" class="button button-ghost" data-route="admin/edit/${escapeHtml(id)}">취소</button><button type="submit" class="button button-primary">관리자 내용 수정 저장</button></div></div>
+      </form>
+      <section class="section"><div class="section-heading"><div><span class="eyebrow">CONTENT HISTORY · ADMIN ONLY</span><h2>내용 수정 이력</h2><p>최근 50건 · 수정 전후 내용과 사유를 확인하세요.</p></div></div>${contentHistoryMarkup(logs)}</section>`;
+  } catch(error) {
+    if (location.hash !== route) return;
+    main.innerHTML = `<section class="empty-state"><h2>내용 수정 화면을 열지 못했습니다.</h2><p>${escapeHtml(error.message)}</p><p>V2.7.4 SQL 적용과 시스템 관리자 로그인을 확인하세요. 기존 제안은 변경되지 않았습니다.</p><button class="button button-ghost" data-route="admin/edit/${escapeHtml(id)}">돌아가기</button></section>`;
+  }
+}
+async function handleAdminContentSubmit(form) {
+  if (form.dataset.submitting === "true") return;
+  const session = await store.getAdminSession();
+  if (!session?.isSystemAdmin) throw new Error("시스템 관리자만 내용을 수정할 수 있습니다. 다시 로그인하세요.");
+  if (!form.elements.content_acknowledged.checked) throw new Error("기존 평가·결재 유지 안내에 체크하세요.");
+  syncAllRichEditors(form);
+  const data = new FormData(form);
+  const patch = {};
+  for (const key of Object.keys(ADMIN_CONTENT_LABELS)) {
+    if (key.endsWith("_amount")) patch[key] = Number(data.get(key));
+    else if (key === "title") patch[key] = String(data.get(key) || "").trim();
+    else {
+      patch[key] = sanitizeRichTextHtml(String(data.get(key) || ""));
+      if (!richTextPlainText(patch[key]).trim()) throw new Error(`${ADMIN_CONTENT_LABELS[key]} 내용을 입력하세요.`);
+    }
+  }
+  const reason = String(data.get("admin_content_reason") || "").trim();
+  if (reason.length < 5 || reason.length > 1000) throw new Error("수정 사유는 5~1,000자로 입력하세요.");
+  if (!confirm("제안 내용을 관리자 권한으로 수정하시겠습니까?\n수정 전후 내용과 사유가 기록됩니다. 평가점수·승인기록·포상금은 변경하지 않습니다.")) return;
+  const button = form.querySelector('button[type="submit"]');
+  form.dataset.submitting = "true";button.disabled = true;button.textContent = "내용 저장·확인 중…";
+  let saved = false;
+  try {
+    const result = await store.adminUpdateContent(form.dataset.id, patch, reason, form.dataset.expectedAt || null);
+    saved = true;
+    const verified = await store.getAdminContent(form.dataset.id);
+    if (Number(verified.admin_content_revision) !== Number(result.proposal.admin_content_revision)
+        || Object.keys(patch).some(key => verified[key] !== patch[key])) {
+      throw new Error("저장 후 조회 내용이 다릅니다. 다른 변경이 있었는지 확인하세요.");
+    }
+    state.proposals = state.proposals.map(row => row.id === verified.id ? {...row,...verified} : row);
+    go(`detail/${verified.proposal_no}`);
+    showToast("관리자 내용 수정 완료 · 저장 내용 확인 · 기존 평가·결재 유지");
+  } catch(error) {
+    if (saved) throw new Error(`저장 요청은 처리됐지만 확인을 마치지 못했습니다. 중복 저장하지 말고 상세화면을 다시 확인하세요. ${error.message}`);
+    throw error;
+  } finally {
+    delete form.dataset.submitting;
+    if (button.isConnected) {button.disabled=false;button.textContent="관리자 내용 수정 저장";}
+  }
+}
+
 function renderAdminEdit(id) {
   const proposal = state.proposals.find((item) => item.id === id);
   if (!proposal) {
@@ -2508,6 +2607,7 @@ function renderAdminEdit(id) {
     <section class="page-header">
       <div><button class="back-link" data-route="admin">← 관리자 목록</button><span class="eyebrow">ADMIN REVIEW</span><h1>${escapeHtml(proposal.proposal_no)} 관리자 평가·심사</h1><p>${escapeHtml(proposal.title)}</p></div>
       <div class="header-buttons">
+        <button class="button button-primary" data-route="admin/content/${escapeHtml(proposal.id)}">관리자 내용 수정</button>
         <button class="button button-secondary" data-action="v272-reset-pin" data-id="${escapeHtml(proposal.id)}">수정번호 재설정</button>
         <button class="button button-ghost" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
         <button class="button button-ghost" data-route="detail/${escapeHtml(proposal.proposal_no)}">공개 상세보기</button>
@@ -2520,6 +2620,7 @@ function renderAdminEdit(id) {
           <div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>
           ${statusBadge(proposal.status)}
         </div>
+        ${contentCorrectionNotice(proposal)}
         <h2>현재 문제점</h2>${renderRichText(proposal.current_problem)}
         <h2>개선방안</h2>${renderRichText(proposal.improvement_plan)}
         <h2>기대효과</h2>${renderRichText(proposal.expected_effect)}
@@ -3087,6 +3188,8 @@ document.addEventListener("submit", async (event) => {
       if (data.get("implementationStatus")) params.set("implementation", data.get("implementationStatus"));
       location.hash = `#list${params.toString() ? `?${params}` : ""}`;
       render();
+    } else if (event.target.id === "adminContentForm") {
+      await handleAdminContentSubmit(event.target);
     } else if (event.target.id === "proposalForm") {
       await handleProposalSubmit(event.target);
     } else if (event.target.id === "adminLoginForm") {
