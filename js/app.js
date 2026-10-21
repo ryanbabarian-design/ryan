@@ -1,3 +1,5 @@
+import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
+import { createQuestionSearch } from "./search/question-ui.js?v=2.7.7";
 import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
 import { createPerformancePage } from './reports/performance-ui.js?v=2.6.8';
 import {
@@ -567,9 +569,11 @@ const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selec
 const main = $("#app");
 const toast = $("#toast");
 const performancePage = createPerformancePage({root:main, store, navigate:go, notify:(message,error)=>showToast(message,error?"error":"success")});
+const questionSearch = createQuestionSearch({root:main, store});
 
 const operationsUI = createOperationsUI({root:main, repository:store.operations, getAdmin:()=>state.admin, adminHeader:()=>adminPageHeader("접수·공지 관리", "신규 접수 상태와 직원 공지를 한곳에서 관리합니다.", "operations"), notify:(message,error)=>showToast(message,error?"error":"success")});
 
+let authorPicker = null;
 let formImageSelections = null;
 const filePreviewUrls = new WeakMap();
 
@@ -1010,6 +1014,7 @@ async function refreshData() {
   state.proposals = proposals; state.employees = employees; state.approvalDepartments = approvalDepartments; state.departmentGoals = departmentGoals; state.approvalSteps = approvalSteps; state.admin = admin; state.approverAssignments = approverAssignments;
   state.approvalInbox = admin ? await store.getMyApprovalInbox().catch(() => []) : [];
   performancePage.invalidate();
+  questionSearch.invalidate();
   state.approvalOverdueSummary = admin?.isSystemAdmin ? await store.getApprovalOverdueSummary().catch(() => ({})) : {};
   syncApprovalInboxBadge();
   await operationsUI.refresh();
@@ -1027,6 +1032,8 @@ async function init() {
 }
 
 function render() {
+  authorPicker?.destroy(); authorPicker = null;
+  questionSearch.suspend();
   operationsUI.syncChrome();
   const [route = "dashboard"] = routeParts();
   document.body.classList.toggle("print-route", route === "print" || route === "report");
@@ -1214,11 +1221,11 @@ function renderDashboard() {
   const rankingMetric = getRankingMetricFromUrl();
   const top10 = topProposals(state.proposals, report.selectedYear, rankingMetric, 10);
   const recent = filterProposals(state.proposals).slice(0, 3);
-  const departments = [...new Set(state.proposals.map((item) => item.department).filter(Boolean))].sort();
   const selectedLabel = report.selectedYear === "all" ? "전체 연도" : `${report.selectedYear}년`;
   const dashboardYearParam = encodeURIComponent(report.selectedYear);
 
   main.innerHTML = `
+    ${questionSearch.markup()}
     <section class="hero brand-hero">
       <div class="hero-copy">
         <span class="eyebrow">HANA METAL IDEA HUB</span>
@@ -1226,7 +1233,7 @@ function renderDashboard() {
         <p>기존 제안을 검색하고, 개선 전·후 사진과 함께 새로운 아이디어를 바로 접수하세요.</p>
         <div class="hero-actions">
           <button class="button button-primary" data-route="new"><span aria-hidden="true">＋</span> 새 제안 작성</button>
-          <button class="button button-secondary" data-route="list"><span aria-hidden="true">⌕</span> 유사 제안 검색</button>
+          <button class="button button-secondary" data-action="focus-unified-search"><span aria-hidden="true">⌕</span> 통합 제안 검색</button>
         </div>
       </div>
       <div class="hero-panel brand-hero-panel" aria-hidden="true">
@@ -1270,21 +1277,6 @@ function renderDashboard() {
       <button class="metric-card operational-card warning" data-route="list?year=${dashboardYearParam}&workflow=overdue-implementation"><span class="metric-icon">↻</span><div><small>시행 지연</small><strong>${operations.overdueImplementation.toLocaleString("ko-KR")}건</strong><em>채택 후 30일+</em></div></button>
       <div class="metric-card operational-card"><span class="metric-icon">＋</span><div><small>이번달 신규</small><strong>${operations.monthNew.toLocaleString("ko-KR")}건</strong><em>현재 월 접수</em></div></div>
       <div class="metric-card operational-card"><span class="metric-icon">₩</span><div><small>이번달 포상금</small><strong class="metric-money">${formatCurrency(operations.monthAward)}</strong><em>현재 월 제안 기준</em></div></div>
-    </section>
-
-    <section class="quick-search brand-quick-search">
-      <div>
-        <span class="eyebrow">DUPLICATE CHECK</span>
-        <h2>제안하기 전에 비슷한 아이디어가 있는지 검색하세요.</h2>
-      </div>
-      <form id="quickSearchForm" class="search-box">
-        <input name="query" placeholder="예: 에어건, 절단기, 안전장치, 작업시간 단축" aria-label="유사 제안 검색어">
-        <button class="button button-primary" type="submit">⌕ 검색</button>
-      </form>
-      <div class="keyword-row">
-        <span class="keyword-label">추천 검색어</span>
-        ${departments.slice(0, 8).map((department) => `<button class="keyword" data-search="${escapeHtml(department)}">${escapeHtml(department)}</button>`).join("")}
-      </div>
     </section>
 
     <section class="section dashboard-recent brand-recent">
@@ -1455,7 +1447,9 @@ function renderDashboard() {
       </section>
     </section>
   `;
+  questionSearch.mount();
 }
+
 function getFiltersFromUrl() {
   const params = new URLSearchParams(location.hash.split("?")[1] || "");
   return {
@@ -1556,11 +1550,16 @@ function renderList() {
 }
 
 function employeeOptions(selectedName = "", selectedDepartment = "") {
-  return state.employees.map((employee) => `
-    <option value="${escapeHtml(employee.name)}" data-department="${escapeHtml(employee.department)}" ${employee.name === selectedName && employee.department === selectedDepartment ? "selected" : ""}>
-      ${escapeHtml(employee.name)} · ${escapeHtml(employee.department)}
+  const matches = state.employees.filter(e => e.name === selectedName && e.department === selectedDepartment);
+  const rows = state.employees.map((employee) => `
+    <option value="${escapeHtml(employee.name)}" data-department="${escapeHtml(employee.department)}" data-employee-no="${escapeHtml(employee.employee_no || '')}" data-employee-id="${escapeHtml(employee.id || '')}" ${matches.length === 1 && employee.name === selectedName && employee.department === selectedDepartment ? "selected" : ""}>
+      ${escapeHtml(employee.name)} · ${escapeHtml(employee.department)}${employee.employee_no ? ' · ' + escapeHtml(employee.employee_no) : ''}
     </option>
   `).join("");
+  // Preserve an existing proposal's original author when the current active roster changed.
+  const historical = selectedName && selectedDepartment && matches.length !== 1
+    ? `<option selected value="${escapeHtml(selectedName)}" data-department="${escapeHtml(selectedDepartment)}" data-legacy="true">${escapeHtml(selectedName)} · ${escapeHtml(selectedDepartment)} (기존 제안자)</option>` : '';
+  return rows + historical;
 }
 
 function renderSimilar(title, excludeNo = "") {
@@ -1630,14 +1629,14 @@ function renderProposalForm(proposalNo = "") {
         </section>` : ""}
 
       <section class="form-section">
-        <div class="form-section-title"><span>01</span><div><h2>제안자 정보</h2><p>직원명을 선택하면 부서가 자동 입력됩니다.</p></div></div>
+        <div class="form-section-title"><span>01</span><div><h2>제안자 정보</h2><p>이름을 검색해 직원을 선택하면 부서가 자동 입력됩니다.</p></div></div>
         <div class="form-grid three">
-          <label class="field">제안자 <b>*</b>
-            <select id="employeeSelect" name="proposer_name" required>
+          <div class="field"><label for="employeeSearchInput">제안자 <b>*</b></label>
+            <select id="employeeSelect" aria-label="제안자 선택" name="proposer_name" required>
               <option value="">직원 선택</option>
               ${employeeOptions(proposal?.proposer_name, proposal?.department)}
             </select>
-          </label>
+          </div>
           <label class="field">부서
             <input id="departmentInput" name="department" value="${escapeHtml(proposal?.department || "")}" readonly required>
           </label>
@@ -1748,6 +1747,8 @@ function renderProposalForm(proposalNo = "") {
       </div>
     </form>
   `;
+  authorPicker?.destroy();
+  authorPicker = mountEmployeePicker($("#employeeSelect"));
   renderFormImagePreview("before");
   renderFormImagePreview("after");
   syncImplementationDateField();
@@ -2943,7 +2944,10 @@ document.addEventListener("click", async (event) => {
 
   const { action } = actionButton.dataset;
   try {
-    if (action === "remove-form-image") {
+    if (action === "focus-unified-search") {
+      $("#questionSearch")?.scrollIntoView({block:"start", behavior:"smooth"});
+      $("#questionSearchInput")?.focus({preventScroll:true});
+    } else if (action === "remove-form-image") {
       const section = actionButton.dataset.section;
       const kind = actionButton.dataset.kind;
       const index = Number(actionButton.dataset.index);
@@ -3173,10 +3177,7 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    if (event.target.id === "quickSearchForm") {
-      const query = new FormData(event.target).get("query");
-      go(`list?q=${encodeURIComponent(query)}`);
-    } else if (event.target.id === "filterForm") {
+    if (event.target.id === "filterForm") {
       const data = new FormData(event.target);
       const params = new URLSearchParams();
       if (data.get("query")) params.set("q", data.get("query"));
