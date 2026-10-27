@@ -90,19 +90,97 @@ export function parseQuestion(question, now = new Date(), options = {}) {
   return {...periodOf(year,month,today,source),original,remainder:text,intent,followup,explicitPeriod:!!(years.length||relativeMonths.length||months.length)};
 }
 
-function candidateGroups(report,employees) {
+/** Combine duplicate/current/historical employee rows without collapsing verified homonyms.
+ * An active employee is preferred; older inactive rows are linked to it only
+ * when there is exactly one active candidate for that name and no conflicting
+ * employee numbers. Distinct active people or conflicting numbers stay separate.
+ */
+export function candidateGroups(report,employees) {
   const groups=new Map();
+  const unique=(arr,value)=>{if(value&&!arr.includes(value))arr.push(value);};
   for(const p of report.people){
-    if(!groups.has(p.identity))groups.set(p.identity,{identity:p.identity,name:p.name,names:[],departments:[],employeeNo:p.employeeNo,rosterStatus:p.rosterStatus,details:[]});
-    const c=groups.get(p.identity);if(!c.names.includes(p.name))c.names.push(p.name);if(!c.departments.includes(p.department))c.departments.push(p.department);c.details.push(...p.details);
+    if(!groups.has(p.identity))groups.set(p.identity,{
+      identity:p.identity,name:p.name,names:[],departments:[],employeeNo:p.employeeNo,
+      rosterStatus:p.rosterStatus,details:[],historicalDepartments:false
+    });
+    const c=groups.get(p.identity);unique(c.names,p.name);unique(c.departments,p.department);c.details.push(...p.details);
+    if(p.rosterStatus==='활성')c.rosterStatus='활성';
   }
-  // Inactive roster entries may have zero submissions in the selected year; do not invent an unknown-person error.
   employees.forEach((e,i)=>{
     if(!str(e.name))return;
     const identity=str(e.employee_no)?`no:${str(e.employee_no)}`:str(e.id)?`id:${str(e.id)}`:`row:${i}`;
-    if(!groups.has(identity))groups.set(identity,{identity,name:str(e.name),names:[str(e.name)],departments:[str(e.department)||'부서 미등록'],employeeNo:str(e.employee_no),rosterStatus:e.active===false?'비활성':'활성',details:[]});
+    if(!groups.has(identity))groups.set(identity,{
+      identity,name:str(e.name),names:[str(e.name)],departments:[str(e.department)||'부서 미등록'],
+      employeeNo:str(e.employee_no),rosterStatus:e.active===false?'비활성':'활성',details:[],historicalDepartments:false
+    });
+    else {
+      const c=groups.get(identity);unique(c.departments,str(e.department)||'부서 미등록');
+      if(e.active!==false)c.rosterStatus='활성';
+    }
   });
-  return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name,'ko')||a.departments.join(',').localeCompare(b.departments.join(','),'ko'));
+  const byName=new Map();
+  for(const group of groups.values()){
+    const name=compact(group.name);
+    if(!byName.has(name))byName.set(name,[]);
+    byName.get(name).push(group);
+  }
+  const result=[];
+  for(const entries of byName.values()){
+    const parts=[...entries];
+    const active=g=>g.rosterStatus==='활성';
+    const mismatch=(a,b)=>a.employeeNo&&b.employeeNo&&a.employeeNo!==b.employeeNo;
+    const overlaps=(a,b)=>a.departments.some(dep=>b.departments.includes(dep));
+    const merge=(target,source)=>{
+      unique(target.names,source.name);
+      source.names.forEach(n=>unique(target.names,n));
+      source.departments.forEach(dep=>unique(target.departments,dep));
+      if(!target.employeeNo)target.employeeNo=source.employeeNo;
+      if(source.rosterStatus==='활성')target.rosterStatus='활성';
+      target.details.push(...source.details);
+      target.historicalDepartments ||= source.historicalDepartments || !overlaps(target,source);
+      parts.splice(parts.indexOf(source),1);
+    };
+    // Known matching employee numbers are the strongest available identity evidence.
+    for(let i=0;i<parts.length;i++){
+      for(let j=i+1;j<parts.length;){
+        const a=parts[i],b=parts[j];
+        if(a.employeeNo&&a.employeeNo===b.employeeNo){
+          const target=active(b)&&!active(a)?b:a;
+          merge(target,target===a?b:a);
+          if(target===b){i=-1;break;}
+        }else j++;
+      }
+    }
+    // Multiple currently active homonyms must remain separate unless numbers match.
+    // If only one is active, inactive roster rows are historical aliases, not choices.
+    const activeParts=parts.filter(active);
+    if(activeParts.length===1){
+      const current=activeParts[0];
+      for(const historical of [...parts]){
+        if(historical===current||active(historical)||mismatch(current,historical))continue;
+        const crossDepartment=!overlaps(current,historical);
+        merge(current,historical);
+        if(crossDepartment)current.historicalDepartments=true;
+      }
+    }else if(activeParts.length===0){
+      // Two old rows in the same department are one candidate unless employee numbers conflict.
+      for(let i=0;i<parts.length;i++)for(let j=i+1;j<parts.length;){
+        if(overlaps(parts[i],parts[j])&&!mismatch(parts[i],parts[j]))merge(parts[i],parts[j]);
+        else j++;
+      }
+    }
+    for(const part of parts){
+      // A proposal may appear under multiple historical aliases; count a registered no once.
+      const seen=new Set();
+      part.details=part.details.filter(d=>{
+        const key=str(d.no)?`no:${str(d.no)}`:str(d.id)?`id:${str(d.id)}`:`row:${d.date}|${d.title}`;
+        if(seen.has(key))return false;
+        seen.add(key);return true;
+      });
+      result.push(part);
+    }
+  }
+  return result.sort((a,b)=>a.name.localeCompare(b.name,'ko')||a.departments.join(',').localeCompare(b.departments.join(','),'ko'));
 }
 const clarification=(period,message,field='person')=>({kind:'clarify',field,message,period,intent:period.intent});
 
@@ -171,7 +249,9 @@ export function chooseSearchPerson(context,identity) {
   const person=context.candidates.find(p=>p.identity===identity);
   if(!person)throw new Error('선택한 직원이 조회 대상에 없습니다.');
   const details=person.details.filter(d=>d.date>=context.period.from&&d.date<=context.period.to).sort((a,b)=>b.date.localeCompare(a.date)||b.no.localeCompare(a.no));
-  return {kind:'answer',name:person.name,identity:person.identity,departments:person.departments,employeeNo:person.employeeNo,rosterStatus:person.rosterStatus,total:details.length,details,period:context.period,intent:context.intent||'count',personSource:context.personSource||'selection',asOf:context.asOf,mode:context.mode,warnings:context.warnings||[]};
+  const warnings=[...(context.warnings||[])];
+  if(person.historicalDepartments)warnings.push('이름이 같은 과거 부서의 비활성 명단을 현재 직원과 함께 집계했습니다. 동명이인이 있다면 직원명단의 사번을 확인하세요.');
+  return {kind:'answer',name:person.name,identity:person.identity,departments:person.departments,employeeNo:person.employeeNo,rosterStatus:person.rosterStatus,total:details.length,details,period:context.period,intent:context.intent||'count',personSource:context.personSource||'selection',asOf:context.asOf,mode:context.mode,warnings:[...new Set(warnings)]};
 }
 
 /** Follow-ups use the chosen identity, not a guessed login/display name or hard-coded employee. */

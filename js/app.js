@@ -1,5 +1,5 @@
 import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
-import { createQuestionSearch } from "./search/question-ui.js?v=2.7.7";
+import { createQuestionSearch } from "./search/question-ui.js?v=2.7.8";
 import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
 import { createPerformancePage } from './reports/performance-ui.js?v=2.6.8';
 import {

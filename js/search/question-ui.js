@@ -1,5 +1,5 @@
-import { chooseSearchPerson } from './question-core.js?v=2.7.6';
-import { prepareUnifiedResult, unifiedSuggestions } from './unified-core.js?v=2.7.7';
+import { chooseSearchPerson } from './question-core.js?v=2.7.8';
+import { prepareUnifiedResult, unifiedSuggestions } from './unified-core.js?v=2.7.8';
 import { loadQuestionData } from './question-source.js?v=2.7.5';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -14,7 +14,7 @@ export function createQuestionSearch({root,store,now=()=>new Date(),load=loadQue
   const section=()=>root.querySelector('#questionSearch');
   function markup(){
     return `<section id="questionSearch" class="qsearch" aria-labelledby="questionSearchTitle">
-      <header class="qsearch-heading"><div><span class="qsearch-eyebrow">UNIFIED SEARCH · 2.7.7</span><h2 id="questionSearchTitle">실적부터 비슷한 제안까지, 한 번에 검색</h2><p>이름으로 실적을 묻거나, 설비명·개선 내용을 입력해 기존 제안을 찾아보세요.</p></div><span class="qsearch-badge">외부 AI 호출 없음</span></header>
+      <header class="qsearch-heading"><div><span class="qsearch-eyebrow">UNIFIED SEARCH · 2.7.8</span><h2 id="questionSearchTitle">실적부터 비슷한 제안까지, 한 번에 검색</h2><p>이름으로 실적을 묻거나, 설비명·개선 내용을 입력해 기존 제안을 찾아보세요.</p></div><span class="qsearch-badge">외부 AI 호출 없음</span></header>
       <form id="questionSearchForm" class="qsearch-form" role="search">
         <label class="qsearch-field" for="questionSearchInput">${icon}<input id="questionSearchInput" name="question" value="${esc(query)}" type="search" maxlength="240" placeholder="예: 직원 이름 + 올해 몇 건? / 에어건 / 작업시간 단축" aria-label="직원 실적 또는 제안 내용 통합 검색" aria-describedby="questionSearchHelp" autocomplete="off" required></label>
         <button class="qsearch-submit" type="submit">검색</button>
@@ -74,7 +74,7 @@ export function createQuestionSearch({root,store,now=()=>new Date(),load=loadQue
       out.innerHTML=question+`<div class="qsearch-clarify" role="status"><strong>${result.kind==='unknown'?'조회 대상을 다시 확인할게요.':'한 가지만 확인할게요.'}</strong><p>${esc(result.message)}</p><small>선택 기간: ${esc(result.period.label)} · ${esc(result.period.from)} ~ ${esc(result.period.to)} (한국시간)</small>${result.kind==='unknown'?'<p><button type="button" class="qsearch-list-toggle" data-qsearch="as-keywords">이름이 아니라 검색어예요 · 내용 검색</button></p>':''}</div>`;return;
     }
     if(result.kind==='choose'){
-      out.innerHTML=question+`<div class="qsearch-choice"><h3>같은 이름의 직원이 있습니다.</h3><p>합쳐서 집계하지 않습니다. 조회할 직원을 선택하세요. (${esc(result.period.label)})</p><div class="qsearch-candidates">${result.candidates.map(c=>`<button type="button" data-qsearch="person" data-identity="${esc(c.identity)}"><strong>${esc(c.name)}</strong><span>${esc(c.departments.join(' · '))}</span><small>${c.employeeNo?'사번 '+esc(c.employeeNo):esc(c.rosterStatus)}</small></button>`).join('')}</div></div>`;return;
+      out.innerHTML=question+`<div class="qsearch-choice"><h3>같은 이름의 직원이 있습니다.</h3><p>사번이 다르거나 현재 재직 중인 동명이인입니다. 조회할 직원을 선택하세요. (${esc(result.period.label)})</p><div class="qsearch-candidates">${result.candidates.map(c=>`<button type="button" data-qsearch="person" data-identity="${esc(c.identity)}"><strong>${esc(c.name)}</strong><span>${esc(c.departments.join(' · '))}</span><small>${c.employeeNo?'사번 '+esc(c.employeeNo):esc(c.rosterStatus)}</small></button>`).join('')}</div></div>`;return;
     }
     const a=result,at=new Date(a.asOf).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false});
     const count=`<b class="qsearch-count">${num(a.total)}<small>건</small></b>`;
@@ -83,6 +83,7 @@ export function createQuestionSearch({root,store,now=()=>new Date(),load=loadQue
     out.innerHTML=question+`<article class="qsearch-answer">
       ${a.mode==='demo'?'<div class="qsearch-demo">데모 자료입니다. 실제 직원 실적이 아닙니다.</div>':''}
       <div class="qsearch-answer-top"><div><span class="qsearch-filter">${esc(a.period.label)} · ${esc(a.name)} · ${esc(a.departments.join(' / '))}</span><h3>${sentence}</h3><p class="qsearch-period">조회기간: <strong>${esc(a.period.from)} ~ ${esc(a.period.to)}</strong> <span>(한국시간)</span></p>${periodNote?`<p class="qsearch-assumption">${esc(periodNote)}</p>`:''}</div><button type="button" class="qsearch-refresh" data-qsearch="refresh">다시 조회</button></div>
+      ${a.warnings.some(w=>w.includes('과거 부서'))?'<p class="qsearch-assumption">과거 부서 기록도 함께 집계했습니다. 사번 연결이 없는 이전 자료는 확인이 필요합니다.</p>':''}
       <div class="qsearch-answer-foot"><p>최초 접수 기준 · 같은 접수번호는 1건<br><span>조회 ${esc(at)} (한국시간) · 조회 권한 내 자료</span></p>${a.total?`<button type="button" class="qsearch-list-toggle" data-qsearch="list" aria-expanded="${listOpen}" aria-controls="questionSearchList">${listOpen?'목록 접기':'제안 목록 보기'} <span aria-hidden="true">${listOpen?'⌃':'›'}</span></button>`:'<span class="qsearch-zero">이 기간에 등록된 제안이 없습니다.<br>다른 기간도 물어보세요.</span>'}</div>
       ${a.warnings.length?`<details class="qsearch-warnings"><summary>집계자료 확인사항 ${a.warnings.length}건</summary>${a.warnings.map(w=>`<p>${esc(w)}</p>`).join('')}</details>`:''}${a.total?listMarkup(a):''}</article>`;
   }
