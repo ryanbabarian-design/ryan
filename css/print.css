@@ -25,9 +25,8 @@ body.print-route #app {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  position: sticky;
+  position: static;
   z-index: 20;
-  top: 12px;
   border: 1px solid #c9d0da;
   border-radius: 16px;
   padding: 14px 18px;
@@ -187,6 +186,60 @@ body.print-route #app {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* V2.7.9: print rich text and pasted tables as formatted content, not HTML source. */
+.print-long-text .rich-text-display {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  white-space: normal;
+  line-height: 1.45;
+  font-weight: normal;
+  overflow-wrap: anywhere;
+}
+.print-long-text .rich-text-display p { margin: 1mm 0; }
+.print-long-text .rich-text-display :is(ul, ol) { margin: 1mm 0; padding-left: 5mm; }
+.print-long-text .rich-text-display table {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  table-layout: fixed;
+  border-collapse: collapse;
+  margin: 2mm 0;
+  font-size: 8pt;
+  break-inside: auto;
+}
+.print-long-text .rich-text-display :is(td, th) {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 100%;
+  height: auto !important;
+  border: .55pt solid #858d99;
+  padding: 1.3mm !important;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  vertical-align: top;
+  font-size: 8pt;
+  line-height: 1.4;
+}
+.print-long-text .rich-text-display th {
+  background: #edf1f6 !important;
+  font-weight: 700;
+}
+.print-long-text .rich-text-display :is(td, th) p { margin: 0; }
+.print-long-text .rich-text-display :is(thead, tfoot) { break-inside: avoid; }
+.print-long-text .rich-text-display thead { display: table-header-group; }
+.print-long-text .rich-text-display tr { break-inside: avoid; }
+/* The original side-by-side comparison is only suitable for short text.
+   Give pasted tables the entire printable width so columns remain readable. */
+.print-comparison-section.has-rich-table { display: block; }
+.print-comparison-section.has-rich-table .print-comparison-column + .print-comparison-column {
+  border-left: 0;
+  border-top: .65pt solid #555;
+}
+.print-comparison-section.has-rich-table .print-image-empty { min-height: 11mm; }
 
 .print-image-grid {
   display: grid;

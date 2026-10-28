@@ -1968,6 +1968,8 @@ function renderPrint(proposalNo) {
     <th>${escapeHtml(role)}</th>`).join("");
   const approvalSignatures = printRoles.map((_, index) => `<td data-print-approval-index="${index}"></td>`).join("");
   const categoryMark = (checked) => `<span class="print-checkbox ${checked ? "checked" : ""}">${checked ? "✓" : ""}</span>`;
+  // Excel/Google Sheets tables are stored as sanitized HTML; print them as a real table.
+  const hasRichTable = [model.currentProblem, model.improvementPlan].some(value => /<table\b/i.test(sanitizeRichTextHtml(value)));
 
   main.innerHTML = `
     <section class="proposal-print-screen">
@@ -2019,24 +2021,24 @@ function renderPrint(proposalNo) {
           </div>
         </section>
 
-        <section class="print-comparison-section">
+        <section class="print-comparison-section ${hasRichTable ? "has-rich-table" : ""}">
           <article class="print-comparison-column">
             <div class="print-section-label">현재의 방법(문제점)</div>
             <h2>개선 전</h2>
-            <div class="print-long-text">${escapeHtml(model.currentProblem)}</div>
+            <div class="print-long-text">${renderRichText(model.currentProblem)}</div>
             ${renderPrintImages(model.beforeImages, "개선 전 사진")}
           </article>
           <article class="print-comparison-column">
             <div class="print-section-label">개 선 책</div>
             <h2>개선 후</h2>
-            <div class="print-long-text">${escapeHtml(model.improvementPlan)}</div>
+            <div class="print-long-text">${renderRichText(model.improvementPlan)}</div>
             ${renderPrintImages(model.afterImages, "개선 후 사진")}
           </article>
         </section>
 
         <section class="print-effect-section print-page-break-candidate">
           <div class="print-section-label">개선효과</div>
-          <div class="print-long-text">${escapeHtml(model.expectedEffect)}</div>
+          <div class="print-long-text">${renderRichText(model.expectedEffect)}</div>
           <dl class="print-money-grid">
             <div><dt>예상 투입비용</dt><dd>${escapeHtml(model.costText)}</dd></div>
             <div><dt>제안자 예상 효과금액</dt><dd>${escapeHtml(model.proposerEffectText)}</dd></div>
