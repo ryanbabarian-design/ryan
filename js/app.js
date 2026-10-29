@@ -1,5 +1,6 @@
 import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.js?v=2.8.0";
+import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score-correction-core.js?v=2.8.1";
 import { createQuestionSearch } from "./search/question-ui.js?v=2.7.8";
 import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
 import { createPerformancePage } from './reports/performance-ui.js?v=2.6.8';
@@ -28,7 +29,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.3.15";
-import { createStore } from "./services/store.js?v=2.8.0";
+import { createStore } from "./services/store.js?v=2.8.1";
 import {
   appendImageFiles,
   createImageSelection,
@@ -1785,7 +1786,7 @@ function renderDetail(proposalNo) {
                <button id="proposerDeleteButton" class="button button-ghost proposer-delete-button" data-action="delete-own-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안자 삭제</button>`
             : ""}
           ${state.admin?.isSystemAdmin ? `<button class="button button-primary" data-route="admin/content/${escapeHtml(proposal.id)}">관리자 내용 수정</button>` : ""}
-          ${state.admin?.isSystemAdmin && proposal.proposal_no === ONE_OFF_NUMBER ? `<button class="button button-secondary" data-route="admin/q26043">1·2차 점수 한시 보완</button>` : ""}
+          ${state.admin?.isSystemAdmin ? `<button class="button button-secondary" data-route="admin/score/${escapeHtml(proposal.id)}">1·2차 평가점수 보완</button>` : ""}
           <button id="rejectedResubmitButton" hidden class="button button-secondary" data-route="edit/${escapeHtml(proposal.proposal_no)}">반려 수정·재상신</button>
         </div>
       </div>
@@ -2422,6 +2423,7 @@ function renderAdmin(action = "", id = "") {
     return;
   }
 
+  if (action === "score") { void renderAdminScoreCorrection(id); return; }
   if (action === "q26043") { void renderQ26043Exception(); return; }
   if (action === "operations") { void operationsUI.renderAdmin(); return; }
   if (action === "content") { void renderAdminContent(id); return; }
@@ -2475,7 +2477,7 @@ function renderAdmin(action = "", id = "") {
                   <td>${p.first_evaluation_total == null ? (p.legacy_first_evaluation_exempt === true ? `<span class="evaluation-admin-state done">기존건 · 1차 면제</span>` : `<span class="evaluation-admin-state pending">미입력</span>`) : Number(p.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS ? `<span class="evaluation-admin-state pending">기준 미달 · ${Number(p.first_evaluation_total)}점</span>` : `<span class="evaluation-admin-state done">완료 ${Number(p.first_evaluation_total)}점</span>`}</td>
                   <td>${statusBadge(p.review_result)}</td>
                   <td>${statusBadge(p.implementation_status)}</td>
-                  <td><button class="button button-small button-primary" data-route="admin/edit/${escapeHtml(p.id)}">심사/2차평가</button></td>
+                  <td><button class="button button-small button-primary" data-route="admin/edit/${escapeHtml(p.id)}">3차 심사·관리</button> <button class="button button-small button-secondary" data-route="admin/score/${escapeHtml(p.id)}">1·2차 보완</button></td>
                 </tr>`).join("")}
             </tbody>
           </table>
@@ -2602,6 +2604,104 @@ async function handleAdminContentSubmit(form) {
   }
 }
 
+// V2.8.1: existing and new proposal scores may be corrected by a system administrator.
+// These are explicitly labelled as administrator corrections, never as a fresh proposer/team signature.
+async function renderAdminScoreCorrection(id) {
+  if (!state.admin?.isSystemAdmin) {
+    main.innerHTML=`<section class="empty-state"><h2>시스템 관리자 전용입니다.</h2></section>`;
+    return;
+  }
+  if (!id) { main.innerHTML=`<section class="empty-state"><h2>대상 제안번호를 확인하세요.</h2></section>`;return; }
+  main.innerHTML=`<section class="loading-card"><div class="spinner"></div><p>1·2차 평가점수와 기존 기록을 확인하는 중입니다.</p></section>`;
+  try {
+    const info=await store.getAdminScoreStatus(id);
+    if (routeParts()[0]!=="admin" || routeParts()[1]!=="score" || routeParts()[2]!==id) return;
+    const teamScore=info.team_total == null ? '미입력' : `${Number(info.team_total)}점`;
+    const thirdScore=info.third_total == null ? '미입력' : `${Number(info.third_total)}점`;
+    const canThird=info.team_total!=null && Number(info.team_total)>=65 && info.executive_approved===true &&
+      info.review_result==="미심사" && !["상신완료","승인완료"].includes(info.ceo_submission_status);
+    const history=Array.isArray(info.history)?info.history:[];
+    const historyMarkup=history.length
+      ? `<details class="admin-first-evaluation-section"><summary>관리자 평가 보완 이력 (${history.length}건 표시)</summary><div style="margin-top:12px">${history.map(h=>`<div class="evaluation-lock-note" style="margin:8px 0"><strong>${escapeHtml(h.actor_name||'관리자')}</strong> · ${escapeHtml(h.corrected_at?new Date(h.corrected_at).toLocaleString('ko-KR'):'')}<br>1차 ${h.before_scores?.first_total??'-'} → ${h.after_scores?.first_total??'-'}점 / 2차 ${h.before_scores?.team_total??'-'} → ${h.after_scores?.team_total??'-'}점<br>${escapeHtml(h.reason||'')}</div>`).join('')}</div></details>`
+      : '<p class="field-help">이 제안에 등록된 관리자 평가 보완 이력은 아직 없습니다.</p>';
+    main.innerHTML=`
+      <section class="page-header"><div><button class="back-link" data-route="admin/edit/${escapeHtml(id)}">← 관리자 평가·심사</button><span class="eyebrow">ADMIN SCORE CORRECTION · V2.8.1</span><h1>${escapeHtml(info.proposal_no)} · 1·2차 평가점수 보완</h1><p>${escapeHtml(info.title||'')} · 모든 기존 제안 공통 적용</p></div><button class="button button-ghost" data-route="detail/${escapeHtml(info.proposal_no)}">제안 상세보기</button></section>
+      <section class="admin-review-preview" style="max-width:1050px;margin:0 auto 18px">
+        <h2>기존 평가·심사 기록</h2>
+        <p>1차: <strong>${info.first_total??'미입력'}${info.first_total==null?'':'점'}</strong> · 2차: <strong>${escapeHtml(teamScore)}</strong> · 3차: <strong>${escapeHtml(thirdScore)}</strong> · 처리결과: ${escapeHtml(info.review_result||'-')}</p>
+        <div class="evaluation-lock-note"><strong>관리자 보완 입력입니다.</strong> 원래 작성자·부서장이 직접 점수를 입력한 기록으로 표시하지 않습니다. 기존 승인·반려·3차 심사·포상금은 유지되며 수정 전후 점수·사유·관리자·시간이 기록됩니다.</div>
+        ${info.third_total!=null?`<div class="first-eval-criteria neutral">이미 3차 평가 ${Number(info.third_total)}점이 기록된 제안입니다. 1·2차 보완을 해도 이전 3차 결과는 다시 계산되지 않습니다.</div>`:''}
+        ${info.legacy_first_exempt===true?'<div class="first-eval-criteria neutral">이 건은 과거 1차 평가 면제로 이관됐습니다. 이번에 실제 점수를 보완하면 면제 표시가 해제됩니다.</div>':''}
+        ${canThird?'<p class="first-eval-criteria pass">현재 점수와 승인 기준상 3차 심사 진행이 가능한 상태입니다.</p>':''}
+      </section>
+      <form id="v281ScoreForm" class="admin-review-form" data-id="${escapeHtml(id)}" data-expected-at="${escapeHtml(info.updated_at||'')}" style="display:block;max-width:1050px;margin:0 auto">
+        <section class="admin-review-preview" style="margin-bottom:16px">
+          <div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 평가점수 보완</h2><p>각 항목 1~10점, 가중합계 50점 이상. 관리자 보완 기록으로 표시됩니다.</p></div></div>
+          ${renderEvaluationTable('v281_first',info.first_evaluation||{},{title:'1차 평가표',subtitle:'기존 점수 확인 및 관리자 보완'})}
+        </section>
+        <section class="admin-review-preview" style="margin-bottom:16px">
+          <div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 팀장평가 점수 보완</h2><p>50점 미만 기준미달 / 50~64점 건수처리 / 65점 이상 임원 승인 후 3차 심사입니다.</p></div></div>
+          ${renderEvaluationTable('v281_team',info.team_evaluation||{},{title:'2차 평가표',subtitle:'기존 점수 확인 및 관리자 보완'})}
+        </section>
+        <section class="admin-review-preview">
+          <div id="v281ScoreTotals" class="evaluation-lock-note" role="status" aria-live="polite">두 평가표를 입력하세요.</div>
+          <label class="field">보완 사유 (필수, 5자 이상)<textarea name="v281_reason" rows="3" minlength="5" maxlength="1000" required placeholder="예: 기존 제안의 1·2차 평가 누락 점수를 관리자 권한으로 보완"></textarea></label>
+          <label class="check-label"><input type="checkbox" name="v281_confirm" required> 변경 전후 점수와 관리자 수정 이력을 기록하고 기존 결재·3차 결과·포상금은 유지하는 데 동의합니다.</label>
+          <div class="form-submit-bar"><button type="button" class="button button-ghost" data-route="admin/edit/${escapeHtml(id)}">취소</button><button type="submit" class="button button-primary">1·2차 평가점수 보완 저장</button></div>
+        </section>
+      </form>
+      <section class="admin-review-preview" style="max-width:1050px;margin:16px auto">${historyMarkup}</section>`;
+    updateAdminScorePreview();
+  } catch(error) {
+    if (routeParts()[1]!=="score") return;
+    main.innerHTML=`<section class="empty-state"><h2>1·2차 평가 보완 화면을 열 수 없습니다.</h2><p>${escapeHtml(error.message||String(error))}</p><p>V2.8.1 SQL이 적용되었는지 확인하세요. 제안의 기존 점수는 변경되지 않았습니다.</p><button class="button button-secondary" data-route="admin/edit/${escapeHtml(id)}">관리자 평가·심사</button></section>`;
+  }
+}
+
+function updateAdminScorePreview() {
+  const form=$("#v281ScoreForm");
+  if(!form) return;
+  for(const prefix of ['v281_first','v281_team']) updateEvaluationTotalFromForm(form,prefix);
+  const area=$("#v281ScoreTotals",form);
+  if(!area) return;
+  try {
+    const first=collectEvaluationFromForm(form,'v281_first');
+    const team=collectEvaluationFromForm(form,'v281_team');
+    const firstTotal=calculateEvaluationTotal(first),teamTotal=calculateEvaluationTotal(team);
+    area.className=`first-eval-criteria ${firstTotal<50?'fail':'pass'}`;
+    area.textContent=`1차 ${firstTotal}점 ${firstTotal<50?'· 기준미달':'· 통과'} / 2차 ${teamTotal}점 · ${adminScoreFlowLabel(teamTotal)}. 기존 결재·3차 결과·포상상태는 자동 변경되지 않습니다.`;
+  } catch(_) {area.className='first-eval-criteria neutral';area.textContent='1차·2차 평가표의 각 6개 항목을 1~10점으로 모두 입력하세요.';}
+}
+
+async function submitAdminScoreCorrection(form) {
+  if(form.dataset.submitting==='true') return;
+  if(!state.admin?.isSystemAdmin) throw new Error('시스템 관리자만 평가점수를 보완할 수 있습니다.');
+  if(!form.elements.v281_confirm.checked) throw new Error('평가·결재 이력 유지 안내를 확인하세요.');
+  const first=collectEvaluationFromForm(form,'v281_first');
+  const team=collectEvaluationFromForm(form,'v281_team');
+  const checked=validateAdminScoreCorrection(first,team,form.elements.v281_reason.value);
+  const id=form.dataset.id;
+  if(!confirm(`1차 ${checked.firstTotal}점 / 2차 ${checked.teamTotal}점을 관리자 보완기록으로 저장하시겠습니까?\n기존 승인·3차 평가·심사결과·포상은 바뀌지 않습니다.`)) return;
+  const button=form.querySelector('button[type="submit"]');
+  form.dataset.submitting='true';button.disabled=true;button.textContent='저장·재확인 중…';
+  let saved=false;
+  try {
+    await store.saveAdminScoreCorrection(id,first,team,checked.reason,form.dataset.expectedAt||null);
+    saved=true;
+    const verified=await store.getAdminScoreStatus(id);
+    if(Number(verified.first_total)!==checked.firstTotal || Number(verified.team_total)!==checked.teamTotal ||
+      EVALUATION_CRITERIA.some(c=>Number(verified.first_evaluation?.[c.key])!==first[c.key] ||
+        Number(verified.team_evaluation?.[c.key])!==team[c.key]))
+      throw new Error('저장 후 점수 재조회가 일치하지 않습니다. 중복 저장하지 말고 관리자에게 확인하세요.');
+    await refreshData();
+    go(`admin/edit/${id}`);
+    showToast(`1·2차 평가 보완 저장 확인 · ${checked.firstTotal}점 / ${checked.teamTotal}점${checked.thirdEligible?' · 3차 심사 기준점수 충족':''}`);
+  } catch(error) {
+    if(saved) throw new Error(`저장 요청은 처리되었으나 확인을 마치지 못했습니다. 다시 저장하지 말고 화면을 새로 열어 확인하세요. ${error.message}`);
+    throw error;
+  } finally {delete form.dataset.submitting;if(button.isConnected){button.disabled=false;button.textContent='1·2차 평가점수 보완 저장';}}
+}
+
 // One-time Q26-043 correction: dedicated administrator page, no change to standard scoring flows.
 async function renderQ26043Exception() {
   if (!state.admin?.isSystemAdmin) {
@@ -2704,7 +2804,7 @@ function renderAdminEdit(id) {
       <div><button class="back-link" data-route="admin">← 관리자 목록</button><span class="eyebrow">ADMIN REVIEW</span><h1>${escapeHtml(proposal.proposal_no)} 관리자 평가·심사</h1><p>${escapeHtml(proposal.title)}</p></div>
       <div class="header-buttons">
         <button class="button button-primary" data-route="admin/content/${escapeHtml(proposal.id)}">관리자 내용 수정</button>
-        ${proposal.proposal_no === ONE_OFF_NUMBER ? `<button class="button button-primary" data-route="admin/q26043">Q26-043 1·2차 점수 보완(한 번)</button>` : ""}
+        <button class="button button-primary" data-route="admin/score/${escapeHtml(proposal.id)}">1·2차 평가점수 보완</button>
         <button class="button button-secondary" data-action="v272-reset-pin" data-id="${escapeHtml(proposal.id)}">수정번호 재설정</button>
         <button class="button button-ghost" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
         <button class="button button-ghost" data-route="detail/${escapeHtml(proposal.proposal_no)}">공개 상세보기</button>
@@ -3285,6 +3385,8 @@ document.addEventListener("submit", async (event) => {
       if (data.get("implementationStatus")) params.set("implementation", data.get("implementationStatus"));
       location.hash = `#list${params.toString() ? `?${params}` : ""}`;
       render();
+    } else if (event.target.id === "v281ScoreForm") {
+      await submitAdminScoreCorrection(event.target);
     } else if (event.target.id === "v280Form") {
       await submitQ26043Exception(event.target);
     } else if (event.target.id === "adminContentForm") {
@@ -3557,6 +3659,12 @@ function handleTeamEvaluationInput(event) {
     ? "2차 팀장평가 점수는 각 항목 1~10점의 정수로 입력하세요." : "");
   updateEvaluationTotalFromForm(scope, "team");
 }
+document.addEventListener("input", event => {
+  if (event.target.name?.startsWith("v281_first_eval_") || event.target.name?.startsWith("v281_team_eval_")) updateAdminScorePreview();
+});
+document.addEventListener("change", event => {
+  if (event.target.name?.startsWith("v281_first_eval_") || event.target.name?.startsWith("v281_team_eval_")) updateAdminScorePreview();
+});
 document.addEventListener("input", event => {
   if (event.target.name?.startsWith("oneoff_first_eval_") || event.target.name?.startsWith("oneoff_team_eval_")) updateQ26043Preview();
 });

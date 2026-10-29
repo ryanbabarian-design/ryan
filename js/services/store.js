@@ -1,11 +1,13 @@
 import { createOperationsRepository } from "../operations/operations-store.js?v=2.7.1";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "../oneoff/q26043-core.js?v=2.8.0";
+import { validateAdminScoreCorrection, ADMIN_EVAL_KEYS } from "../admin/score-correction-core.js?v=2.8.1";
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
 import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.3.15";
 import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3.11";
 import { mergeEmployeeRoster, normalizeEmployeeImportRows } from "../employee-sync.js?v=2.3.11";
 
 // V2.7.4: content-only corrections are separate from review/PIN APIs.
+const ADMIN_SCORE_HISTORY_V281_KEY = "proposal-system:v281:score-history";
 const Q26043_OVERRIDE_KEY = "proposal-system:v280:q26043:override";
 const ADMIN_CONTENT_FIELDS = ["title", "current_problem", "improvement_plan", "expected_effect", "cost_amount", "proposer_effect_amount"];
 const ADMIN_CONTENT_HISTORY_KEY = "proposal-system:v274:content-history";
@@ -350,6 +352,65 @@ class DemoStore {
 
   async changeOwnPassword() {
     throw new Error("데모 모드에서는 비밀번호를 변경할 수 없습니다.");
+  }
+
+  async getAdminScoreStatus(id) {
+    const admin = await this.getAdminSession();
+    if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 평가점수를 확인할 수 있습니다.");
+    const proposal = (await this.getProposals()).find(row => row.id === id);
+    if (!proposal) throw new Error("제안서를 찾지 못했습니다.");
+    const steps = await this.getApprovalSteps(true);
+    const approvals = await this.getApprovalRecords(id);
+    const executiveApproved = approvals.some(r => r.status === "승인" && steps.some(step =>
+      String(step.id) === String(r.step_id) && step.role_name === "해당부서 임원"));
+    const history = JSON.parse(localStorage.getItem(ADMIN_SCORE_HISTORY_V281_KEY) || "[]")
+      .filter(row => row.proposal_id === id).slice(-20).reverse();
+    return { id:proposal.id, proposal_no:proposal.proposal_no, title:proposal.title,
+      updated_at:proposal.updated_at, first_evaluation:proposal.first_evaluation,
+      first_total:proposal.first_evaluation_total, team_evaluation:proposal.team_leader_evaluation,
+      team_total:proposal.team_leader_evaluation_total, third_total:proposal.second_evaluation_total,
+      review_result:proposal.review_result, status:proposal.status,
+      ceo_submission_status:proposal.ceo_submission_status,
+      legacy_first_exempt:proposal.legacy_first_evaluation_exempt,
+      executive_approved:executiveApproved, history };
+  }
+
+  async saveAdminScoreCorrection(id, first, team, reason, expectedUpdatedAt) {
+    const admin = await this.getAdminSession();
+    if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 평가점수를 보완할 수 있습니다.");
+    const checked=validateAdminScoreCorrection(first,team,reason);
+    const proposals=await this.getProposals();
+    const idx=proposals.findIndex(row => row.id===id);
+    if (idx < 0) throw new Error("제안서를 찾지 못했습니다.");
+    const previous=proposals[idx];
+    if ((previous.updated_at??null)!==(expectedUpdatedAt??null)) throw new Error("다른 사용자가 먼저 수정했습니다. 다시 조회하세요.");
+    if (previous.first_evaluation_total===checked.firstTotal && previous.team_leader_evaluation_total===checked.teamTotal &&
+      previous.legacy_first_evaluation_exempt===false &&
+      ADMIN_EVAL_KEYS.every(key => Number(previous.first_evaluation?.[key])===first[key] && Number(previous.team_leader_evaluation?.[key])===team[key]))
+      throw new Error("변경된 점수가 없습니다.");
+    const now=new Date(Math.max(Date.now(),Date.parse(previous.updated_at||'')+1||0)).toISOString();
+    const next={...previous,first_evaluation:{...first},first_evaluation_total:checked.firstTotal,
+      first_evaluation_completed_at:previous.first_evaluation_completed_at||now,
+      legacy_first_evaluation_exempt:false,team_leader_evaluation:{...team},
+      team_leader_evaluation_total:checked.teamTotal,team_leader_evaluation_completed_at:now,
+      team_leader_evaluation_by_name:`관리자 보완 · ${admin.displayName||'시스템 관리자'}`,updated_at:now};
+    const history=JSON.parse(localStorage.getItem(ADMIN_SCORE_HISTORY_V281_KEY)||"[]");
+    const record={proposal_id:id,proposal_no:previous.proposal_no,actor_name:admin.displayName||'관리자',
+      reason:checked.reason, corrected_at:now,
+      before_scores:{first:previous.first_evaluation,first_total:previous.first_evaluation_total,
+        team:previous.team_leader_evaluation,team_total:previous.team_leader_evaluation_total},
+      after_scores:{first,first_total:checked.firstTotal,team,team_total:checked.teamTotal}};
+    history.push(record);
+    proposals[idx]=next;
+    const oldData=localStorage.getItem(PROPOSAL_KEY);
+    const oldHistory=localStorage.getItem(ADMIN_SCORE_HISTORY_V281_KEY);
+    try {localStorage.setItem(PROPOSAL_KEY,JSON.stringify(proposals));
+      localStorage.setItem(ADMIN_SCORE_HISTORY_V281_KEY,JSON.stringify(history));}
+    catch(error){localStorage.setItem(PROPOSAL_KEY,oldData);
+      if(oldHistory===null)localStorage.removeItem(ADMIN_SCORE_HISTORY_V281_KEY);
+      else localStorage.setItem(ADMIN_SCORE_HISTORY_V281_KEY,oldHistory);throw error;}
+    return {saved:true,proposal_id:id,proposal_no:previous.proposal_no,
+      first_total:checked.firstTotal,team_total:checked.teamTotal,updated_at:now};
   }
 
   async getQ26043ExceptionStatus() {
@@ -1030,6 +1091,26 @@ class SupabaseStore {
     const { error } = await this.client.auth.updateUser({ password: newPassword });
     if (error) throw error;
     return true;
+  }
+
+  async getAdminScoreStatus(id) {
+    const {data,error}=await this.client.rpc("v281_admin_score_status",{p_proposal_id:id});
+    if(error) throw error;
+    if (!data || data.id!==id) throw new Error("점수 조회 결과가 일치하지 않습니다.");
+    return data;
+  }
+
+  async saveAdminScoreCorrection(id, first, team, reason, expectedUpdatedAt) {
+    const checked=validateAdminScoreCorrection(first,team,reason);
+    const {data,error}=await this.client.rpc("v281_admin_score_save",{
+      p_proposal_id:id,p_first:first,p_team:team,p_reason:checked.reason,
+      p_expected_updated_at:expectedUpdatedAt??null,
+    });
+    if(error) throw error;
+    if(!data?.saved || data.proposal_id!==id || Number(data.first_total)!==checked.firstTotal ||
+        Number(data.team_total)!==checked.teamTotal)
+      throw new Error("서버 점수 저장 응답이 일치하지 않습니다. 중복 저장하지 말고 확인해 주세요.");
+    return data;
   }
 
   async getQ26043ExceptionStatus() {
