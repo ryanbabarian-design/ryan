@@ -1,4 +1,5 @@
 import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
+import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.js?v=2.8.0";
 import { createQuestionSearch } from "./search/question-ui.js?v=2.7.8";
 import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
 import { createPerformancePage } from './reports/performance-ui.js?v=2.6.8';
@@ -27,7 +28,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.3.15";
-import { createStore } from "./services/store.js?v=2.7.4";
+import { createStore } from "./services/store.js?v=2.8.0";
 import {
   appendImageFiles,
   createImageSelection,
@@ -1784,6 +1785,7 @@ function renderDetail(proposalNo) {
                <button id="proposerDeleteButton" class="button button-ghost proposer-delete-button" data-action="delete-own-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안자 삭제</button>`
             : ""}
           ${state.admin?.isSystemAdmin ? `<button class="button button-primary" data-route="admin/content/${escapeHtml(proposal.id)}">관리자 내용 수정</button>` : ""}
+          ${state.admin?.isSystemAdmin && proposal.proposal_no === ONE_OFF_NUMBER ? `<button class="button button-secondary" data-route="admin/q26043">1·2차 점수 한시 보완</button>` : ""}
           <button id="rejectedResubmitButton" hidden class="button button-secondary" data-route="edit/${escapeHtml(proposal.proposal_no)}">반려 수정·재상신</button>
         </div>
       </div>
@@ -2420,6 +2422,7 @@ function renderAdmin(action = "", id = "") {
     return;
   }
 
+  if (action === "q26043") { void renderQ26043Exception(); return; }
   if (action === "operations") { void operationsUI.renderAdmin(); return; }
   if (action === "content") { void renderAdminContent(id); return; }
   if (action === "edit") { renderAdminEdit(id); return; }
@@ -2599,6 +2602,96 @@ async function handleAdminContentSubmit(form) {
   }
 }
 
+// One-time Q26-043 correction: dedicated administrator page, no change to standard scoring flows.
+async function renderQ26043Exception() {
+  if (!state.admin?.isSystemAdmin) {
+    main.innerHTML = `<section class="empty-state"><h2>시스템 관리자 전용입니다.</h2></section>`;
+    return;
+  }
+  main.innerHTML = `<section class="loading-card"><div class="spinner"></div><p>Q26-043 기존 점수와 저장 상태를 확인하는 중입니다.</p></section>`;
+  try {
+    const info = await store.getQ26043ExceptionStatus();
+    if (routeParts()[0] !== "admin" || routeParts()[1] !== "q26043") return;
+    if (info.proposal_no !== ONE_OFF_NUMBER) throw new Error("대상 제안번호가 일치하지 않습니다.");
+    const disabled=Boolean(info.already_saved);
+    const beforeTitle=info.first_total == null ? "미입력" : `${Number(info.first_total)}점`;
+    const teamTitle=info.team_total == null ? "미입력" : `${Number(info.team_total)}점`;
+    const thirdWarning=info.third_total == null ? "" : `<p><strong>주의:</strong> 이 건은 이미 3차 평가가 ${Number(info.third_total)}점으로 기록되어 있습니다. 1·2차 점수 보완은 기존 3차 결과를 변경하거나 재승인하지 않습니다.</p>`;
+    main.innerHTML=`
+      <section class="page-header"><div><button class="back-link" data-route="admin">← 관리자 목록</button><span class="eyebrow">Q26-043 · ONE-TIME CORRECTION</span><h1>1·2차 평가점수 한 번 보완</h1><p>${escapeHtml(info.title||"")} · 다른 제안은 수정할 수 없습니다.</p></div><div class="header-buttons"><button type="button" class="button button-ghost" data-route="detail/Q26-043">제안 상세보기</button></div></section>
+      <section class="admin-review-preview" style="max-width:1000px;margin:0 auto 18px;">
+        <h2>기존 평가 기록 확인</h2><p>1차: <strong>${escapeHtml(beforeTitle)}</strong>　·　2차: <strong>${escapeHtml(teamTitle)}</strong>　·　심사결과: ${escapeHtml(info.review_result||"-")}</p>
+        ${disabled ? `<div class="evaluation-lock-note" role="status">Q26-043 한시 보완이 이미 완료되었습니다. 추가 저장은 잠겨 있습니다. ${info.saved_at ? `보완 시각: ${escapeHtml(new Date(info.saved_at).toLocaleString('ko-KR'))}` : ""}</div>` :
+          `<div class="evaluation-lock-note"><strong>이번 보완은 Q26-043 한 건에 한 번만 적용됩니다.</strong><br>시스템 관리자 기록으로 남으며 제안자 자기평가·팀장평가를 대신 보완하는 작업입니다. 기존 결재·심사결과·3차 점수·포상금은 변경하지 않습니다.</div>`}
+        ${thirdWarning}
+      </section>
+      ${disabled ? `<section class="admin-review-preview" style="max-width:1000px;margin:0 auto;">${renderEvaluationTable("q43_first",info.first_evaluation||{},{readOnly:true,title:"1차 보완 점수"})}${renderEvaluationTable("q43_team",info.team_evaluation||{},{readOnly:true,title:"2차 보완 점수"})}</section>` : `
+      <form id="v280Form" class="admin-review-form" data-expected-at="${escapeHtml(info.updated_at||"")}" style="display:block;max-width:1000px;margin:0 auto;">
+        <section class="admin-review-preview" style="margin-bottom:16px;">
+          <div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 · 제안자 자기평가 보완</h2><p>각 항목 1~10점, 가중합계 <strong>50점 이상</strong>이어야 저장됩니다.</p></div></div>
+          ${renderEvaluationTable("oneoff_first",info.first_evaluation||{},{title:"1차 평가점수",subtitle:"관리자 보완 입력 · 원본 변경 이력 보존"})}
+        </section>
+        <section class="admin-review-preview" style="margin-bottom:16px;">
+          <div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 · 팀장평가 보완</h2><p>각 항목 1~10점, 50점 미만도 점수 자체는 기록됩니다. 기존 결재상태를 자동 변경하지 않습니다.</p></div></div>
+          ${renderEvaluationTable("oneoff_team",info.team_evaluation||{},{title:"2차 평가점수",subtitle:"관리자 보완 입력 · 원본 변경 이력 보존"})}
+        </section>
+        <section class="admin-review-preview">
+          <p id="q43Totals" role="status">두 평가표의 6개 항목을 모두 입력하세요.</p>
+          <label class="field">보완 사유 (필수, 5자 이상)<textarea name="q43_reason" rows="3" minlength="5" maxlength="1000" required placeholder="예: 기존 접수 제안의 1·2차 누락 점수 관리자로 보완 입력"></textarea></label>
+          <label class="check-label"><input type="checkbox" name="q43_confirm" required> 기존 결재·심사결과·포상은 유지하며 Q26-043만 한 번 보완하는 데 동의합니다.</label>
+          <div class="form-submit-bar"><button type="button" class="button button-ghost" data-route="detail/Q26-043">취소</button><button type="submit" class="button button-primary">Q26-043 점수 한 번 저장</button></div>
+        </section>
+      </form>`}
+    `;
+    if (!disabled) updateQ26043Preview();
+  } catch (error) {
+    if (routeParts()[1] !== "q26043") return;
+    main.innerHTML = `<section class="empty-state"><h2>점수 보완 화면을 열 수 없습니다.</h2><p>${escapeHtml(error.message||String(error))}</p><button type="button" class="button button-secondary" data-route="admin">관리자 목록</button></section>`;
+  }
+}
+
+function updateQ26043Preview() {
+  const form = $("#v280Form");
+  if (!form) return;
+  for (const prefix of ["oneoff_first","oneoff_team"]) updateEvaluationTotalFromForm(form,prefix);
+  const totals = $("#q43Totals",form);
+  if (!totals) return;
+  try {
+    const first=collectEvaluationFromForm(form,"oneoff_first");
+    const team=collectEvaluationFromForm(form,"oneoff_team");
+    const firstTotal=calculateEvaluationTotal(first), teamTotal=calculateEvaluationTotal(team);
+    totals.textContent=`1차 ${firstTotal}점 ${firstTotal>=50?'· 기준 충족':'· 기준미달'} / 2차 ${teamTotal}점 ${teamTotal>=65?'· 3차 평가 대상 점수':teamTotal>=50?'· 건수처리 구간':'· 기준미달 구간'} (기존 처리상태는 자동 변경되지 않습니다)`;
+  } catch(_) { totals.textContent="1차·2차 각각 6개 항목을 모두 1~10점으로 입력하세요."; }
+}
+
+async function submitQ26043Exception(form) {
+  if (form.dataset.submitting==="true") return;
+  if (!state.admin?.isSystemAdmin) throw new Error("시스템 관리자 전용 기능입니다.");
+  if (!form.elements.q43_confirm.checked) throw new Error("결재기록 유지 안내에 체크하세요.");
+  const first=collectEvaluationFromForm(form,"oneoff_first");
+  const team=collectEvaluationFromForm(form,"oneoff_team");
+  const checked=validateOneOffEvaluation(first,team,form.elements.q43_reason.value);
+  if (!confirm(`Q26-043 제안의 1차 ${checked.firstTotal}점, 2차 ${checked.teamTotal}점을 관리자로 보완하시겠습니까?\n한 번 저장하면 다시 잠기며 기존 결재·결과·포상은 그대로입니다.`)) return;
+  const button=form.querySelector('button[type="submit"]');
+  form.dataset.submitting="true";button.disabled=true;button.textContent="한 번 저장·검증 중…";
+  let sent=false;
+  try {
+    const saved=await store.saveQ26043Exception(first,team,checked.reason,form.dataset.expectedAt||null);
+    sent=true;
+    const confirmed=await store.getQ26043ExceptionStatus();
+    if (!confirmed.already_saved || Number(confirmed.first_total)!==checked.firstTotal ||
+        Number(confirmed.team_total)!==checked.teamTotal ||
+        EVALUATION_CRITERIA.some(c=>Number(confirmed.first_evaluation?.[c.key])!==first[c.key] || Number(confirmed.team_evaluation?.[c.key])!==team[c.key]))
+      throw new Error("저장 후 점수가 일치하는지 확인하지 못했습니다. 중복 저장하지 말고 재조회하세요.");
+    await refreshData();
+    await renderQ26043Exception();
+    showToast(`Q26-043 보완 완료 · 1차 ${checked.firstTotal}점 / 2차 ${checked.teamTotal}점`);
+  } catch(error) {
+    if (sent) throw new Error(`저장 요청 후 확인이 완료되지 않았습니다. 다시 저장하지 말고 화면을 새로고침해 확인하세요. ${error.message}`);
+    throw error;
+  } finally {delete form.dataset.submitting;if(button.isConnected){button.disabled=false;button.textContent="Q26-043 점수 한 번 저장";}}
+}
+
 function renderAdminEdit(id) {
   const proposal = state.proposals.find((item) => item.id === id);
   if (!proposal) {
@@ -2611,6 +2704,7 @@ function renderAdminEdit(id) {
       <div><button class="back-link" data-route="admin">← 관리자 목록</button><span class="eyebrow">ADMIN REVIEW</span><h1>${escapeHtml(proposal.proposal_no)} 관리자 평가·심사</h1><p>${escapeHtml(proposal.title)}</p></div>
       <div class="header-buttons">
         <button class="button button-primary" data-route="admin/content/${escapeHtml(proposal.id)}">관리자 내용 수정</button>
+        ${proposal.proposal_no === ONE_OFF_NUMBER ? `<button class="button button-primary" data-route="admin/q26043">Q26-043 1·2차 점수 보완(한 번)</button>` : ""}
         <button class="button button-secondary" data-action="v272-reset-pin" data-id="${escapeHtml(proposal.id)}">수정번호 재설정</button>
         <button class="button button-ghost" data-action="print-proposal" data-no="${escapeHtml(proposal.proposal_no)}">제안서 인쇄</button>
         <button class="button button-ghost" data-route="detail/${escapeHtml(proposal.proposal_no)}">공개 상세보기</button>
@@ -3191,6 +3285,8 @@ document.addEventListener("submit", async (event) => {
       if (data.get("implementationStatus")) params.set("implementation", data.get("implementationStatus"));
       location.hash = `#list${params.toString() ? `?${params}` : ""}`;
       render();
+    } else if (event.target.id === "v280Form") {
+      await submitQ26043Exception(event.target);
     } else if (event.target.id === "adminContentForm") {
       await handleAdminContentSubmit(event.target);
     } else if (event.target.id === "proposalForm") {
@@ -3461,6 +3557,12 @@ function handleTeamEvaluationInput(event) {
     ? "2차 팀장평가 점수는 각 항목 1~10점의 정수로 입력하세요." : "");
   updateEvaluationTotalFromForm(scope, "team");
 }
+document.addEventListener("input", event => {
+  if (event.target.name?.startsWith("oneoff_first_eval_") || event.target.name?.startsWith("oneoff_team_eval_")) updateQ26043Preview();
+});
+document.addEventListener("change", event => {
+  if (event.target.name?.startsWith("oneoff_first_eval_") || event.target.name?.startsWith("oneoff_team_eval_")) updateQ26043Preview();
+});
 document.addEventListener("input", handleTeamEvaluationInput);
 document.addEventListener("change", handleTeamEvaluationInput);
 
