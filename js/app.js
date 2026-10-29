@@ -19,6 +19,7 @@ import {
   topProposals,
   buildTimelineFallback,
   filterProposals,
+  selectThirdReviewReady,
   formatCurrency,
   formatDate,
   IMPLEMENTATION_STATUSES,
@@ -28,7 +29,7 @@ import {
   resolveApprovalPermission,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=2.3.15";
+} from "./core.js?v=2.8.2";
 import { createStore } from "./services/store.js?v=2.8.1";
 import {
   appendImageFiles,
@@ -1465,12 +1466,48 @@ function getFiltersFromUrl() {
   };
 }
 
+let thirdReviewListRequestId = 0;
+
+function renderListItems(proposals) {
+  return `<div class="result-bar"><strong>${proposals.length}건</strong><span>검색 결과</span></div>
+    ${proposals.length
+      ? `<div class="proposal-grid">${proposals.map(proposalCard).join("")}</div>`
+      : `<div class="empty-state"><h2>검색 결과가 없습니다.</h2><p>현재 조건에 맞는 제안이 없습니다. 현황 또는 연도 조건을 확인하세요.</p></div>`}`;
+}
+
+async function hydrateThirdReviewList(candidates, requestId) {
+  const target = () => {
+    if (requestId !== thirdReviewListRequestId || getFiltersFromUrl().workflow !== "third-review" || routeParts()[0] !== "list") return null;
+    return document.querySelector("#filteredProposalResults");
+  };
+  if (!candidates.length) {
+    const node = target();
+    if (node) node.innerHTML = renderListItems([]);
+    return;
+  }
+  // Use the very same executive step/approval record that gates the 3rd evaluation form.
+  const executiveStep = (state.approvalSteps || []).find(s => s.role_name === "해당부서 임원" && s.active !== false);
+  if (!executiveStep) {
+    const node = target();
+    if (node) node.innerHTML = `<div class="empty-state"><h2>임원 결재단계를 확인하지 못했습니다.</h2><p>결재 설정 또는 조회 권한을 확인한 뒤 다시 조회하세요. 확인되지 않은 건을 임의로 3차 심사대기로 표시하지 않습니다.</p><button type="button" class="button button-secondary" data-action="retry-third-review">다시 확인</button></div>`;
+    return;
+  }
+  try {
+    const ready = await selectThirdReviewReady(candidates, state.approvalSteps, id => store.getApprovalRecords(id));
+    const node = target();
+    if (node) node.innerHTML = renderListItems(ready);
+  } catch (error) {
+    const node = target();
+    if (node) node.innerHTML = `<div class="empty-state"><h2>3차 심사대기를 확인할 수 없습니다.</h2><p>임원 승인기록 조회가 실패해 결과 건수를 표시하지 않았습니다. 잠시 후 다시 조회하세요.</p><button type="button" class="button button-secondary" data-action="retry-third-review">다시 확인</button></div>`;
+  }
+}
+
 function renderList() {
   const filters = getFiltersFromUrl();
   const proposals = filterProposals(state.proposals, filters);
   const departments = [...new Set(state.proposals.map((item) => item.department))].sort();
   const years = dashboardBreakdown(state.proposals, "all").years;
-  const workflowLabels = { total: "전체 제안", pending: "심사 대기", "overdue-review": "장기 미심사", adopted: "채택", "overdue-implementation": "시행 지연", completed: "실시 완료" };
+  const workflowLabels = { total: "전체 제안", pending: "심사 대기", "third-review": "3차 심사대기 · 2차 65점 이상", "auto-count": "자동 건수처리 · 50~64점", "below-standard": "기준미달 · 50점 미만", "overdue-review": "장기 미심사", adopted: "채택", "overdue-implementation": "시행 지연", completed: "실시 완료" };
   const yearLabel = filters.year === "all" ? "전체 연도" : `${filters.year}년`;
   const workflowLabel = workflowLabels[filters.workflow] || "전체 제안";
 
@@ -1503,7 +1540,10 @@ function renderList() {
           <label>현황
             <select name="workflow">
               <option value="total" ${filters.workflow === "total" ? "selected" : ""}>전체 제안</option>
-              <option value="pending" ${filters.workflow === "pending" ? "selected" : ""}>심사 대기</option>
+              <option value="pending" ${filters.workflow === "pending" ? "selected" : ""}>전체 심사대기</option>
+              <option value="third-review" ${filters.workflow === "third-review" ? "selected" : ""}>3차 심사대기 (2차 65점 이상·임원 승인)</option>
+              <option value="auto-count" ${filters.workflow === "auto-count" ? "selected" : ""}>자동 건수처리 (2차 50~64점)</option>
+              <option value="below-standard" ${filters.workflow === "below-standard" ? "selected" : ""}>기준미달 (2차 50점 미만)</option>
               <option value="overdue-review" ${filters.workflow === "overdue-review" ? "selected" : ""}>장기 미심사(7일+)</option>
               <option value="adopted" ${filters.workflow === "adopted" ? "selected" : ""}>채택</option>
               <option value="overdue-implementation" ${filters.workflow === "overdue-implementation" ? "selected" : ""}>시행 지연(30일+)</option>
@@ -1542,13 +1582,14 @@ function renderList() {
       </form>
     </section>
 
-    <section class="section">
-      <div class="result-bar"><strong>${proposals.length}건</strong><span>검색 결과</span></div>
-      ${proposals.length
-        ? `<div class="proposal-grid">${proposals.map(proposalCard).join("")}</div>`
-        : `<div class="empty-state"><h2>검색 결과가 없습니다.</h2><p>다른 검색어나 조건으로 다시 확인하세요.</p></div>`}
+    <section class="section" id="filteredProposalResults" aria-live="polite">
+      ${filters.workflow === "third-review"
+        ? `<div class="loading-card"><div class="spinner"></div><p>해당부서 임원 승인기록을 확인하고 있습니다. 확인된 3차 심사 대상만 표시합니다.</p></div>`
+        : renderListItems(proposals)}
     </section>
   `;
+  const requestId = ++thirdReviewListRequestId;
+  if (filters.workflow === "third-review") void hydrateThirdReviewList(proposals, requestId);
 }
 
 function employeeOptions(selectedName = "", selectedDepartment = "") {
@@ -3159,6 +3200,8 @@ document.addEventListener("click", async (event) => {
       window.print();
     } else if (action === "clear-filter") {
       go("list");
+    } else if (action === "retry-third-review") {
+      if (getFiltersFromUrl().workflow === "third-review") renderList();
     } else if (action === "open-image") {
       $("#lightboxImage").src = actionButton.dataset.url;
       $("#lightbox").showModal();

@@ -72,6 +72,55 @@ export function isEmployeeEditable(proposal) {
   return !proposal?.locked && proposal?.status !== "심사중" && proposal?.status !== "심사완료";
 }
 
+// Three-stage review list filters. These classify scores only; the third-review
+// list additionally checks the real executive approval record before displaying results.
+export function isThirdReviewCandidate(proposal) {
+  if (!proposal || !["접수", "심사중"].includes(proposal.status) || proposal.review_result !== "미심사") return false;
+  if (proposal.second_evaluation_total != null || ["상신완료", "승인완료"].includes(proposal.ceo_submission_status)) return false;
+  if (proposal.team_leader_evaluation_total == null || !Number.isFinite(Number(proposal.team_leader_evaluation_total)) || Number(proposal.team_leader_evaluation_total) < 65) return false;
+  return proposal.legacy_first_evaluation_exempt === true ||
+    (proposal.first_evaluation_total != null && Number(proposal.first_evaluation_total) >= 50);
+}
+
+export function isThirdReviewReady(proposal, approvalSteps = [], approvalRecords = []) {
+  if (!isThirdReviewCandidate(proposal)) return false;
+  const execStep = (Array.isArray(approvalSteps) ? approvalSteps : []).find(
+    (step) => step.role_name === "해당부서 임원" && step.active !== false
+  );
+  if (!execStep) return false;
+  return (Array.isArray(approvalRecords) ? approvalRecords : []).some(
+    (record) => String(record.step_id) === String(execStep.id) && record.status === "승인"
+  );
+}
+
+// Verify the actual executive approval before showing a candidate as actionable for the 3rd review.
+export async function selectThirdReviewReady(candidates, approvalSteps, loadRecords, concurrency = 5) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  if (!list.length) return [];
+  if (!(Array.isArray(approvalSteps) && approvalSteps.some(step => step.role_name === "해당부서 임원" && step.active !== false))) {
+    throw new Error("임원 결재단계를 확인하지 못했습니다.");
+  }
+  if (typeof loadRecords !== "function") throw new Error("임원 승인기록 조회 기능이 없습니다.");
+  const selected = new Array(list.length).fill(false);
+  let nextIndex = 0;
+  let error = null;
+  async function worker() {
+    while (nextIndex < list.length && !error) {
+      const i = nextIndex++;
+      try {
+        const records = await loadRecords(list[i].id);
+        if (!Array.isArray(records)) throw new Error("임원 승인기록 응답 형식이 올바르지 않습니다.");
+        selected[i] = isThirdReviewReady(list[i], approvalSteps, records);
+      } catch (cause) {
+        error = cause;
+      }
+    }
+  }
+  await Promise.all(Array.from({length: Math.min(Math.max(1,Math.min(10,Math.trunc(concurrency)||1)),list.length)},()=>worker()));
+  if (error) throw error;
+  return list.filter((_,i)=>selected[i]);
+}
+
 export function filterProposals(proposals, filters = {}) {
   const query = normalizeText(filters.query);
   const category = filters.category ?? "";
@@ -88,6 +137,20 @@ export function filterProposals(proposals, filters = {}) {
       if (year && year !== "all" && date?.year !== year) return false;
       if (month && month !== "all" && date?.month !== Number(month)) return false;
       if (workflow === "pending" && !(["접수", "심사중"].includes(proposal.status) && proposal.review_result === "미심사")) return false;
+      if (workflow === "third-review" && !isThirdReviewCandidate(proposal)) return false;
+      if (workflow === "auto-count" && !(
+        proposal.team_leader_evaluation_total != null &&
+        Number.isFinite(Number(proposal.team_leader_evaluation_total)) &&
+        Number(proposal.team_leader_evaluation_total) >= 50 &&
+        Number(proposal.team_leader_evaluation_total) < 65 &&
+        ["미심사", "건수처리"].includes(proposal.review_result)
+      )) return false;
+      if (workflow === "below-standard" && !(
+        proposal.team_leader_evaluation_total != null &&
+        Number.isFinite(Number(proposal.team_leader_evaluation_total)) &&
+        Number(proposal.team_leader_evaluation_total) < 50 &&
+        ["미심사", "미채택"].includes(proposal.review_result)
+      )) return false;
       if (workflow === "overdue-review" && !(["접수", "심사중"].includes(proposal.status) && proposal.review_result === "미심사" && daysBetween(proposal.received_date, new Date()) >= 7)) return false;
       if (workflow === "adopted" && proposal.review_result !== "채택") return false;
       if (workflow === "overdue-implementation" && !(proposal.review_result === "채택" && proposal.implementation_status !== "완료" && daysBetween(proposal.reviewed_at || proposal.updated_at || proposal.received_date, new Date()) >= 30)) return false;
