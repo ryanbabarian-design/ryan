@@ -4,6 +4,7 @@ import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score
 import { createQuestionSearch } from "./search/question-ui.js?v=2.7.8";
 import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
 import { createPerformancePage } from './reports/performance-ui.js?v=2.6.8';
+import { dashboardTopPerson } from "./reports/dashboard-top-person.js?v=2.8.3";
 import {
   calculateAward,
   currentYearProposalCount,
@@ -1218,6 +1219,8 @@ function renderDashboard() {
   const currentYearCount = currentYearProposalCount(state.proposals);
   const departmentMonthly = dashboardDepartmentMonthly(state.proposals, report.selectedYear);
   const highlights = dashboardHighlights(state.proposals, report.selectedYear);
+  // V2.8.3: use the same identity/duplicate rules as person-search for the winner.
+  highlights.topProposer = dashboardTopPerson(state.proposals, state.employees, report.selectedYear);
   const operations = operationalMetrics(scopedProposals);
   const goals = departmentGoalProgress(state.proposals, state.departmentGoals, report.selectedYear);
   const effects = effectAnalysis(scopedProposals);
