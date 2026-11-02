@@ -2,6 +2,7 @@
  * Never generates SQL, infers approval outcomes, or identifies 'me' from display names.
  */
 import { buildAnnualReport, koreaDate } from '../reports/annual-report.js?v=2.6.8';
+import {proposalResultCategory,summarizeProposalResults} from '../reports/proposal-status-summary.js?v=2.8.4';
 
 export const SEARCH_HELP = '직원 이름으로 물어보세요. 기간을 생략하면 올해 등록건수를 확인합니다.';
 const str = value => String(value ?? '').trim();
@@ -249,9 +250,14 @@ export function chooseSearchPerson(context,identity) {
   const person=context.candidates.find(p=>p.identity===identity);
   if(!person)throw new Error('선택한 직원이 조회 대상에 없습니다.');
   const details=person.details.filter(d=>d.date>=context.period.from&&d.date<=context.period.to).sort((a,b)=>b.date.localeCompare(a.date)||b.no.localeCompare(a.no));
+  const resultDetails = details.map(d=>{
+    const outcome = proposalResultCategory(d);
+    return {...d,statusCategory:outcome.category,statusLabel:outcome.label,statusProvisional:outcome.provisional};
+  });
+  const statusSummary = summarizeProposalResults(resultDetails);
   const warnings=[...(context.warnings||[])];
   if(person.historicalDepartments)warnings.push('이름이 같은 과거 부서의 비활성 명단을 현재 직원과 함께 집계했습니다. 동명이인이 있다면 직원명단의 사번을 확인하세요.');
-  return {kind:'answer',name:person.name,identity:person.identity,departments:person.departments,employeeNo:person.employeeNo,rosterStatus:person.rosterStatus,total:details.length,details,period:context.period,intent:context.intent||'count',personSource:context.personSource||'selection',asOf:context.asOf,mode:context.mode,warnings:[...new Set(warnings)]};
+  return {kind:'answer',name:person.name,identity:person.identity,departments:person.departments,employeeNo:person.employeeNo,rosterStatus:person.rosterStatus,total:resultDetails.length,details:resultDetails,statusSummary,period:context.period,intent:context.intent||'count',personSource:context.personSource||'selection',asOf:context.asOf,mode:context.mode,warnings:[...new Set(warnings)]};
 }
 
 /** Follow-ups use the chosen identity, not a guessed login/display name or hard-coded employee. */

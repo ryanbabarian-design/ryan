@@ -796,3 +796,9 @@ body {
 @media (max-width: 900px) {
   .team-leader-action-controls { grid-template-columns: 1fr; }
 }
+
+/* V2.8.4 — show adoption leader first and submission leader separately. */
+.highlight-subleader{position:relative;z-index:1;margin-top:13px;padding:11px 12px;border:1px solid #f0e1e1;background:#fff9f8;border-radius:10px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.highlight-subleader>span{font-size:11px;font-weight:750;color:#8d6670}
+.highlight-subleader>strong{font-size:14px;color:#252c35;white-space:nowrap}
+.highlight-subleader b{color:#bb2935;margin-left:5px}

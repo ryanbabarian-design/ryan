@@ -1,6 +1,7 @@
-import { chooseSearchPerson } from './question-core.js?v=2.7.8';
-import { prepareUnifiedResult, unifiedSuggestions } from './unified-core.js?v=2.7.8';
+import { chooseSearchPerson } from './question-core.js?v=2.8.4';
+import { prepareUnifiedResult, unifiedSuggestions } from './unified-core.js?v=2.8.4';
 import { loadQuestionData } from './question-source.js?v=2.7.5';
+import {RESULT_STATUS,summarizeProposalResults} from '../reports/proposal-status-summary.js?v=2.8.4';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const num = n => Number(n).toLocaleString('ko-KR');
@@ -8,13 +9,13 @@ const icon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke
 
 /** Read-only dashboard enhancement. Conversation state exists only in this page instance. */
 export function createQuestionSearch({root,store,now=()=>new Date(),load=loadQuestionData,getSelfIdentity=()=>null}) {
-  let query='', answeredQuery='',result=null,message='',busy=false,listOpen=false,listPage=1;
+  let query='', answeredQuery='',result=null,message='',busy=false,listOpen=false,listPage=1,statusFilter='all';
   let lastAnswer=null,pending=null,sequence=0,controller=null;
   const pageSize=10;
   const section=()=>root.querySelector('#questionSearch');
   function markup(){
     return `<section id="questionSearch" class="qsearch" aria-labelledby="questionSearchTitle">
-      <header class="qsearch-heading"><div><span class="qsearch-eyebrow">UNIFIED SEARCH · 2.7.8</span><h2 id="questionSearchTitle">실적부터 비슷한 제안까지, 한 번에 검색</h2><p>이름으로 실적을 묻거나, 설비명·개선 내용을 입력해 기존 제안을 찾아보세요.</p></div><span class="qsearch-badge">외부 AI 호출 없음</span></header>
+      <header class="qsearch-heading"><div><span class="qsearch-eyebrow">UNIFIED SEARCH · 2.8.4</span><h2 id="questionSearchTitle">실적부터 비슷한 제안까지, 한 번에 검색</h2><p>이름으로 실적을 묻거나, 설비명·개선 내용을 입력해 기존 제안을 찾아보세요.</p></div><span class="qsearch-badge">외부 AI 호출 없음</span></header>
       <form id="questionSearchForm" class="qsearch-form" role="search">
         <label class="qsearch-field" for="questionSearchInput">${icon}<input id="questionSearchInput" name="question" value="${esc(query)}" type="search" maxlength="240" placeholder="예: 직원 이름 + 올해 몇 건? / 에어건 / 작업시간 단축" aria-label="직원 실적 또는 제안 내용 통합 검색" aria-describedby="questionSearchHelp" autocomplete="off" required></label>
         <button class="qsearch-submit" type="submit">검색</button>
@@ -27,7 +28,7 @@ export function createQuestionSearch({root,store,now=()=>new Date(),load=loadQue
     </section>`;
   }
   function stop(){sequence++;controller?.abort();controller=null;busy=false;}
-  function invalidate(){stop();query='';answeredQuery='';result=null;message='';lastAnswer=null;pending=null;listOpen=false;listPage=1;const input=section()?.querySelector('#questionSearchInput');if(input)input.value='';paint();}
+  function invalidate(){stop();query='';answeredQuery='';result=null;message='';lastAnswer=null;pending=null;listOpen=false;listPage=1;statusFilter='all';const input=section()?.querySelector('#questionSearchInput');if(input)input.value='';paint();}
   function mount(){paint();}
   function suspend(){stop();}
   function contextMarkup(){
@@ -37,11 +38,20 @@ export function createQuestionSearch({root,store,now=()=>new Date(),load=loadQue
     return '';
   }
   function listMarkup(answer){
-    const pages=Math.max(1,Math.ceil(answer.total/pageSize));listPage=Math.max(1,Math.min(listPage,pages));
-    const start=(listPage-1)*pageSize,shown=answer.details.slice(start,start+pageSize);
-    return `<div id="questionSearchList" class="qsearch-list" ${listOpen?'':'hidden'}><div class="qsearch-list-head"><h3>해당 제안 목록 <span>${num(answer.total)}건</span></h3><small>최초 접수일 최신순</small></div>
-      <div class="qsearch-table-wrap" tabindex="0" role="region" aria-label="검색한 제안 목록"><table><thead><tr><th>접수번호</th><th>최초 접수일</th><th>제안명</th><th>접수부서</th></tr></thead><tbody>${shown.map(d=>`<tr><td>${d.no?`<a href="#detail/${encodeURIComponent(d.no)}">${esc(d.no)}</a>`:'번호 미등록'}</td><td>${esc(d.date)}</td><td class="qsearch-title-cell">${d.no?`<a href="#detail/${encodeURIComponent(d.no)}">${esc(d.title||'(제목 없음)')}</a>`:esc(d.title)}</td><td>${esc(d.department)}</td></tr>`).join('')}</tbody></table></div>
-      <div class="qsearch-pagebar"><span>${num(start+1)}–${num(Math.min(start+pageSize,answer.total))} / 전체 ${num(answer.total)}건</span>${pages>1?`<nav aria-label="제안 목록 페이지"><button type="button" data-qsearch="prev" ${listPage===1?'disabled':''}>이전</button><span>${listPage} / ${pages}</span><button type="button" data-qsearch="next" ${listPage===pages?'disabled':''}>다음</button></nav>`:''}</div></div>`;
+    const filtered=statusFilter==='all'?answer.details:answer.details.filter(d=>d.statusCategory===statusFilter);
+    const pages=Math.max(1,Math.ceil(filtered.length/pageSize));listPage=Math.max(1,Math.min(listPage,pages));
+    const start=(listPage-1)*pageSize,shown=filtered.slice(start,start+pageSize);
+    const label=RESULT_STATUS.find(x=>x.key===statusFilter)?.label||'전체';
+    return `<div id="questionSearchList" class="qsearch-list" ${listOpen?'':'hidden'}><div class="qsearch-list-head"><h3>해당 제안 목록 <span>${num(filtered.length)}건</span></h3><small>${esc(label)} · 최초 접수일 최신순</small></div>
+      <div class="qsearch-table-wrap" tabindex="0" role="region" aria-label="검색한 제안 목록"><table><thead><tr><th>접수번호</th><th>최초 접수일</th><th>제안명</th><th>처리현황</th><th>접수부서</th></tr></thead><tbody>${shown.length?shown.map(d=>`<tr><td>${d.no?`<a href="#detail/${encodeURIComponent(d.no)}">${esc(d.no)}</a>`:'번호 미등록'}</td><td>${esc(d.date)}</td><td class="qsearch-title-cell">${d.no?`<a href="#detail/${encodeURIComponent(d.no)}">${esc(d.title||'(제목 없음)')}</a>`:esc(d.title)}</td><td><span class="qsearch-result-tag" data-status="${esc(d.statusCategory||'pending')}">${esc(d.statusLabel||'심사·보완 중')}</span></td><td>${esc(d.department)}</td></tr>`).join(''):`<tr><td colspan="5" class="qsearch-empty-status">선택한 처리현황에 해당하는 제안이 없습니다.</td></tr>`}</tbody></table></div>
+      ${shown.length?`<div class="qsearch-pagebar"><span>${num(start+1)}–${num(Math.min(start+pageSize,filtered.length))} / 전체 ${num(filtered.length)}건</span>${pages>1?`<nav aria-label="제안 목록 페이지"><button type="button" data-qsearch="prev" ${listPage===1?'disabled':''}>이전</button><span>${listPage} / ${pages}</span><button type="button" data-qsearch="next" ${listPage===pages?'disabled':''}>다음</button></nav>`:''}</div>`:''}</div>`;
+  }
+  function statusMarkup(answer){
+    const summary=answer.statusSummary||summarizeProposalResults(answer.details||[]);
+    return `<div class="qsearch-statuses" role="group" aria-label="제안 처리현황별 조회">
+      <button type="button" class="qsearch-status ${statusFilter==='all'?'is-active':''}" data-qsearch="status" data-status="all" aria-pressed="${statusFilter==='all'}"><span>전체</span><strong>${num(summary.total)}건</strong></button>
+      ${RESULT_STATUS.map(item=>`<button type="button" class="qsearch-status ${statusFilter===item.key?'is-active':''}" data-qsearch="status" data-status="${item.key}" aria-pressed="${statusFilter===item.key}" ${summary.counts[item.key]===0?'disabled':''}><span>${esc(item.label)}</span><strong>${num(summary.counts[item.key])}건</strong></button>`).join('')}
+    </div>${summary.provisional?`<p class="qsearch-status-note">※ ${num(summary.provisional)}건은 2차 점수 또는 미확정 처리결과를 기준으로 잠정 분류했습니다. 최종 채택·포상 확정 여부는 해당 제안서에서 확인하세요.</p>`:''}`;
   }
   function ideasMarkup(a){
     const pages=Math.max(1,Math.ceil(a.total/pageSize));listPage=Math.max(1,Math.min(listPage,pages));
@@ -84,11 +94,12 @@ export function createQuestionSearch({root,store,now=()=>new Date(),load=loadQue
       ${a.mode==='demo'?'<div class="qsearch-demo">데모 자료입니다. 실제 직원 실적이 아닙니다.</div>':''}
       <div class="qsearch-answer-top"><div><span class="qsearch-filter">${esc(a.period.label)} · ${esc(a.name)} · ${esc(a.departments.join(' / '))}</span><h3>${sentence}</h3><p class="qsearch-period">조회기간: <strong>${esc(a.period.from)} ~ ${esc(a.period.to)}</strong> <span>(한국시간)</span></p>${periodNote?`<p class="qsearch-assumption">${esc(periodNote)}</p>`:''}</div><button type="button" class="qsearch-refresh" data-qsearch="refresh">다시 조회</button></div>
       ${a.warnings.some(w=>w.includes('과거 부서'))?'<p class="qsearch-assumption">과거 부서 기록도 함께 집계했습니다. 사번 연결이 없는 이전 자료는 확인이 필요합니다.</p>':''}
+      ${statusMarkup(a)}
       <div class="qsearch-answer-foot"><p>최초 접수 기준 · 같은 접수번호는 1건<br><span>조회 ${esc(at)} (한국시간) · 조회 권한 내 자료</span></p>${a.total?`<button type="button" class="qsearch-list-toggle" data-qsearch="list" aria-expanded="${listOpen}" aria-controls="questionSearchList">${listOpen?'목록 접기':'제안 목록 보기'} <span aria-hidden="true">${listOpen?'⌃':'›'}</span></button>`:'<span class="qsearch-zero">이 기간에 등록된 제안이 없습니다.<br>다른 기간도 물어보세요.</span>'}</div>
       ${a.warnings.length?`<details class="qsearch-warnings"><summary>집계자료 확인사항 ${a.warnings.length}건</summary>${a.warnings.map(w=>`<p>${esc(w)}</p>`).join('')}</details>`:''}${a.total?listMarkup(a):''}</article>`;
   }
   function accept(value){
-    result=value;message='';listPage=1;listOpen=value.kind==='ideas'||value.kind==='answer'&&value.intent==='list';
+    result=value;message='';listPage=1;statusFilter='all';listOpen=value.kind==='ideas'||value.kind==='answer'&&value.intent==='list';
     if(value.kind==='answer'||value.kind==='ideas'){lastAnswer=value;pending=null;}else pending=value;
   }
   async function search(text,mode='auto'){
@@ -124,6 +135,7 @@ export function createQuestionSearch({root,store,now=()=>new Date(),load=loadQue
     }else if(action==='refresh'&&result?.kind==='answer'){
       const a=result;void search(`${a.departments[0]} ${a.name} ${a.period.year}년${a.period.month===null?'':` ${a.period.month}월`} 제안 ${a.intent==='list'?'목록 보여줘':'몇 건이야?'}`);
     }else if(action==='person'&&result?.kind==='choose'){try{accept(chooseSearchPerson(result,b.dataset.identity));}catch(error){message=error.message;}paint();}
+    else if(action==='status' && result?.kind==='answer'){const allowed=['all',...RESULT_STATUS.map(x=>x.key)];if(!allowed.includes(b.dataset.status))return;statusFilter=b.dataset.status;listPage=1;listOpen=true;paint();section()?.querySelector('.qsearch-status.is-active')?.focus();}
     else if(action==='list'){listOpen=!listOpen;paint();section()?.querySelector('.qsearch-list-toggle')?.focus();}
     else if(action==='next'||action==='prev'){listPage+=action==='next'?1:-1;paint();section()?.querySelector('.qsearch-list-head, .qsearch-ideas-heading')?.scrollIntoView({block:'nearest'});}
   });

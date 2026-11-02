@@ -5,19 +5,20 @@
  * No writes, API calls, or permission changes.
  */
 import { buildAnnualReport, reportDate } from './annual-report.js?v=2.6.8';
-import { candidateGroups } from '../search/question-core.js?v=2.7.8';
+import { candidateGroups } from '../search/question-core.js?v=2.8.4';
+import { proposalResultCategory } from './proposal-status-summary.js?v=2.8.4';
 
 const text = value => String(value ?? '').trim();
 const numericScore = value => value === null || value === undefined || value === '' ? 0 : Number.isFinite(Number(value)) ? Number(value) : 0;
 
-export function dashboardTopPerson(proposals = [], employees = [], selectedYear = 'all') {
+export function dashboardTopPeople(proposals = [], employees = [], selectedYear = 'all') {
   const source = Array.isArray(proposals) ? proposals : [];
   const roster = Array.isArray(employees) ? employees : [];
   const requested = text(selectedYear) || 'all';
   const years = requested === 'all'
     ? [...new Set(source.map(p => reportDate(p?.received_date)?.slice(0, 4)).filter(Boolean))].sort()
     : /^\d{4}$/.test(requested) ? [requested] : [];
-  if (!years.length) return null;
+  if (!years.length) return {topSubmitted:null,topAdopted:null};
 
   // Keep original scores for the dashboard's existing secondary tie-break.
   const originalByNo = new Map();
@@ -54,19 +55,21 @@ export function dashboardTopPerson(proposals = [], employees = [], selectedYear 
         if (candidate.numbers.has(id)) continue;
         candidate.numbers.add(id);
         candidate.count++;
-        if (d.originalResult === '채택') candidate.adoptedCount++;
+        if (proposalResultCategory(d).category === 'adopted') candidate.adoptedCount++;
         const original = originalByNo.get(text(d.no) || text(d.id));
         candidate.totalScore += numericScore(original?.score);
       }
       people.set(key, candidate);
     }
   }
-  const top = [...people.values()].sort((a, b) =>
-    b.count - a.count || b.adoptedCount - a.adoptedCount ||
-    b.totalScore - a.totalScore || a.name.localeCompare(b.name, 'ko')
-  )[0];
-  return top ? {
-    name: top.name, department: top.department, count: top.count,
-    adoptedCount: top.adoptedCount, totalScore: top.totalScore,
-  } : null;
+  const rows=[...people.values()];
+  const bySubmission=[...rows].sort((a,b)=>b.count-a.count||b.adoptedCount-a.adoptedCount||b.totalScore-a.totalScore||a.name.localeCompare(b.name,'ko'));
+  const byAdoption=[...rows].filter(p=>p.adoptedCount>0).sort((a,b)=>b.adoptedCount-a.adoptedCount||b.count-a.count||b.totalScore-a.totalScore||a.name.localeCompare(b.name,'ko'));
+  const publicView = person => person ? {name:person.name,department:person.department,count:person.count,adoptedCount:person.adoptedCount,totalScore:person.totalScore} : null;
+  return {topSubmitted:publicView(bySubmission[0]),topAdopted:publicView(byAdoption[0])};
+}
+
+/** Backward-compatible: this function still means most submissions. */
+export function dashboardTopPerson(proposals=[],employees=[],selectedYear='all') {
+  return dashboardTopPeople(proposals,employees,selectedYear).topSubmitted;
 }

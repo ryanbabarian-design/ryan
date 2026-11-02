@@ -1,10 +1,10 @@
 import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.js?v=2.8.0";
 import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score-correction-core.js?v=2.8.1";
-import { createQuestionSearch } from "./search/question-ui.js?v=2.7.8";
+import { createQuestionSearch } from "./search/question-ui.js?v=2.8.4";
 import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
 import { createPerformancePage } from './reports/performance-ui.js?v=2.6.8';
-import { dashboardTopPerson } from "./reports/dashboard-top-person.js?v=2.8.3";
+import { dashboardTopPeople } from "./reports/dashboard-top-person.js?v=2.8.4";
 import {
   calculateAward,
   currentYearProposalCount,
@@ -1219,8 +1219,10 @@ function renderDashboard() {
   const currentYearCount = currentYearProposalCount(state.proposals);
   const departmentMonthly = dashboardDepartmentMonthly(state.proposals, report.selectedYear);
   const highlights = dashboardHighlights(state.proposals, report.selectedYear);
-  // V2.8.3: use the same identity/duplicate rules as person-search for the winner.
-  highlights.topProposer = dashboardTopPerson(state.proposals, state.employees, report.selectedYear);
+  // V2.8.4: keep registration and confirmed adoption rankings separate.
+  const staffLeaders = dashboardTopPeople(state.proposals, state.employees, report.selectedYear);
+  highlights.topProposer = staffLeaders.topSubmitted;
+  highlights.topAdopter = staffLeaders.topAdopted;
   const operations = operationalMetrics(scopedProposals);
   const goals = departmentGoalProgress(state.proposals, state.departmentGoals, report.selectedYear);
   const effects = effectAnalysis(scopedProposals);
@@ -1381,25 +1383,18 @@ function renderDashboard() {
             <article class="dashboard-highlight-card top-proposer-card">
               <div class="highlight-card-icon" aria-hidden="true">★</div>
               <div class="highlight-card-body">
-                <span class="eyebrow">MOST ACTIVE</span>
-                <h2>최다제안</h2>
-                ${highlights.topProposer ? `
+                <span class="eyebrow">MOST ADOPTED</span>
+                <h2>최다채택</h2>
+                ${highlights.topAdopter ? `
                   <div class="highlight-winner-row">
-                    <div>
-                      <strong>${escapeHtml(highlights.topProposer.name)}</strong>
-                      <span>${escapeHtml(highlights.topProposer.department)}</span>
-                    </div>
-                    <b>${highlights.topProposer.count.toLocaleString("ko-KR")}건</b>
+                    <div><strong>${escapeHtml(highlights.topAdopter.name)}</strong><span>${escapeHtml(highlights.topAdopter.department)}</span></div>
+                    <b>${highlights.topAdopter.adoptedCount.toLocaleString("ko-KR")}건</b>
                   </div>
-                  <dl class="highlight-stats">
-                    <div><dt>채택</dt><dd>${highlights.topProposer.adoptedCount.toLocaleString("ko-KR")}건</dd></div>
-                    <div><dt>점수 합계</dt><dd>${highlights.topProposer.totalScore.toLocaleString("ko-KR")}점</dd></div>
-                  </dl>
-                  <button class="highlight-link" data-search="${escapeHtml(highlights.topProposer.name)}">제안내역 보기 ›</button>
-                ` : `
-                  <div class="highlight-empty">선택 기간에 등록된 제안자가 없습니다.</div>
-                `}
-                <p class="highlight-rule">제안건수 기준 · 동률 시 채택건수와 점수합계 순</p>
+                  <dl class="highlight-stats"><div><dt>등록 제안</dt><dd>${highlights.topAdopter.count.toLocaleString("ko-KR")}건</dd></div><div><dt>채택률</dt><dd>${Math.round(highlights.topAdopter.adoptedCount/highlights.topAdopter.count*100)}%</dd></div></dl>
+                  <button class="highlight-link" data-search="${escapeHtml(highlights.topAdopter.name)}">채택 1위 제안내역 보기 ›</button>
+                ` : `<div class="highlight-empty">선택 기간에 최종 채택된 제안이 없습니다.</div>`}
+                ${highlights.topProposer ? `<div class="highlight-subleader"><span>최다제안 · 등록건수 1위</span><strong>${escapeHtml(highlights.topProposer.name)} <b>${highlights.topProposer.count.toLocaleString("ko-KR")}건</b></strong></div>` : ''}
+                <p class="highlight-rule">최다채택은 확정 채택건수 기준 · 동률 시 등록건수·점수합계 순</p>
               </div>
             </article>
 
