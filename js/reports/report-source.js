@@ -1,4 +1,4 @@
-import { reportDate } from './annual-report.js?v=2.6.8';
+import { reportDate } from './annual-report.js?v=2.8.5';
 /** Stable ordered pages, fail closed on errors or changing totals. */
 export async function fetchAllPages(fetchPage, {pageSize=500,maxRows=100000}={}) {
   const rows=[],seen=new Set();let expected=null;

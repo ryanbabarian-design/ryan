@@ -3,13 +3,14 @@ import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.j
 import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score-correction-core.js?v=2.8.1";
 import { createQuestionSearch } from "./search/question-ui.js?v=2.8.4";
 import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
-import { createPerformancePage } from './reports/performance-ui.js?v=2.6.8';
-import { dashboardTopPeople } from "./reports/dashboard-top-person.js?v=2.8.4";
+import { createPerformancePage } from './reports/performance-ui.js?v=2.8.5';
+import { dashboardTopPeople } from "./reports/dashboard-top-person.js?v=2.8.5";
 import {
   calculateAward,
   currentYearProposalCount,
   dashboardBreakdown,
   dashboardDepartmentMonthly,
+  normalizeDepartmentName,
   dashboardHighlights,
   dashboardMetrics,
   departmentGoalProgress,
@@ -30,7 +31,7 @@ import {
   resolveApprovalPermission,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=2.8.2";
+} from "./core.js?v=2.8.5";
 import { createStore } from "./services/store.js?v=2.8.1";
 import {
   appendImageFiles,
@@ -1458,7 +1459,7 @@ function getFiltersFromUrl() {
     year: params.get("year") || "all",
     workflow: params.get("workflow") || "total",
     category: params.get("category") || "",
-    department: params.get("department") || "",
+    department: params.get("department") ? normalizeDepartmentName(params.get("department")) : "",
     reviewResult: params.get("review") || "",
     implementationStatus: params.get("implementation") || "",
   };
@@ -1503,7 +1504,7 @@ async function hydrateThirdReviewList(candidates, requestId) {
 function renderList() {
   const filters = getFiltersFromUrl();
   const proposals = filterProposals(state.proposals, filters);
-  const departments = [...new Set(state.proposals.map((item) => item.department))].sort();
+  const departments = [...new Set(state.proposals.map((item) => normalizeDepartmentName(item.department)))].sort((a,b)=>a.localeCompare(b,"ko"));
   const years = dashboardBreakdown(state.proposals, "all").years;
   const workflowLabels = { total: "전체 제안", pending: "심사 대기", "third-review": "3차 심사대기 · 2차 65점 이상", "auto-count": "자동 건수처리 · 50~64점", "below-standard": "기준미달 · 50점 미만", "overdue-review": "장기 미심사", adopted: "채택", "overdue-implementation": "시행 지연", completed: "실시 완료" };
   const yearLabel = filters.year === "all" ? "전체 연도" : `${filters.year}년`;

@@ -1,9 +1,10 @@
+import { normalizeDepartmentName } from '../core.js?v=2.8.5';
 /** V2.6.8 — read-only annual reporting. No approval/award decisions are written here. */
 export const REPORT_VERSION = '2.6.8';
 export const REPORT_RULES = [
   '등록건수: 최초 접수일 기준. 같은 접수번호의 수정·재상신은 1건으로 집계합니다.',
   '인정건수: 확정 채택 + 확정 건수처리. 반려·결재대기·보류는 인정건수에 포함하지 않습니다.',
-  '개인/부서 건수는 접수부서 기준입니다. 부서이동 이력이 있으면 동일 직원이 부서별로 나뉠 수 있습니다.',
+  '부서별 집계는 접수부서 기준입니다. 가공/가공팀 등 확인된 동일부서 표기를 통합하며 부서 이동 이력은 접수 당시 부서 기준으로 표시합니다.',
   '참여율: 조회 가능한 현재 활성 직원명단 중 해당 연도에 1건 이상 제출한 직원 비율. 과거 연도의 재직인원 통계는 아닙니다.',
   '사번/직원ID가 없는 제안은 성명+접수부서가 유일하게 일치할 때만 연결합니다. 명단 미확인 제안도 총건수에 포함됩니다.',
   '포상 확정액/지급완료액과 예상/심사확정 효과금액을 분리합니다. 지급완료액은 지급연도 실적이 아닌 해당 접수연도 제안의 현재 지급현황입니다.',
@@ -80,14 +81,14 @@ export function buildAnnualReport({proposals=[],employees=[],goals=[],approvals=
     if (!str(e.name)) return;
     const identity=str(e.employee_no)?`no:${str(e.employee_no)}`:str(e.id)?`id:${str(e.id)}`:`row:${i}`;
     const old=rosterMap.get(identity);
-    if (!old || (old.active===false && e.active!==false)) rosterMap.set(identity,{...e,identity,name:str(e.name),department:str(e.department)||'부서 미등록',employee_no:str(e.employee_no)});
+    if (!old || (old.active===false && e.active!==false)) rosterMap.set(identity,{...e,identity,name:str(e.name),department:normalizeDepartmentName(e.department),employee_no:str(e.employee_no)});
   });
   const roster=[...rosterMap.values()];
   const matches = p => {
     for (const [val,field] of [[p.employee_id??p.proposer_id,'id'],[p.proposer_employee_no??p.employee_no,'employee_no']]) {
       if (str(val)) { const found=roster.filter(e=>str(e[field])===str(val));if(found.length===1)return {employee:found[0],basis:field==='id'?'직원ID':'사번'}; }
     }
-    const found=roster.filter(e=>e.name===str(p.proposer_name) && e.department===(str(p.department)||'부서 미등록'));
+    const found=roster.filter(e=>e.name===str(p.proposer_name) && e.department===(normalizeDepartmentName(p.department)));
     return found.length===1 ? {employee:found[0],basis:'성명+부서'} : {employee:null,basis:found.length?'동명이인 확인 필요':'직원명단 미확인'};
   };
   const peopleMap=new Map();
@@ -102,7 +103,7 @@ export function buildAnnualReport({proposals=[],employees=[],goals=[],approvals=
   for(const p of dedupeProposals(proposals,warnings)) {
     const date=reportDate(p.received_date);
     if(!date) {invalid++;continue;} if(date.slice(0,4)!==yearText)continue;
-    const name=str(p.proposer_name)||'작성자 미등록',dept=str(p.department)||'부서 미등록';
+    const name=str(p.proposer_name)||'작성자 미등록',dept=normalizeDepartmentName(p.department);
     const {employee,basis}=matches(p);const person=ensurePerson(employee,name,dept,basis);
     const result=classifyProposal(p,approvals); const awarded=result.final?cash(p.award_amount):0;
     const paid=p.payment_status==='완료'?cash(p.award_amount):0;
@@ -113,7 +114,7 @@ export function buildAnnualReport({proposals=[],employees=[],goals=[],approvals=
   if(invalid)warnings.push(`접수일 누락/오류 ${invalid}건은 연도를 확정할 수 없어 제외했습니다. 원자료를 확인하세요.`);
   const identityTotals=new Map();allDetails.forEach(d=>identityTotals.set(d.identity,(identityTotals.get(d.identity)||0)+1));
   peopleMap.forEach(p=>p.personTotal=identityTotals.get(p.identity)||0);
-  const q=str(query).toLocaleLowerCase('ko-KR');const dep=str(department);
+  const q=str(query).toLocaleLowerCase('ko-KR');const dep=str(department)?normalizeDepartmentName(department):'';
   const people=[...peopleMap.values()].filter(p=>(!dep||p.department===dep)&&(!q||`${p.name} ${p.employeeNo}`.toLocaleLowerCase('ko-KR').includes(q))&&(!zeroOnly||(p.eligible&&p.personTotal===0))).sort((a,b)=>b.total-a.total||ko(a.department,b.department)||ko(a.name,b.name)||ko(a.key,b.key));
   const detailKeys=new Set(people.map(p=>p.key));
   const details=allDetails.filter(d=>detailKeys.has(d.personKey)).sort((a,b)=>ko(b.date,a.date)||ko(b.no,a.no));
@@ -134,8 +135,9 @@ export function buildAnnualReport({proposals=[],employees=[],goals=[],approvals=
     if(p.eligible){d.activeEmployees++;if(p.personTotal>0)d.participants++;}
   });
   const departments=[...deptMap.values()].sort((a,b)=>ko(a.department,b.department)).map(d=>{
-    const g=goals.find(g=>str(g.year)===yearText&&str(g.department)===d.department);
-    d.goal=(!q&&!zeroOnly&&g)?cash(g.annual_goal):null;d.goalRate=d.goal>0?d.total/d.goal:null;
+    const matches=goals.filter(g=>str(g.year)===yearText&&normalizeDepartmentName(g.department)===d.department);
+    // Legacy duplicate goal names are aliases, not separate targets.
+    d.goal=(!q&&!zeroOnly&&matches.length)?Math.max(...matches.map(g=>cash(g.annual_goal))):null;d.goalRate=d.goal>0?d.total/d.goal:null;
     d.zeroEmployees=d.activeEmployees-d.participants;d.participationRate=d.activeEmployees?d.participants/d.activeEmployees:0;return d;
   });
   const scopeText=[`${yearText}년 접수`,dep||'전체 부서',q?`직원검색: ${str(query)}`:'',zeroOnly?'활성 직원 중 올해 0건만':''].filter(Boolean).join(' · ');

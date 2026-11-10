@@ -1,5 +1,5 @@
 import { writeXlsx, columnName, excelDate, XLSX_STYLES } from './xlsx-writer.js?v=2.6.8';
-import { koreaDate } from './annual-report.js?v=2.6.8';
+import { koreaDate } from './annual-report.js?v=2.8.5';
 const S=XLSX_STYLES;
 const v=(value,style=S.body)=>({value,style});
 const f=(formula,result,style=S.integer)=>({formula,result,style});

@@ -1,6 +1,6 @@
-import { buildAnnualReport, koreaDate } from './annual-report.js?v=2.6.8';
-import { loadAnnualData } from './report-source.js?v=2.6.8';
-import { downloadReportXlsx } from './report-xlsx.js?v=2.6.8';
+import { buildAnnualReport, koreaDate } from './annual-report.js?v=2.8.5';
+import { loadAnnualData } from './report-source.js?v=2.8.5';
+import { downloadReportXlsx } from './report-xlsx.js?v=2.8.5';
 const esc=v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const num=n=>Number(n||0).toLocaleString('ko-KR');
 const money=n=>`${num(n)}원`;

@@ -4,7 +4,7 @@
  * split. The top proposer is a person, not a person/department pair.
  * No writes, API calls, or permission changes.
  */
-import { buildAnnualReport, reportDate } from './annual-report.js?v=2.6.8';
+import { buildAnnualReport, reportDate } from './annual-report.js?v=2.8.5';
 import { candidateGroups } from '../search/question-core.js?v=2.8.4';
 import { proposalResultCategory } from './proposal-status-summary.js?v=2.8.4';
 

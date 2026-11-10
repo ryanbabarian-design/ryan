@@ -35,6 +35,20 @@ export function normalizeText(value) {
     .trim();
 }
 
+// Operationally identical department labels found in historical proposal uploads.
+// Explicit aliases only: do NOT strip 팀 from every department (they may be distinct).
+// This normalizes reporting/filter labels without rewriting source proposals or employees.
+const DEPARTMENT_ALIASES = new Map([
+  ["가공", "가공"], ["가공팀", "가공"],
+  ["압출인발", "압출인발"], ["압출인발팀", "압출인발"],
+  ["공무", "공무"], ["공무팀", "공무"],
+]);
+export function normalizeDepartmentName(value) {
+  const label = String(value ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
+  if (!label) return "미지정";
+  return DEPARTMENT_ALIASES.get(label.replace(/\s+/g, "")) || label;
+}
+
 export function nextProposalNo(proposals, date = new Date()) {
   const year = String(date.getFullYear()).slice(-2);
   const prefix = `Q${year}-`;
@@ -156,7 +170,7 @@ export function filterProposals(proposals, filters = {}) {
       if (workflow === "overdue-implementation" && !(proposal.review_result === "채택" && proposal.implementation_status !== "완료" && daysBetween(proposal.reviewed_at || proposal.updated_at || proposal.received_date, new Date()) >= 30)) return false;
       if (workflow === "completed" && proposal.implementation_status !== "완료") return false;
       if (category && proposal.category !== category) return false;
-      if (department && proposal.department !== department) return false;
+      if (department && normalizeDepartmentName(proposal.department) !== normalizeDepartmentName(department)) return false;
       if (reviewResult && proposal.review_result !== reviewResult) return false;
       if (implementationStatus && proposal.implementation_status !== implementationStatus) return false;
 
@@ -290,7 +304,7 @@ export function dashboardBreakdown(proposals, requestedYear = "") {
 
   const departmentMap = new Map();
   for (const item of filtered) {
-    const key = String(item.proposal.department || "미지정").trim() || "미지정";
+    const key = normalizeDepartmentName(item.proposal.department);
     const row = departmentMap.get(key) || createBreakdownRow(key, key);
     departmentMap.set(key, addProposalToBreakdown(row, item.proposal));
   }
@@ -320,7 +334,7 @@ export function dashboardDepartmentMonthly(proposals, requestedYear = "") {
   for (const proposal of source) {
     const date = proposalDateParts(proposal);
     if (!date || date.year !== selectedYear) continue;
-    const department = String(proposal.department || "미지정").trim() || "미지정";
+    const department = normalizeDepartmentName(proposal.department);
     const row = departmentMap.get(department) || { department, months: Array(12).fill(0), total: 0 };
     row.months[date.month - 1] += 1;
     row.total += 1;
@@ -568,14 +582,17 @@ export function departmentGoalProgress(proposals, goals, requestedYear = "") {
   for (const proposal of Array.isArray(proposals) ? proposals : []) {
     const parts = proposalDateParts(proposal);
     if (!parts || parts.year !== year) continue;
-    const department = String(proposal.department || "미지정").trim() || "미지정";
+    const department = normalizeDepartmentName(proposal.department);
     actualMap.set(department, (actualMap.get(department) || 0) + 1);
   }
 
   const goalMap = new Map();
   for (const goal of Array.isArray(goals) ? goals : []) {
     if (String(goal.year) !== year) continue;
-    goalMap.set(String(goal.department || "미지정"), Math.max(0, Number(goal.annual_goal || 0)));
+    const department = normalizeDepartmentName(goal.department);
+    const amount = Math.max(0, Number(goal.annual_goal || 0));
+    // Alias duplicates represent ONE target; never add them together.
+    goalMap.set(department, Math.max(goalMap.get(department) || 0, amount));
   }
 
   const departments = [...new Set([...actualMap.keys(), ...goalMap.keys()])];
