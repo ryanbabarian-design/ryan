@@ -5,8 +5,8 @@
  * No writes, API calls, or permission changes.
  */
 import { buildAnnualReport, reportDate } from './annual-report.js?v=2.8.5';
-import { candidateGroups } from '../search/question-core.js?v=2.8.4';
-import { proposalResultCategory } from './proposal-status-summary.js?v=2.8.4';
+import { candidateGroups } from '../search/question-core.js?v=2.8.7';
+import { proposalResultCategory } from './proposal-status-summary.js?v=2.8.7';
 
 const text = value => String(value ?? '').trim();
 const numericScore = value => value === null || value === undefined || value === '' ? 0 : Number.isFinite(Number(value)) ? Number(value) : 0;

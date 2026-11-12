@@ -15,7 +15,7 @@ function checkScores(values, stage) {
 }
 export function adminScoreFlowLabel(teamTotal) {
   if (teamTotal < 50) return '50점 미만 · 기준미달(3차 진행 불가)';
-  if (teamTotal < 65) return '50~64점 · 건수처리(3차 심사 제외)';
+  if (teamTotal < 65) return '50~64점 · 건수처리 후보(임원 승인 후 3차 심사)';
   return '65점 이상 · 임원 승인 후 3차 심사 가능';
 }
 export function validateAdminScoreCorrection(first,team,reason) {
@@ -24,5 +24,5 @@ export function validateAdminScoreCorrection(first,team,reason) {
   if (firstTotal < 50) throw new Error(`1차 평가 ${firstTotal}점은 50점 미만입니다. 수정하여 저장하세요.`);
   if (typeof reason !== 'string' || reason.trim().length < 5 || reason.trim().length > 1000)
     throw new Error('평가 보완 사유를 5~1,000자로 입력하세요.');
-  return {firstTotal,teamTotal,thirdEligible:teamTotal >= 65,reason:reason.trim()};
+  return {firstTotal,teamTotal,thirdEligible:teamTotal >= 50,reason:reason.trim()};
 }

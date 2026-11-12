@@ -1,10 +1,11 @@
+import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, validateThirdReview } from "./review/third-review-policy.js?v=2.8.7";
 import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.js?v=2.8.0";
-import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score-correction-core.js?v=2.8.1";
-import { createQuestionSearch } from "./search/question-ui.js?v=2.8.4";
+import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score-correction-core.js?v=2.8.7";
+import { createQuestionSearch } from "./search/question-ui.js?v=2.8.7";
 import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
 import { createPerformancePage } from './reports/performance-ui.js?v=2.8.5';
-import { dashboardTopPeople } from "./reports/dashboard-top-person.js?v=2.8.5";
+import { dashboardTopPeople } from "./reports/dashboard-top-person.js?v=2.8.7";
 import {
   calculateAward,
   currentYearProposalCount,
@@ -31,8 +32,8 @@ import {
   resolveApprovalPermission,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=2.8.5";
-import { createStore } from "./services/store.js?v=2.8.1";
+} from "./core.js?v=2.8.7";
+import { createStore } from "./services/store.js?v=2.8.7";
 import {
   appendImageFiles,
   createImageSelection,
@@ -742,10 +743,10 @@ function updateEvaluationTotalFromForm(form, prefix) {
           : total < 50
             ? `2차 팀장평가 ${total}점 · 승인 저장 시 기준미달(미채택) 처리됩니다.`
             : total < 65
-              ? `2차 팀장평가 ${total}점 · 승인 저장 시 자동 건수처리됩니다. 3차 심사는 진행하지 않습니다.`
+              ? `2차 팀장평가 ${total}점 · 건수처리 후보입니다. 임원 승인 후 3차 심사에서 최종 결과를 결정합니다.`
               : `2차 팀장평가 ${total}점 · 승인 저장 시 임원 결재로 넘어가며, 임원 승인 후 3차 심사위원 평가를 진행합니다.`;
       if (form.id === "v272PriorEvaluation" && complete && !invalid) {
-        const band = total < 50 ? "50점 미만 · 기준미달 구간" : total < 65 ? "50~64점 · 건수처리 구간" : "65점 이상 · 3차 심사 대상 구간";
+        const band = total < 50 ? "50점 미만 · 기준미달 구간" : total < 65 ? "50~64점 · 건수처리 후보 / 3차 심사 필요" : "65점 이상 · 3차 심사 대상 구간";
         guide.textContent = `2차 팀장평가 ${total}점 · ${band}입니다. 저장 시 기존 승인 기록은 유지됩니다. 후속 결재가 이미 승인된 경우 심사상태·결과는 자동 변경하지 않습니다.`;
       }
     }
@@ -1071,12 +1072,13 @@ function render() {
 }
 
 function currentEvaluationStage(proposal) {
+  if (isLegacyCountCandidate(proposal)) return `2차 ${Number(proposal.team_leader_evaluation_total)}점 · 건수처리 후보 · 3차 심사대기`;
   if (proposal.review_result !== "미심사") return proposal.review_result;
   if (proposal.second_evaluation_total != null) return `3차 평가 완료 · ${Number(proposal.second_evaluation_total)}점`;
   if (proposal.team_leader_evaluation_total != null) {
     const total = Number(proposal.team_leader_evaluation_total);
     if (total >= 65) return `2차 ${total}점 · 3차 심사대기`;
-    if (total >= 50) return `2차 ${total}점 · 건수처리`;
+    if (total >= 50) return `2차 ${total}점 · 건수처리 후보 · 3차 심사대기`;
     return `2차 ${total}점 · 기준미달`;
   }
   if (proposal.first_evaluation_total != null) {
@@ -1506,7 +1508,7 @@ function renderList() {
   const proposals = filterProposals(state.proposals, filters);
   const departments = [...new Set(state.proposals.map((item) => normalizeDepartmentName(item.department)))].sort((a,b)=>a.localeCompare(b,"ko"));
   const years = dashboardBreakdown(state.proposals, "all").years;
-  const workflowLabels = { total: "전체 제안", pending: "심사 대기", "third-review": "3차 심사대기 · 2차 65점 이상", "auto-count": "자동 건수처리 · 50~64점", "below-standard": "기준미달 · 50점 미만", "overdue-review": "장기 미심사", adopted: "채택", "overdue-implementation": "시행 지연", completed: "실시 완료" };
+  const workflowLabels = { total: "전체 제안", pending: "심사 대기", "third-review": "3차 심사대기 · 2차 50점 이상", "auto-count": "건수처리 후보 · 3차 미심사", "below-standard": "기준미달 · 50점 미만", "overdue-review": "장기 미심사", adopted: "채택", "overdue-implementation": "시행 지연", completed: "실시 완료" };
   const yearLabel = filters.year === "all" ? "전체 연도" : `${filters.year}년`;
   const workflowLabel = workflowLabels[filters.workflow] || "전체 제안";
 
@@ -1540,8 +1542,8 @@ function renderList() {
             <select name="workflow">
               <option value="total" ${filters.workflow === "total" ? "selected" : ""}>전체 제안</option>
               <option value="pending" ${filters.workflow === "pending" ? "selected" : ""}>전체 심사대기</option>
-              <option value="third-review" ${filters.workflow === "third-review" ? "selected" : ""}>3차 심사대기 (2차 65점 이상·임원 승인)</option>
-              <option value="auto-count" ${filters.workflow === "auto-count" ? "selected" : ""}>자동 건수처리 (2차 50~64점)</option>
+              <option value="third-review" ${filters.workflow === "third-review" ? "selected" : ""}>3차 심사대기 (2차 50점 이상·임원 승인)</option>
+              <option value="auto-count" ${filters.workflow === "auto-count" ? "selected" : ""}>건수처리 후보 · 3차 미심사 (2차 50~64점)</option>
               <option value="below-standard" ${filters.workflow === "below-standard" ? "selected" : ""}>기준미달 (2차 50점 미만)</option>
               <option value="overdue-review" ${filters.workflow === "overdue-review" ? "selected" : ""}>장기 미심사(7일+)</option>
               <option value="adopted" ${filters.workflow === "adopted" ? "selected" : ""}>채택</option>
@@ -1844,7 +1846,7 @@ function renderDetail(proposalNo) {
     </section>
 
     <section class="detail-operation-card evaluation-summary-card">
-      <div class="section-heading"><div><span class="eyebrow">EVALUATION</span><h2>1·2·3차 평가</h2><p>1차는 제안자 본인평가, 2차는 팀장평가입니다. 팀장평가 65점 이상만 3차 심사위원 평가로 진행하고, 50~64점은 자동 건수처리됩니다.</p></div></div>
+      <div class="section-heading"><div><span class="eyebrow">EVALUATION</span><h2>1·2·3차 평가</h2><p>1차는 제안자 본인평가, 2차는 팀장평가입니다. 팀장평가 50점 이상은 임원 승인 후 모두 3차 심사합니다. 50~64점은 건수처리 후보이며, 채택·미채택·보류·건수처리는 3차 심사에서 결정합니다.</p></div></div>
       ${renderEvaluationComparison(proposal)}
       ${proposal.first_evaluation_total != null ? firstEvaluationCriteriaMarkup(proposal.first_evaluation || {}, proposal.first_evaluation_total) : ""}
       ${proposal.first_evaluation_total != null ? renderEvaluationTable("detail-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" }) : `<div class="analytics-empty">V2.5 이전 제안으로 1차 평가자료가 없습니다.</div>`}
@@ -2362,7 +2364,7 @@ function renderApprovalAction(permission, proposalId) {
     return `<div id="approvalActionForm" data-proposal-id="${escapeHtml(proposalId)}" data-step-id="${permission.step.id}" data-role-name="${escapeHtml(permission.step.role_name)}" class="approval-action-form team-leader-action-form">
       <div class="approval-own-step"><small>본인 결재단계</small><strong>${permission.step.step_order}. ${escapeHtml(permission.step.role_name)}</strong><span>${escapeHtml(permission.assignment?.department || "전체 부서")}</span></div>
       <div class="team-leader-evaluation-box">
-        <div class="team-leader-evaluation-head"><strong>2차 팀장평가</strong><p>50점 미만은 기준미달, 50~64점은 자동 건수처리, 65점 이상은 3차 심사위원 평가로 진행됩니다.</p></div>
+        <div class="team-leader-evaluation-head"><strong>2차 팀장평가</strong><p>50점 미만은 기준미달입니다. 50점 이상은 임원 승인 후 모두 3차 심사하며, 50~64점은 건수처리 후보입니다.</p></div>
         ${renderEvaluationTable("team", {}, { title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}
         <div class="evaluation-lock-note" id="teamEvaluationGuide" role="status" aria-live="polite">팀장평가 점수를 입력한 뒤 승인 저장하세요.</div>
       </div>
@@ -2658,7 +2660,7 @@ async function renderAdminScoreCorrection(id) {
     if (routeParts()[0]!=="admin" || routeParts()[1]!=="score" || routeParts()[2]!==id) return;
     const teamScore=info.team_total == null ? '미입력' : `${Number(info.team_total)}점`;
     const thirdScore=info.third_total == null ? '미입력' : `${Number(info.third_total)}점`;
-    const canThird=info.team_total!=null && Number(info.team_total)>=65 && info.executive_approved===true &&
+    const canThird=info.team_total!=null && Number(info.team_total)>=50 && info.executive_approved===true &&
       info.review_result==="미심사" && !["상신완료","승인완료"].includes(info.ceo_submission_status);
     const history=Array.isArray(info.history)?info.history:[];
     const historyMarkup=history.length
@@ -2680,7 +2682,7 @@ async function renderAdminScoreCorrection(id) {
           ${renderEvaluationTable('v281_first',info.first_evaluation||{},{title:'1차 평가표',subtitle:'기존 점수 확인 및 관리자 보완'})}
         </section>
         <section class="admin-review-preview" style="margin-bottom:16px">
-          <div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 팀장평가 점수 보완</h2><p>50점 미만 기준미달 / 50~64점 건수처리 / 65점 이상 임원 승인 후 3차 심사입니다.</p></div></div>
+          <div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 팀장평가 점수 보완</h2><p>50점 미만 기준미달 / 50점 이상 임원 승인 후 3차 심사 / 50~64점은 건수처리 후보입니다.</p></div></div>
           ${renderEvaluationTable('v281_team',info.team_evaluation||{},{title:'2차 평가표',subtitle:'기존 점수 확인 및 관리자 보완'})}
         </section>
         <section class="admin-review-preview">
@@ -2800,7 +2802,7 @@ function updateQ26043Preview() {
     const first=collectEvaluationFromForm(form,"oneoff_first");
     const team=collectEvaluationFromForm(form,"oneoff_team");
     const firstTotal=calculateEvaluationTotal(first), teamTotal=calculateEvaluationTotal(team);
-    totals.textContent=`1차 ${firstTotal}점 ${firstTotal>=50?'· 기준 충족':'· 기준미달'} / 2차 ${teamTotal}점 ${teamTotal>=65?'· 3차 평가 대상 점수':teamTotal>=50?'· 건수처리 구간':'· 기준미달 구간'} (기존 처리상태는 자동 변경되지 않습니다)`;
+    totals.textContent=`1차 ${firstTotal}점 ${firstTotal>=50?'· 기준 충족':'· 기준미달'} / 2차 ${teamTotal}점 ${teamTotal>=65?'· 3차 평가 대상 점수':teamTotal>=50?'· 건수처리 후보 / 3차 심사 필요':'· 기준미달 구간'} (기존 처리상태는 자동 변경되지 않습니다)`;
   } catch(_) { totals.textContent="1차·2차 각각 6개 항목을 모두 1~10점으로 입력하세요."; }
 }
 
@@ -2851,7 +2853,7 @@ function renderAdminEdit(id) {
       </div>
     </section>
 
-    <form id="adminReviewForm" class="admin-review-form" data-id="${escapeHtml(proposal.id)}">
+    <form id="adminReviewForm" class="admin-review-form" data-id="${escapeHtml(proposal.id)}" data-expected-at="${escapeHtml(proposal.updated_at || '')}">
       <section class="admin-review-preview">
         <div class="review-preview-head">
           <div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>
@@ -2874,7 +2876,7 @@ function renderAdminEdit(id) {
               ? `<div class="analytics-empty"><strong>기존 심사대기 이관건</strong><br>현행 평가구조 적용 전 접수된 건으로 1차 본인평가는 면제하고 2차 팀장평가부터 현재 기준을 적용합니다.</div>`
               : `<div class="analytics-empty">1차 자기평가 자료가 없습니다.</div>`}
         </section>
-        ${proposal.team_leader_evaluation_total != null ? `<section class="admin-first-evaluation-section"><div class="section-heading"><div><span class="eyebrow">2ND EVALUATION · TEAM LEADER</span><h2>2차 팀장평가</h2><p>${Number(proposal.team_leader_evaluation_total) >= 65 ? "65점 이상으로 3차 심사위원 평가 대상입니다." : Number(proposal.team_leader_evaluation_total) >= 50 ? "50~64점으로 자동 건수처리 대상입니다." : "50점 미만으로 기준미달입니다."}</p></div></div>${renderEvaluationTable("admin-team-view", proposal.team_leader_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}</section>` : ""}
+        ${proposal.team_leader_evaluation_total != null ? `<section class="admin-first-evaluation-section"><div class="section-heading"><div><span class="eyebrow">2ND EVALUATION · TEAM LEADER</span><h2>2차 팀장평가</h2><p>${Number(proposal.team_leader_evaluation_total) >= 65 ? "65점 이상으로 3차 심사위원 평가 대상입니다." : Number(proposal.team_leader_evaluation_total) >= 50 ? "50~64점 건수처리 후보입니다. 3차 심사에서 최종 결과를 결정합니다." : "50점 미만으로 기준미달입니다."}</p></div></div>${renderEvaluationTable("admin-team-view", proposal.team_leader_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}</section>` : ""}
         <div class="admin-image-pair">
           <div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div>
           <div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div>
@@ -2884,12 +2886,12 @@ function renderAdminEdit(id) {
 
       <section class="admin-review-fields">
         <section class="second-evaluation-section">
-          <div class="section-heading"><div><span class="eyebrow">3RD EVALUATION</span><h2>3차 심사위원 평가</h2><p>2차 팀장평가 65점 이상이며 해당부서 임원 승인까지 완료된 제안만 심사위원 평가를 진행합니다.</p></div></div>
+          <div class="section-heading"><div><span class="eyebrow">3RD EVALUATION</span><h2>3차 심사위원 평가</h2><p>2차 팀장평가 50점 이상 + 해당부서 임원 승인 후 심사합니다. 기존 3차 결과도 대표이사 상신·지급 전에는 사유를 남기고 수정할 수 있습니다.</p></div></div>
           ${renderEvaluationComparison(proposal)}
           <fieldset id="secondEvaluationFieldset" class="evaluation-fieldset" disabled>
             ${renderEvaluationTable("second", proposal.second_evaluation || {}, { title:"제안 평가표", subtitle:"3차 평가 · 심사위원회 공동평가" })}
           </fieldset>
-          <div id="secondEvaluationGateMessage" class="evaluation-lock-note">2차 팀장평가 65점 이상 + 해당부서 임원 승인 완료 후 3차 평가 입력이 활성화됩니다.</div>
+          <div id="secondEvaluationGateMessage" class="evaluation-lock-note">평가점수와 임원 승인기록을 확인하고 있습니다.</div>
         </section>
         <div class="form-grid two">
           <label class="field">업무상태
@@ -2923,6 +2925,10 @@ function renderAdminEdit(id) {
         <label class="field">심사의견
           <textarea name="review_comment" rows="5">${escapeHtml(proposal.review_comment || "")}</textarea>
         </label>
+        <label class="field">심사·수정 사유 (필수)
+          <textarea name="review_reason" rows="2" minlength="5" maxlength="1000" required placeholder="예: 단순한 개선으로 판단하여 미채택으로 정정"></textarea>
+          <small class="field-help">변경 전후 점수·결과·포상금과 관리자·시간이 기록됩니다. 1·2차 점수와 기존 전자서명은 바뀌지 않습니다.</small>
+        </label>
         <div class="award-preview" id="awardPreview">
           <small>심사결과·점수 기준 예상 포상</small>
           <strong>${(() => { const award = calculateAward(proposal.second_evaluation_total ?? proposal.score, proposal.category, proposal.review_result); return `${escapeHtml(award.grade || "-")} · ${formatCurrency(award.amount)}`; })()}</strong>
@@ -2934,7 +2940,7 @@ function renderAdminEdit(id) {
         </section>
         <div class="admin-review-actions">
           <button type="button" class="button button-danger" data-action="delete-proposal" data-id="${escapeHtml(proposal.id)}">제안 삭제</button>
-          <div><button type="button" class="button button-ghost" data-route="admin">취소</button><button class="button button-primary" type="submit">심사 저장</button></div>
+          <div><button type="button" class="button button-ghost" data-route="admin">취소</button><button class="button button-primary" type="submit" disabled data-review-save>3차 심사 저장</button></div>
         </div>
       </section>
     </form>
@@ -2944,42 +2950,24 @@ function renderAdminEdit(id) {
 }
 
 async function hydrateAdminApproval(proposal) {
-  const records = await store.getApprovalRecords(proposal.id).catch(() => []);
-  const target = $("#adminApprovalProgress");
-  if (target) target.innerHTML = renderApprovalProgress(state.approvalSteps, records);
-  const actionTarget = $("#adminApprovalAction");
-  if (actionTarget) {
-    const permission = resolveApprovalPermission(proposal, state.approvalSteps, records, state.admin?.assignments || []);
-    actionTarget.innerHTML = renderApprovalAction(permission, proposal.id);
-  }
-  const executiveStep = (state.approvalSteps || []).find((step) => step.active !== false && step.role_name === "해당부서 임원");
-  const executiveRecord = executiveStep ? records.find((row) => String(row.step_id) === String(executiveStep.id)) : null;
-  const fieldset = $("#secondEvaluationFieldset");
-  const gate = $("#secondEvaluationGateMessage");
-  const alreadySubmittedToCeo = ["상신완료","승인완료"].includes(proposal.ceo_submission_status);
-  const firstEvaluationPassed = proposal.legacy_first_evaluation_exempt === true || (proposal.first_evaluation_total != null && Number(proposal.first_evaluation_total) >= FIRST_EVALUATION_MIN_PASS);
-  const teamEvaluationPassed = proposal.team_leader_evaluation_total != null && Number(proposal.team_leader_evaluation_total) >= 65;
-  const canEvaluate = executiveRecord?.status === "승인" && firstEvaluationPassed && teamEvaluationPassed && proposal.review_result === "미심사" && !alreadySubmittedToCeo;
-  if (fieldset) fieldset.disabled = !canEvaluate;
-  if (gate) {
-    gate.classList.toggle("evaluation-ready-note", canEvaluate);
-    gate.textContent = alreadySubmittedToCeo
-      ? "대표이사 상신 이후에는 3차 평가를 수정할 수 없습니다."
-      : proposal.first_evaluation_total == null && proposal.legacy_first_evaluation_exempt !== true
-        ? "1차 본인평가를 먼저 완료하세요."
-        : !firstEvaluationPassed
-          ? `1차 본인평가 ${Number(proposal.first_evaluation_total)}점은 기준 미달입니다.`
-          : proposal.team_leader_evaluation_total == null
-            ? "2차 팀장평가가 아직 완료되지 않았습니다."
-            : Number(proposal.team_leader_evaluation_total) < 50
-              ? `2차 팀장평가 ${Number(proposal.team_leader_evaluation_total)}점 · 기준미달로 3차 평가 대상이 아닙니다.`
-              : Number(proposal.team_leader_evaluation_total) < 65
-                ? `2차 팀장평가 ${Number(proposal.team_leader_evaluation_total)}점 · 자동 건수처리되어 3차 평가를 진행하지 않습니다.`
-                : canEvaluate
-                  ? `2차 팀장평가 ${Number(proposal.team_leader_evaluation_total)}점 · 3차 심사위원 평가를 진행할 수 있습니다.`
-                  : "2차 팀장평가 65점 이상 · 해당부서 임원 승인 후 3차 평가 입력이 활성화됩니다.";
-  }
-  if (canEvaluate) updateEvaluationTotalFromForm($("#adminReviewForm"), "second");
+  const form=$("#adminReviewForm");
+  if (!form || form.dataset.id!==proposal.id) return;
+  const gate=form.querySelector("#secondEvaluationGateMessage");
+  const fieldset=form.querySelector("#secondEvaluationFieldset");
+  const save=form.querySelector("[data-review-save]");
+  let records;
+  try { records=await store.getApprovalRecords(proposal.id); }
+  catch(error){ if(!form.isConnected)return; gate.textContent="결재기록 조회 실패: 점수를 임의로 저장하지 않았습니다. 화면을 다시 열어 확인하세요."; if(save)save.disabled=true;return; }
+  if(!form.isConnected || $("#adminReviewForm")!==form)return;
+  const target=form.querySelector("#adminApprovalProgress");
+  if(target)target.innerHTML=renderApprovalProgress(state.approvalSteps,records);
+  const actionTarget=form.querySelector("#adminApprovalAction");
+  if(actionTarget){const permission=resolveApprovalPermission(proposal,state.approvalSteps,records,state.admin?.assignments||[]);actionTarget.innerHTML=renderApprovalAction(permission,proposal.id)+`<p class="field-help">전자결재 서명권한과 위의 3차 심사 저장권한은 별도입니다.</p>`;}
+  const decision=thirdReviewDecision(proposal,state.approvalSteps,records,state.admin?.isSystemAdmin===true);
+  if(fieldset)fieldset.disabled=!decision.allowed;
+  if(save){save.disabled=!decision.allowed;save.textContent=decision.editing?"3차 심사 수정 저장":"3차 심사 저장";}
+  if(gate){gate.classList.toggle("evaluation-ready-note",decision.allowed);gate.textContent=decision.reason;}
+  if(decision.allowed)updateEvaluationTotalFromForm(form,"second");
 }
 
 function buildProposalPayload(form) {
@@ -3304,7 +3292,7 @@ document.addEventListener("click", async (event) => {
         if (teamTotal < 50) {
           await store.actApproval(box.dataset.proposalId, stepId, approvalStatus, `${comment}${comment ? " · " : ""}2차 팀장평가 ${teamTotal}점 기준미달`);
         } else if (teamTotal < 65) {
-          await store.actApproval(box.dataset.proposalId, stepId, approvalStatus, `${comment}${comment ? " · " : ""}2차 팀장평가 ${teamTotal}점 자동 건수처리`);
+          await store.actApproval(box.dataset.proposalId, stepId, approvalStatus, `${comment}${comment ? " · " : ""}2차 팀장평가 ${teamTotal}점 건수처리 후보 · 3차 심사 필요`);
         } else {
           await store.actApproval(box.dataset.proposalId, stepId, approvalStatus, `${comment}${comment ? " · " : ""}2차 팀장평가 ${teamTotal}점 · 3차 심사대상`);
         }
@@ -3481,29 +3469,36 @@ document.addEventListener("submit", async (event) => {
       renderAdmin("approvals");
       showToast(`결재자 저장 완료: ${data.get("display_name")} · ${data.get("department") || "전체 부서"}`);
     } else if (event.target.id === "adminReviewForm") {
-      const data = new FormData(event.target);
-      const proposal = state.proposals.find((p) => p.id === event.target.dataset.id);
-      const legacyFirstExempt = proposal?.legacy_first_evaluation_exempt === true;
-      if (proposal?.first_evaluation_total == null && !legacyFirstExempt) throw new Error("1차 평가를 먼저 완료하세요.");
-      if (!legacyFirstExempt && Number(proposal.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS) throw new Error(`1차 자기평가 ${Number(proposal.first_evaluation_total)}점은 기준 미달입니다. 제안자가 50점 이상으로 수정해야 합니다.`);
-      if (proposal.team_leader_evaluation_total == null || Number(proposal.team_leader_evaluation_total) < 65) throw new Error("2차 팀장평가 65점 이상인 제안만 3차 심사위원 평가를 진행할 수 있습니다.");
-      const fieldset = $("#secondEvaluationFieldset");
-      if (!fieldset || fieldset.disabled) throw new Error("2차 팀장평가 65점 이상 및 해당부서 임원 승인 완료 후 3차 평가를 진행하세요.");
-      const secondEvaluation = collectEvaluationFromForm(event.target, "second");
-      if (data.get("review_result") === "미심사") throw new Error("3차 평가 완료 시 심사결과를 선택하세요.");
-      const patch = {
-        review_result: data.get("review_result"),
-        implementing_department: data.get("implementing_department")?.trim(),
-        implementation_status: data.get("implementation_status"),
-        implemented_date: data.get("implemented_date") || null,
-        payment_status: data.get("payment_status"),
-        effect_amount: Number(data.get("effect_amount") || 0),
-        review_comment: data.get("review_comment")?.trim(),
-      };
-      await store.saveSecondEvaluation(event.target.dataset.id, secondEvaluation, patch);
-      await refreshData();
-      go("admin");
-      showToast(`3차 심사위원 평가 완료 · 최종 ${calculateEvaluationTotal(secondEvaluation)}점`);
+      const form=event.target;
+      if(form.dataset.submitting==="true" || form.dataset.checking==="true")return;
+      form.dataset.checking="true";
+      try {
+      const data=new FormData(form);
+      const proposal=state.proposals.find(p=>p.id===form.dataset.id);
+      if(!proposal)throw new Error("제안을 찾지 못했습니다.");
+      const records=await store.getApprovalRecords(proposal.id);
+      const decision=thirdReviewDecision(proposal,state.approvalSteps,records,state.admin?.isSystemAdmin===true);
+      if(!decision.allowed)throw new Error(decision.reason);
+      const evaluation=collectEvaluationFromForm(form,"second");
+      const patch={review_result:data.get("review_result"),implementing_department:data.get("implementing_department")?.trim(),
+        implementation_status:data.get("implementation_status"),implemented_date:data.get("implemented_date")||null,
+        payment_status:data.get("payment_status"),effect_amount:Number(data.get("effect_amount")||0),review_comment:data.get("review_comment")?.trim()};
+      const options={expectedUpdatedAt:form.dataset.expectedAt,reason:String(data.get("review_reason")||"").trim()};
+      const checked=validateThirdReview(evaluation,patch,options);
+      if(!confirm(`3차 ${checked.total}점 · ${patch.review_result} · 포상 ${formatCurrency(checked.award.amount)}으로 ${decision.editing?"수정":"저장"}하시겠습니까?\n1·2차 점수와 전자결재 기록은 유지됩니다.`))return;
+      const button=form.querySelector("[data-review-save]");let saved=false;
+      form.dataset.submitting="true";if(button)button.disabled=true;
+      try {
+        const row=await store.saveSecondEvaluation(proposal.id,evaluation,patch,options);saved=true;
+        if(Number(row.second_evaluation_total)!==checked.total||row.review_result!==patch.review_result||Number(row.award_amount)!==checked.award.amount)throw new Error("저장 응답이 입력한 결과와 다릅니다.");
+        await refreshData();
+        const confirmed=state.proposals.find(p=>p.id===proposal.id);
+        if(!confirmed||Number(confirmed.second_evaluation_total)!==checked.total||confirmed.review_result!==patch.review_result||Number(confirmed.award_amount)!==checked.award.amount||EVALUATION_CRITERIA.some(c=>Number(confirmed.second_evaluation?.[c.key])!==Number(evaluation[c.key])))throw new Error("재조회 결과를 확인하지 못했습니다.");
+        go("admin");showToast(`3차 심사 ${decision.editing?"수정":"저장"} 완료 · ${checked.total}점 · ${patch.review_result}`);
+      } catch(error) {if(saved)throw new Error(`저장 요청 후 확인하지 못했습니다. 다시 저장하지 말고 재조회하세요. ${error.message}`);throw error;}
+      finally{delete form.dataset.submitting;if(button?.isConnected)button.disabled=false;}
+
+      } finally { delete form.dataset.checking; }
     }
   } catch (error) {
     showError(error);

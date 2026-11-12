@@ -1,7 +1,7 @@
-import { chooseSearchPerson } from './question-core.js?v=2.8.4';
-import { prepareUnifiedResult, unifiedSuggestions } from './unified-core.js?v=2.8.4';
+import { chooseSearchPerson } from './question-core.js?v=2.8.7';
+import { prepareUnifiedResult, unifiedSuggestions } from './unified-core.js?v=2.8.7';
 import { loadQuestionData } from './question-source.js?v=2.7.5';
-import {RESULT_STATUS,summarizeProposalResults} from '../reports/proposal-status-summary.js?v=2.8.4';
+import {RESULT_STATUS,summarizeProposalResults} from '../reports/proposal-status-summary.js?v=2.8.7';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const num = n => Number(n).toLocaleString('ko-KR');

@@ -1,3 +1,4 @@
+import { thirdReviewDecision, validateThirdReview } from "../review/third-review-policy.js?v=2.8.7";
 import { createOperationsRepository } from "../operations/operations-store.js?v=2.7.1";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "../oneoff/q26043-core.js?v=2.8.0";
 import { validateAdminScoreCorrection, ADMIN_EVAL_KEYS } from "../admin/score-correction-core.js?v=2.8.1";
@@ -562,32 +563,37 @@ class DemoStore {
     const total = Number(e.originality)*2 + Number(e.effort)*2 + Number(e.feasibility) + Number(e.applicability) + Number(e.continuity) + Number(e.tangible_effect)*3;
     const patch = { team_leader_evaluation:e, team_leader_evaluation_total:total, team_leader_evaluation_completed_at:new Date().toISOString(), team_leader_evaluation_by_name:admin.displayName||admin.email, updated_at:new Date().toISOString() };
     if (total < 50) Object.assign(patch,{ review_result:"미채택", status:"심사완료", score:total, award_grade:"", award_amount:0, locked:true });
-    else if (total < 65) Object.assign(patch,{ review_result:"건수처리", status:"심사완료", score:total, award_grade:"건수처리", award_amount:5000, locked:true });
     else Object.assign(patch,{ review_result:"미심사", status:"심사중", score:null, award_grade:"", award_amount:0, locked:true });
     proposals[index] = normalizeProposal({ ...proposals[index], ...patch });
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
     return proposals[index];
   }
 
-  async saveSecondEvaluation(id, evaluation, reviewPatch) {
+  async saveSecondEvaluation(id, evaluation, reviewPatch, options = {}) {
     const admin = await this.getAdminSession();
-    if (!admin?.isSystemAdmin) throw new Error("시스템 관리자만 2차 평가를 저장할 수 있습니다.");
     const proposals = await this.getProposals();
-    const index = proposals.findIndex((item) => item.id === id);
-    if (index < 0) throw new Error("제안을 찾지 못했습니다.");
-    if (proposals[index].first_evaluation_total == null) throw new Error("1차 평가를 먼저 완료하세요.");
-    if (Number(proposals[index].first_evaluation_total) < 50) throw new Error(`기존 1차 평가 ${Number(proposals[index].first_evaluation_total)}점은 기준 미달입니다.`);
-    if (proposals[index].team_leader_evaluation_total == null || Number(proposals[index].team_leader_evaluation_total) < 65) throw new Error("2차 팀장평가 65점 이상인 제안만 3차 심사위원 평가를 진행할 수 있습니다.");
-    const e = evaluation || {};
-    const keys = ["originality","effort","feasibility","applicability","continuity","tangible_effect"];
-    for (const key of keys) { const v=Number(e[key]); if (!Number.isInteger(v) || v<1 || v>10) throw new Error("평가점수는 각 항목 1~10점으로 입력하세요."); }
-    const total = Number(e.originality)*2 + Number(e.effort)*2 + Number(e.feasibility) + Number(e.applicability) + Number(e.continuity) + Number(e.tangible_effect)*3;
-    const award = reviewPatch.review_result === "건수처리" ? {grade:"건수처리",amount:5000} : reviewPatch.review_result === "채택"
-      ? (total>=90?{grade:"A",amount:100000}:total>=80?{grade:"B",amount:50000}:total>=70?{grade:"C",amount:30000}:total>=60?{grade:"D",amount:10000}:{grade:"",amount:0})
-      : {grade:"",amount:0};
-    proposals[index] = normalizeProposal({ ...proposals[index], ...reviewPatch, second_evaluation:e, second_evaluation_total:total, second_evaluation_completed_at:new Date().toISOString(), second_evaluation_by_name:admin.displayName||admin.email, score:total, status:"심사완료", award_grade:award.grade, award_amount:award.amount, locked:true, ceo_submission_status:"미상신", updated_at:new Date().toISOString() });
-    localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
-    return proposals[index];
+    const index = proposals.findIndex(item => item.id === id);
+    const original = proposals[index];
+    const records = await this.getApprovalRecords(id);
+    const decision = thirdReviewDecision(original, await this.getApprovalSteps(), records, admin?.isSystemAdmin === true);
+    if (!decision.allowed) throw new Error(decision.reason);
+    if (original.updated_at !== options.expectedUpdatedAt) throw new Error("다른 사용자가 변경했습니다. 화면을 다시 열어 확인하세요.");
+    const checked = validateThirdReview(evaluation, reviewPatch, options);
+    const allowed = ["review_result","implementing_department","implementation_status","implemented_date","payment_status","effect_amount","review_comment"];
+    if (Object.keys(reviewPatch).some(k=>!allowed.includes(k))) throw new Error("수정할 수 없는 심사 항목입니다.");
+    const saved = normalizeProposal({...original,...reviewPatch,
+      second_evaluation:evaluation,second_evaluation_total:checked.total,second_evaluation_completed_at:new Date().toISOString(),
+      second_evaluation_by_name:admin.displayName||admin.email,score:checked.total,status:"심사완료",
+      award_grade:checked.award.grade,award_amount:checked.award.amount,locked:true,updated_at:new Date().toISOString()});
+    proposals[index]=saved;
+    const logs=JSON.parse(localStorage.getItem("proposal-system:v287:review-history")||"[]");
+    logs.push({proposal_id:id,action:decision.editing?"3차 심사 수정":"3차 심사",reason:checked.reason,
+      before:{evaluation:original.second_evaluation,total:original.second_evaluation_total,result:original.review_result,award:original.award_amount},
+      after:{evaluation:saved.second_evaluation,total:saved.second_evaluation_total,result:saved.review_result,award:saved.award_amount},
+      actor:admin.displayName||admin.email,at:saved.updated_at});
+    localStorage.setItem("proposal-system:v287:review-history",JSON.stringify(logs));
+    localStorage.setItem(PROPOSAL_KEY,JSON.stringify(proposals));
+    return saved;
   }
 
   async deleteProposalWithPin(proposalNo, pin) {
@@ -1188,16 +1194,15 @@ class SupabaseStore {
     return normalizeProposal(row);
   }
 
-  async saveSecondEvaluation(id, evaluation, reviewPatch) {
-    const { data, error } = await this.client.rpc("save_third_evaluation_v258", {
-      p_proposal_id: id,
-      p_evaluation: evaluation,
-      p_review_patch: reviewPatch,
+  async saveSecondEvaluation(id, evaluation, reviewPatch, options = {}) {
+    validateThirdReview(evaluation, reviewPatch, options);
+    const { data, error } = await this.client.rpc("v287_save_third_review", {
+      p_proposal_id:id,p_evaluation:evaluation,p_review_patch:reviewPatch,
+      p_expected_updated_at:options.expectedUpdatedAt,p_reason:options.reason,
     });
     if (error) throw error;
-    const row = Array.isArray(data) ? data[0] : data;
-    if (!row) throw new Error("2차 평가 저장 결과를 확인하지 못했습니다.");
-    return normalizeProposal(row);
+    if (!data?.proposal) throw new Error("3차 평가 저장 응답을 확인하지 못했습니다. 다시 저장하지 말고 재조회하세요.");
+    return normalizeProposal(data.proposal);
   }
 
   async deleteProposalWithPin(proposalNo, pin) {

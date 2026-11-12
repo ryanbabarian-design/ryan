@@ -25,7 +25,7 @@ export function proposalResultCategory(detail={}) {
   if(outcome==='duplicate'||result==='중복제안')return {category:'duplicate',label:'중복제안',provisional:outcome!=='duplicate'};
   if(outcome==='onHold'||result==='보류')return {category:'onHold',label:'보류',provisional:false};
   if(team!==null && team<50)return {category:'rejected',label:'기준미달(2차)',provisional:true};
-  if(team!==null && team>=50 && team<65)return {category:'countOnly',label:'건수처리(2차)',provisional:true};
+  if(team!==null && team>=50 && team<65)return {category:'pending',label:'건수처리 후보 · 3차 심사대기',provisional:true};
   return {category:'pending',label:'심사·보완 중',provisional:false};
 }
 

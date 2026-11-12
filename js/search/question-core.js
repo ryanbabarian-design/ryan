@@ -2,7 +2,7 @@
  * Never generates SQL, infers approval outcomes, or identifies 'me' from display names.
  */
 import { buildAnnualReport, koreaDate } from '../reports/annual-report.js?v=2.6.8';
-import {proposalResultCategory,summarizeProposalResults} from '../reports/proposal-status-summary.js?v=2.8.4';
+import {proposalResultCategory,summarizeProposalResults} from '../reports/proposal-status-summary.js?v=2.8.7';
 
 export const SEARCH_HELP = '직원 이름으로 물어보세요. 기간을 생략하면 올해 등록건수를 확인합니다.';
 const str = value => String(value ?? '').trim();
