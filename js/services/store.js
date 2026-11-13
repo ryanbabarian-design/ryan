@@ -1,4 +1,4 @@
-import { thirdReviewDecision, validateThirdReview } from "../review/third-review-policy.js?v=2.8.7";
+import { thirdReviewDecision, validateThirdReview } from "../review/third-review-policy.js?v=2.8.9";
 import { createOperationsRepository } from "../operations/operations-store.js?v=2.7.1";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "../oneoff/q26043-core.js?v=2.8.0";
 import { validateAdminScoreCorrection, ADMIN_EVAL_KEYS } from "../admin/score-correction-core.js?v=2.8.1";
@@ -575,14 +575,14 @@ class DemoStore {
     const index = proposals.findIndex(item => item.id === id);
     const original = proposals[index];
     const records = await this.getApprovalRecords(id);
-    const decision = thirdReviewDecision(original, await this.getApprovalSteps(), records, admin?.isSystemAdmin === true);
+    const decision = thirdReviewDecision(original, await this.getApprovalSteps(), records, admin?.isSystemAdmin === true, options.mode||"score");
     if (!decision.allowed) throw new Error(decision.reason);
     if (original.updated_at !== options.expectedUpdatedAt) throw new Error("다른 사용자가 변경했습니다. 화면을 다시 열어 확인하세요.");
     const checked = validateThirdReview(evaluation, reviewPatch, options);
     const allowed = ["review_result","implementing_department","implementation_status","implemented_date","payment_status","effect_amount","review_comment"];
     if (Object.keys(reviewPatch).some(k=>!allowed.includes(k))) throw new Error("수정할 수 없는 심사 항목입니다.");
     const saved = normalizeProposal({...original,...reviewPatch,
-      second_evaluation:evaluation,second_evaluation_total:checked.total,second_evaluation_completed_at:new Date().toISOString(),
+      third_review_mode:checked.mode,second_evaluation:checked.mode==="outcome"?original.second_evaluation:evaluation,second_evaluation_total:checked.mode==="outcome"?original.second_evaluation_total:checked.total,second_evaluation_completed_at:new Date().toISOString(),
       second_evaluation_by_name:admin.displayName||admin.email,score:checked.total,status:"심사완료",
       award_grade:checked.award.grade,award_amount:checked.award.amount,locked:true,updated_at:new Date().toISOString()});
     proposals[index]=saved;
@@ -811,7 +811,7 @@ class DemoStore {
     return proposals.filter((proposal) => {
       const exec = records.find((r) => r.proposal_id === proposal.id && String(r.step_id) === String(execStep?.id));
       const ceo = records.find((r) => r.proposal_id === proposal.id && String(r.step_id) === String(ceoStep?.id));
-      return proposal.approval_required === true && proposal.status === "심사완료" && proposal.review_result !== "미심사"
+      return !!proposal.second_evaluation_completed_at && proposal.payment_status!=="완료" && !records.some(r=>r.proposal_id===proposal.id&&r.status==="반려") && proposal.approval_required === true && proposal.status === "심사완료" && proposal.review_result !== "미심사"
         && proposal.ceo_submission_status !== "상신완료" && proposal.ceo_submission_status !== "승인완료"
         && exec?.status === "승인" && ceo?.status === "대기";
     }).map((proposal) => ({
@@ -1196,7 +1196,8 @@ class SupabaseStore {
 
   async saveSecondEvaluation(id, evaluation, reviewPatch, options = {}) {
     validateThirdReview(evaluation, reviewPatch, options);
-    const { data, error } = await this.client.rpc("v287_save_third_review", {
+    const { data, error } = await this.client.rpc("v289_save_third_review", {
+      p_mode:options.mode||"score",
       p_proposal_id:id,p_evaluation:evaluation,p_review_patch:reviewPatch,
       p_expected_updated_at:options.expectedUpdatedAt,p_reason:options.reason,
     });
@@ -1357,13 +1358,13 @@ class SupabaseStore {
   }
 
   async getCeoSubmissionCandidates() {
-    const { data, error } = await this.client.rpc("list_ceo_submission_candidates");
+    const { data, error } = await this.client.rpc("v289_list_ceo_submission_candidates");
     if (error) throw error;
     return data || [];
   }
 
   async submitProposalsToCeo(ids = []) {
-    const { data, error } = await this.client.rpc("submit_proposals_to_ceo", { p_proposal_ids: [...new Set(ids.filter(Boolean))] });
+    const { data, error } = await this.client.rpc("v289_submit_proposals_to_ceo", { p_proposal_ids: [...new Set(ids.filter(Boolean))] });
     if (error) throw error;
     return Array.isArray(data) ? (data[0] || {}) : (data || {});
   }
