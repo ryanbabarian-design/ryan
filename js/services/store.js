@@ -1,3 +1,4 @@
+import { legacyScoreDecision, validateLegacyScoreInput, hasLegacyScore } from "../review/legacy-score-policy.js?v=2.9.5";
 import { paidLegacyDecision, validatePaidLegacyInput, preservedPaidLegacyFields } from "../review/paid-legacy-policy.js?v=2.9.4";
 import { reviewAwardPreview } from "../review/award-policy.js?v=2.9.1";
 import { thirdReviewDecision, validateThirdReview, buildLocalReviewContext } from "../review/third-review-policy.js?v=2.9.3";
@@ -5,7 +6,7 @@ import { createOperationsRepository } from "../operations/operations-store.js?v=
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "../oneoff/q26043-core.js?v=2.8.0";
 import { validateAdminScoreCorrection, ADMIN_EVAL_KEYS } from "../admin/score-correction-core.js?v=2.8.1";
 import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
-import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.3.15";
+import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.9.5";
 import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3.11";
 import { mergeEmployeeRoster, normalizeEmployeeImportRows } from "../employee-sync.js?v=2.3.11";
 
@@ -573,6 +574,34 @@ class DemoStore {
     return proposals[index];
   }
 
+  async getLegacyScoreStatus(id) {
+    const admin=await this.getAdminSession();
+    if(admin?.isSystemAdmin!==true)throw new Error("시스템 관리자 전용입니다.");
+    const proposal=(await this.getProposals()).find(p=>p.id===id);
+    if(!proposal)throw new Error("제안을 찾지 못했습니다.");
+    const context=await this.getReviewApprovalContext(id);
+    const decision=legacyScoreDecision(proposal,context,true);
+    const history=JSON.parse(localStorage.getItem("proposal-system:v295:legacy-score-history")||"[]").filter(h=>h.proposal_id===id).reverse();
+    return {proposal,context,...decision,history};
+  }
+  async saveLegacyScore(id,input) {
+    const c=validateLegacyScoreInput(input),info=await this.getLegacyScoreStatus(id);
+    if(!info.allowed)throw new Error(info.reason);
+    const p=info.proposal;if(Date.parse(p.updated_at)!==Date.parse(c.expectedUpdatedAt))throw new Error("자료가 변경되었습니다. 다시 조회하세요.");
+    const admin=await this.getAdminSession(),rows=await this.getProposals();
+    const now=new Date(Math.max(Date.now(),Date.parse(p.updated_at)+1)).toISOString();
+    const saved={...p,score:c.score,review_result:c.result,status:"심사완료",locked:true,award_grade:c.award.grade||null,award_amount:c.award.amount,
+      legacy_score_revision:Number(p.legacy_score_revision||0)+1,legacy_score_registered_at:now,legacy_score_basis:c.basis,
+      legacy_score_recorded_by_name:admin.displayName||admin.email||"관리자",updated_at:now};
+    const history=JSON.parse(localStorage.getItem("proposal-system:v295:legacy-score-history")||"[]");
+    history.push({id:crypto.randomUUID(),proposal_id:id,revision:saved.legacy_score_revision,before_score:p.score,after_score:c.score,after_result:c.result,
+      basis:c.basis,reason:c.reason,actor_name:saved.legacy_score_recorded_by_name,created_at:now});
+    localStorage.setItem(PROPOSAL_KEY,JSON.stringify(rows.map(x=>x.id===id?saved:x)));
+    localStorage.setItem("proposal-system:v295:legacy-score-history",JSON.stringify(history));
+    return {proposal:saved};
+
+  }
+
   async getPaidLegacyStatus(id) {
     const admin=await this.getAdminSession();
     if(admin?.isSystemAdmin!==true)throw new Error("시스템 관리자 전용 기능입니다.");
@@ -832,8 +861,10 @@ class DemoStore {
     const proposalRecords = rows.filter((item) => item.proposal_id === proposalId);
     const permission = resolveApprovalPermission(proposal, steps, proposalRecords, session.assignments || []);
     if (!permission.canAct || String(permission.step?.id) !== String(stepId)) throw new Error(permission.reason || "본인 결재단계만 처리할 수 있습니다.");
+    if(!["승인","반려"].includes(status))throw new Error("승인 또는 반려를 선택하세요.");
+    if(proposal.legacy_ceo_direct&&status==="반려"&&String(comment).trim().length<2)throw new Error("반려 사유를 입력하세요.");
     const now = new Date().toISOString();
-    Object.assign(row, { status, comment, assigned_name: permission.assignment.display_name, approver_name: permission.assignment.display_name, acted_at: now, updated_at: now });
+    Object.assign(row, { status, comment, approved_by:permission.assignment.user_id, actionable_at:null, assigned_name: permission.assignment.display_name, approver_name: permission.assignment.display_name, acted_at: now, updated_at: now });
     if (permission.step?.role_name === "대표이사") {
       proposal.ceo_submission_status = status === "승인" ? "승인완료" : "반려";
       localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
@@ -857,6 +888,7 @@ class DemoStore {
     return proposals.filter((proposal) => {
       const exec = records.find((r) => r.proposal_id === proposal.id && String(r.step_id) === String(execStep?.id));
       const ceo = records.find((r) => r.proposal_id === proposal.id && String(r.step_id) === String(ceoStep?.id));
+      if(hasLegacyScore(proposal) && legacyScoreDecision(proposal,buildLocalReviewContext(proposal,steps,records.filter(r=>r.proposal_id===proposal.id)),true).allowed && proposal.status==="심사완료")return true;
       return !!proposal.second_evaluation_completed_at && proposal.payment_status!=="완료" && !records.some(r=>r.proposal_id===proposal.id&&r.status==="반려") && proposal.approval_required === true && proposal.status === "심사완료" && proposal.review_result !== "미심사"
         && proposal.ceo_submission_status !== "상신완료" && proposal.ceo_submission_status !== "승인완료"
         && exec?.status === "승인" && ceo?.status === "대기";
@@ -864,11 +896,12 @@ class DemoStore {
       proposal_id: proposal.id, proposal_no: proposal.proposal_no, title: proposal.title, proposer_name: proposal.proposer_name,
       department: proposal.department, received_date: proposal.received_date, review_result: proposal.review_result, score: proposal.score,
       award_amount: proposal.award_amount, proposer_effect_amount: proposal.proposer_effect_amount, effect_amount: proposal.effect_amount,
+      legacy_direct:hasLegacyScore(proposal)&&proposal.approval_required===false, updated_at:proposal.updated_at,
       executive_approved_at: records.find((r) => r.proposal_id === proposal.id && String(r.step_id) === String(execStep?.id))?.acted_at || null,
     }));
   }
 
-  async submitProposalsToCeo(ids = []) {
+  async submitProposalsToCeo(ids = [], expected = {}) {
     const session = await this.getAdminSession();
     if (!session?.isSystemAdmin) throw new Error("시스템 관리자만 대표이사 일괄상신을 할 수 있습니다.");
     const selected = [...new Set(ids.filter(Boolean))];
@@ -877,21 +910,25 @@ class DemoStore {
     if (selected.some((id) => !candidates.some((row) => row.proposal_id === id))) throw new Error("상신 조건을 충족하지 않는 제안이 있습니다.");
     const proposals = await this.getProposals();
     for(const p of proposals.filter(row=>selected.includes(row.id))) {
-      const expected=reviewAwardPreview(p,p.third_review_mode||"score",p.review_result,p.second_evaluation_total);
-      if(!expected.ready||Number(p.award_amount)!==expected.award.amount)throw new Error(`${p.proposal_no}: 저장 포상금과 기준금액이 다릅니다. 3차 화면에서 확인 후 다시 저장하세요.`);
+      if(hasLegacyScore(p) && (!expected[p.id]||Date.parse(expected[p.id])!==Date.parse(p.updated_at)))throw new Error("상신 목록이 변경되었습니다. 다시 조회하세요.");
+      const preview=reviewAwardPreview(p,"score",p.review_result,hasLegacyScore(p)?p.score:p.second_evaluation_total);
+      const ordinary=hasLegacyScore(p)?preview:reviewAwardPreview(p,p.third_review_mode||"score",p.review_result,p.second_evaluation_total);
+      if(!ordinary.ready||Number(p.award_amount)!==ordinary.award.amount)throw new Error(`${p.proposal_no}: 저장 포상금과 기준금액이 다릅니다. 3차 화면에서 확인 후 다시 저장하세요.`);
     }
     const records = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
     const steps = await this.getApprovalSteps();
     const ceoStep = steps.find((step) => step.role_name === "대표이사");
     const assignments = await this.getApproverAssignments(false);
     const ceoAssignment = assignments.find((a) => String(a.step_id) === String(ceoStep?.id) && !a.department);
-    if (!ceoAssignment) throw new Error("대표이사 결재자 계정이 지정되지 않았습니다.");
+    if (!ceoAssignment?.user_id || !ceoAssignment?.email) throw new Error("대표이사 결재자 계정이 지정되지 않았습니다.");
     const batchId = crypto.randomUUID();
     const now = new Date().toISOString();
     for (const proposal of proposals) {
       if (!selected.includes(proposal.id)) continue;
       Object.assign(proposal, { ceo_submission_status: "상신완료", ceo_submitted_at: now, ceo_submitted_by_name: session.displayName || session.email, ceo_batch_id: batchId });
-      const rec = records.find((r) => r.proposal_id === proposal.id && String(r.step_id) === String(ceoStep?.id));
+      if(hasLegacyScore(proposal))proposal.legacy_ceo_direct=true;
+      let rec = records.find((r) => r.proposal_id === proposal.id && String(r.step_id) === String(ceoStep?.id));
+      if(!rec && hasLegacyScore(proposal)){rec={id:crypto.randomUUID(),proposal_id:proposal.id,step_id:ceoStep.id,status:"대기",created_at:now};records.push(rec);}
       if (rec) Object.assign(rec, { assigned_name: ceoAssignment.display_name, assigned_user_id: ceoAssignment.user_id, actionable_at: now, updated_at: now });
     }
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
@@ -1188,6 +1225,16 @@ class SupabaseStore {
     return data;
   }
 
+  async getLegacyScoreStatus(id) {
+    const {data,error}=await this.client.rpc("v295_get_legacy_score_status",{p_proposal_id:id});
+    if(error)throw error;if(!data?.proposal||typeof data.allowed!=="boolean")throw new Error("기존 심사점수 조회 응답을 확인하지 못했습니다.");return data;
+  }
+  async saveLegacyScore(id,input) {
+    const c=validateLegacyScoreInput(input);
+    const {data,error}=await this.client.rpc("v295_save_legacy_score",{p_proposal_id:id,p_score:c.score,p_result:c.result,p_basis:c.basis,p_reason:c.reason,p_expected_updated_at:c.expectedUpdatedAt});
+    if(error)throw error;if(!data?.proposal)throw new Error("기존 심사점수 저장 결과를 확인하지 못했습니다.");return data;
+  }
+
   async getPaidLegacyStatus(id) {
     const {data,error}=await this.client.rpc("v294_get_paid_legacy_status",{p_proposal_id:id});
     if(error)throw new Error(`과거 결과 정정 정보를 불러오지 못했습니다. V2.9.4 SQL 적용 상태를 확인하세요. ${error.message||error}`);
@@ -1420,25 +1467,25 @@ class SupabaseStore {
   }
 
   async getMyApprovalInbox() {
-    const { data, error } = await this.client.rpc("get_my_approval_inbox");
+    const { data, error } = await this.client.rpc("v295_get_my_approval_inbox");
     if (error) throw error;
     return data || [];
   }
 
   async getCeoSubmissionCandidates() {
-    const { data, error } = await this.client.rpc("v289_list_ceo_submission_candidates");
+    const { data, error } = await this.client.rpc("v295_list_ceo_submission_candidates");
     if (error) throw error;
     return data || [];
   }
 
-  async submitProposalsToCeo(ids = []) {
-    const { data, error } = await this.client.rpc("v289_submit_proposals_to_ceo", { p_proposal_ids: [...new Set(ids.filter(Boolean))] });
+  async submitProposalsToCeo(ids = [], expected = {}) {
+    const { data, error } = await this.client.rpc("v295_submit_proposals_to_ceo", { p_proposal_ids: [...new Set(ids.filter(Boolean))], p_expected:expected });
     if (error) throw error;
     return Array.isArray(data) ? (data[0] || {}) : (data || {});
   }
 
   async batchApproveCeo(ids = []) {
-    const { data, error } = await this.client.rpc("batch_approve_ceo", { p_proposal_ids: [...new Set(ids.filter(Boolean))] });
+    const { data, error } = await this.client.rpc("v295_batch_approve_ceo", { p_proposal_ids: [...new Set(ids.filter(Boolean))] });
     if (error) throw error;
     return Array.isArray(data) ? (data[0] || {}) : (data || {});
   }
@@ -1493,7 +1540,7 @@ class SupabaseStore {
   }
 
   async getApprovalRecords(proposalId) {
-    const { data, error } = await this.client.rpc("get_public_approval_progress", {
+    const { data, error } = await this.client.rpc("v295_approval_progress", {
       p_proposal_id: proposalId,
     });
     if (error) throw error;
@@ -1501,7 +1548,7 @@ class SupabaseStore {
   }
 
   async actApproval(proposalId, stepId, status, comment = "") {
-    const { data, error } = await this.client.rpc("act_approval_secure", {
+    const { data, error } = await this.client.rpc("v295_act_approval", {
       p_proposal_id: proposalId, p_step_id: Number(stepId), p_status: status, p_comment: comment || null,
     });
     if (error) throw error;

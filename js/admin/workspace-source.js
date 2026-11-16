@@ -1,6 +1,6 @@
 /** Read-only composition of existing APIs. No writes and no new SQL. */
 import { fetchAllPages } from '../reports/report-source.js?v=2.8.5';
-import { proposalYear } from './workspace-core.js?v=2.9.4';
+import { proposalYear } from './workspace-core.js?v=2.9.5';
 function aborted(signal){if(signal?.aborted)throw new DOMException('조회가 취소되었습니다.','AbortError');}
 export async function loadWorkspaceSnapshot(store,{year,signal,onProgress=()=>{}}={}) {
   aborted(signal);

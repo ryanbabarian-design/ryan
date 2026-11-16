@@ -1,3 +1,4 @@
+import { hasLegacyScore } from "../review/legacy-score-policy.js?v=2.9.5";
 /** V2.9.0 — read-only admin-list view model. Saving/approval rules stay in V2.8.9. */
 import { normalizeDepartmentName } from '../core.js?v=2.8.7';
 import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, FINAL_RESULTS, isLegacyOutcomeReview } from '../review/third-review-policy.js?v=2.9.3';
@@ -5,7 +6,7 @@ import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, FINAL_RESU
 const str = v => String(v ?? '').trim();
 const numeric = v => v == null || str(v)==='' || !Number.isFinite(Number(v)) ? null : Number(v);
 const safeAmount = v => Number.isFinite(Number(v)) ? Math.max(0,Number(v)) : 0;
-export const WORKSPACE_VERSION = '2.9.4';
+export const WORKSPACE_VERSION = '2.9.5';
 export const QUEUES = Object.freeze([
   {key:'open',label:'처리할 제안'}, {key:'review',label:'3차 심사대기'},
   {key:'reviewed',label:'심사완료 · 상신 전'}, {key:'submitted',label:'대표결재 중'},
@@ -51,7 +52,7 @@ export function classifyWork(p,meta={}) {
   const roleHas=(role,status)=>scoped.some(r=>r.status===status && steps.some(s=>s.active!==false && str(s.id)===str(r.step_id) && s.role_name===role));
   const thirdDone=hasThirdReview(p),savedResult=FINAL_RESULTS.includes(p.review_result),isCandidate=isLegacyCountCandidate(p);
   const result=p.review_result||'미심사';
-  const third = thirdDone
+  const third = (hasLegacyScore(p)||(p.approval_required===false&&numeric(p.score)!==null&&!thirdDone))?{text:`기존 심사 ${Number(p.score)}점`,tone:'ok'}:thirdDone
     ? p.third_review_mode==='outcome'?{text:'결과심사',tone:'ok'}:numeric(p.second_evaluation_total)!==null?{text:`${Number(p.second_evaluation_total)}점`,tone:'ok'}:{text:'심사기록 있음',tone:'muted'}
     : {text:'미심사',tone:'warn'};
   const base={first:firstCell(p),team:teamCell(p),third,result,resultLabel:RESULT_LABELS[result]||result,
@@ -70,6 +71,7 @@ export function classifyWork(p,meta={}) {
   }
   if(p.ceo_submission_status==='승인완료'||roleHas('대표이사','승인'))return done('closed','대표이사 승인',safeAmount(p.award_amount)>0?'승인 완료 · 지급상태 별도 확인':'승인 완료 · 지급 예정액 0원',{amount:safeAmount(p.award_amount),protected:true});
   if(p.ceo_submission_status==='상신완료')return done('submitted','대표이사 결재 중','상신 완료 · 심사 수정 잠금',{amount:safeAmount(p.award_amount),protected:true});
+  if(hasLegacyScore(p) && meta.candidateIds?.has(id))return done('reviewed','대표상신 가능','기존 확정 총점 확인 완료 · 부서장/임원 승인 임의 생성 없음',{canSubmit:true,primary:'기존 심사 확인',amount:safeAmount(p.award_amount),route:`admin/legacy-score/${encodeURIComponent(id)}`});
   if(!id)return done('check','접수정보 확인','제안 ID가 없어 상세화면을 연결할 수 없습니다.',{route:'',primary:'자료 확인'});
   if(meta.errors?.has(id)||meta.stepsError)return done('check','결재 조회 확인','결재기록을 읽지 못했습니다. 새로고침 후 다시 확인하세요.');
   if(p.ceo_submission_status==='반려'||scoped.some(r=>r.status==='반려'&&steps.some(s=>str(s.id)===str(r.step_id)&&s.active!==false)))return done('waiting','반려 · 보완 필요','기존 결재의 반려 내용을 확인하세요.');
@@ -77,6 +79,7 @@ export function classifyWork(p,meta={}) {
     const legacyDecision=thirdReviewDecision(p,steps,records,true,'outcome',context);
     if(!legacyDecision.allowed)return done('check','과거 제안 상태 확인',legacyDecision.reason);
     if(thirdDone && savedResult && p.third_review_mode==='outcome' && p.status==='심사완료')return done('archived','과거건 결과 정리완료','전자결재 제외 · 관리자 결과심사 저장 완료. 대표상신 완료를 뜻하지 않습니다.',{primary:'결과 확인',canSubmit:false,amount:safeAmount(p.award_amount)});
+    if(hasLegacyScore(p))return done('reviewed','기존 심사 등록완료','대표상신 목록에서 자격을 다시 확인하세요.',{primary:'기존 심사 확인',route:`admin/legacy-score/${encodeURIComponent(id)}`,amount:safeAmount(p.award_amount)});
     return done('review','과거건 결과 확인','전자결재 제외 과거 제안 · 점수/승인기록을 만들지 않고 결과를 정정합니다.',{primary:'결과심사',mode:'outcome',amount:null});
   }
   if(meta.candidateIds?.has(id))return done('reviewed','대표상신 가능','서버의 상신대기 목록에서 확인한 제안입니다.',{canSubmit:true,primary:'결과 확인',amount:safeAmount(p.award_amount)});

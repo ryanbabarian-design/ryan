@@ -1,6 +1,6 @@
 /** Admin list only. All edits, reviews and submissions use existing secured routes. */
-import { buildWorkspace, readWorkspaceFilters, workspaceRoute, workspaceCsv, currentKoreaYear, QUEUES, RESULT_LABELS, WORKSPACE_VERSION } from './workspace-core.js?v=2.9.4';
-import { loadWorkspaceSnapshot } from './workspace-source.js?v=2.9.4';
+import { buildWorkspace, readWorkspaceFilters, workspaceRoute, workspaceCsv, currentKoreaYear, QUEUES, RESULT_LABELS, WORKSPACE_VERSION } from './workspace-core.js?v=2.9.5';
+import { loadWorkspaceSnapshot } from './workspace-source.js?v=2.9.5';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=v=>new Intl.NumberFormat('ko-KR').format(Number(v)||0)+'원';
 const scopeLabel=f=>f.year==='all'?'전체 연도':f.year==='unknown'?'접수일 미확인':`${f.year}년`;
@@ -17,7 +17,7 @@ function rowMarkup(r,f){const p=r.proposal;const tone={review:'blue',reviewed:'t
     <td data-label="3차 심사">${evalCell(r.third)}<small class="aw-result ${resultTone}">${esc(r.resultLabel)}</small></td>
     <td class="aw-stage-cell" data-label="현재 단계"><span class="aw-stage ${tone}">${esc(r.label)}</span><small>${esc(r.note)}</small></td>
     <td class="aw-amount" data-label="지급 예정액">${amount}</td>
-    <td class="aw-action" data-label="작업">${r.route?`<button type="button" class="aw-button ${r.group==='review'?'aw-primary':''}" data-ws-go="${esc(r.route)}">${esc(r.primary)}</button>`:''}<details class="aw-more"><summary aria-label="${esc(p.proposal_no)} 추가 작업">더보기</summary><div><button type="button" data-ws-go="detail/${esc(encodeURIComponent(p.proposal_no||''))}">제안 상세</button><button type="button" data-ws-go="admin/score/${esc(encodeURIComponent(p.id||''))}">1·2차 점수 보완</button><button type="button" data-ws-go="admin/content/${esc(encodeURIComponent(p.id||''))}">관리자 내용 수정</button></div></details></td>
+    <td class="aw-action" data-label="작업">${r.route?`<button type="button" class="aw-button ${r.group==='review'?'aw-primary':''}" data-ws-go="${esc(r.route)}">${esc(r.primary)}</button>`:''}<details class="aw-more"><summary aria-label="${esc(p.proposal_no)} 추가 작업">더보기</summary><div>${p.approval_required===false&&p.payment_status!=="완료"?`<button type="button" data-ws-go="admin/legacy-score/${esc(encodeURIComponent(p.id||''))}">기존 심사점수 등록·대표상신</button>`:''}<button type="button" data-ws-go="detail/${esc(encodeURIComponent(p.proposal_no||''))}">제안 상세</button><button type="button" data-ws-go="admin/score/${esc(encodeURIComponent(p.id||''))}">1·2차 점수 보완</button><button type="button" data-ws-go="admin/content/${esc(encodeURIComponent(p.id||''))}">관리자 내용 수정</button></div></details></td>
   </tr>`;
 }
 export function workspaceMarkup(model,{snapshot={},state={},nav='',mode='supabase'}={}) {

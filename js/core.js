@@ -1,3 +1,4 @@
+import { legacyCeoPermission, hasLegacyScore } from "./review/legacy-score-policy.js?v=2.9.5";
 import { awardForScore } from "./review/award-policy.js?v=2.9.1";
 import { firstReviewPassed, isReviewProtected, isLegacyCountCandidate, thirdReviewDecision } from "./review/third-review-policy.js?v=2.8.7";
 export const REVIEW_RESULTS = ["미심사", "채택", "미채택", "보류", "중복제안", "건수처리"];
@@ -427,6 +428,7 @@ export function collectProposalImagePaths(proposal, storageBucket) {
 
 
 export function resolveApprovalPermission(proposal, steps, records, assignments) {
+  if(hasLegacyScore(proposal)&&proposal.approval_required===false&&proposal.legacy_ceo_direct===true)return legacyCeoPermission(proposal,steps,records,assignments);
   if (proposal?.approval_required !== true) {
     return { assigned: false, canAct: false, step: null, assignment: null, record: null, reason: "V2.3 적용 이전 제안으로 전자결재 대상이 아닙니다." };
   }
