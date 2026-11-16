@@ -1,6 +1,7 @@
+import { mountPaidLegacyEditor } from "./review/paid-legacy-ui.js?v=2.9.4";
 import { reviewAwardPreview } from "./review/award-policy.js?v=2.9.1";
-import { createAdminWorkspace } from "./admin/workspace-ui.js?v=2.9.3";
-import { readWorkspaceFilters, proposalYear, currentKoreaYear, workspaceRoute, scopeSubmissionCandidates } from "./admin/workspace-core.js?v=2.9.3";
+import { createAdminWorkspace } from "./admin/workspace-ui.js?v=2.9.4";
+import { readWorkspaceFilters, proposalYear, currentKoreaYear, workspaceRoute, scopeSubmissionCandidates } from "./admin/workspace-core.js?v=2.9.4";
 import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, validateThirdReview, isLegacyOutcomeReview } from "./review/third-review-policy.js?v=2.9.3";
 import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.js?v=2.8.0";
@@ -36,7 +37,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.9.1";
-import { createStore } from "./services/store.js?v=2.9.3";
+import { createStore } from "./services/store.js?v=2.9.4";
 import {
   appendImageFiles,
   createImageSelection,
@@ -786,7 +787,7 @@ function renderEvaluationComparison(proposal) {
   const labels = ["1차 본인평가", "2차 팀장평가", "3차 심사위원 평가"];
   return `<div class="evaluation-compare evaluation-flow-overview">${values.map((value, index) => {
     const saved = value != null && String(value).trim() !== "" && Number.isFinite(Number(value));
-    const text = index === 2 && proposal.third_review_mode === "outcome" ? "결과심사 완료" : saved ? `${Number(value)}점` : index === 0 && proposal.legacy_first_evaluation_exempt === true ? "기존건 · 1차 면제" : "미평가";
+    const text = index === 2 && Number(proposal.legacy_result_revision || 0) > 0 ? "과거 결과 정정" : index === 2 && proposal.third_review_mode === "outcome" ? "결과심사 완료" : saved ? `${Number(value)}점` : index === 0 && proposal.legacy_first_evaluation_exempt === true ? "기존건 · 1차 면제" : "미평가";
     return `<div><small>${labels[index]}</small><strong>${escapeHtml(text)}</strong><span class="evaluation-record-label">${saved ? "저장된 점수" : "기록 상태"}</span></div>`;
   }).join("")}</div>`;
 }
@@ -798,6 +799,9 @@ function renderStoredEvaluationStage(proposal, stage, { allowCorrection = false,
     2: { title: "2차 팀장평가", values: "team_leader_evaluation", total: "team_leader_evaluation_total", at: "team_leader_evaluation_completed_at", hint: "기록된 팀장평가를 확인하세요. 50~64점도 후보 분류이며 최종 결과는 3차 심사에서 결정합니다." },
     3: { title: "3차 심사위원 평가", values: "second_evaluation", total: "second_evaluation_total", at: "second_evaluation_completed_at", hint: "저장된 심사위원 평가입니다. 1·2차 점수와 합산하거나 평균하지 않습니다." },
   };
+  if (stage === 3 && Number(proposal?.legacy_result_revision || 0) > 0) {
+    return `<section class="review-stage-card" data-evaluation-stage="3"><div class="review-stage-heading"><h2>과거 심사결과 정정</h2><strong>${escapeHtml(proposal.review_result)}</strong></div><p>기존 지급 완료액: <strong>${formatCurrency(proposal.award_amount)}</strong> · 지급상태 ${escapeHtml(proposal.payment_status)} 보존</p><p>관리자가 과거 결과·의견만 정정한 기록입니다. 신규 3차 점수심사나 재지급·환수·대표상신을 처리한 것이 아닙니다.</p><p>과거 최종 심사점수: ${proposal.score == null ? "기록 없음" : `${Number(proposal.score)}점 (보존)`}</p>${proposal.second_evaluation_total != null ? `<details><summary>기존 3차 ${Number(proposal.second_evaluation_total)}점 (보존)</summary>${renderEvaluationTable(`${prefix}-3-preserved`,proposal.second_evaluation||{},{readOnly:true,savedTotal:proposal.second_evaluation_total})}</details>` : ""}</section>`;
+  }
   if (stage === 3 && proposal?.third_review_mode === "outcome") {
     return `<section class="review-stage-card" data-evaluation-stage="3"><div class="review-stage-heading"><h2>3차 심사위원 평가</h2><strong>결과심사 완료</strong></div><p>심사결과: <strong>${escapeHtml(proposal.review_result)}</strong> · 지급 예정액: <strong>${formatCurrency(proposal.award_amount)}</strong></p><p>점수를 임의로 입력하지 않고 결과와 사유를 심사했습니다. 지급완료와는 별도입니다.</p>${proposal.second_evaluation_total != null ? `<details><summary>이전 3차 점수 기록: ${Number(proposal.second_evaluation_total)}점 (유지)</summary>${renderEvaluationTable(`${prefix}-3-history`,proposal.second_evaluation||{},{readOnly:true,savedTotal:proposal.second_evaluation_total})}</details>` : ""}</section>`;
   }
@@ -2565,6 +2569,7 @@ function renderAdmin(action = "", id = "") {
     return;
   }
 
+  if (action === "paid-legacy") { void renderPaidLegacyEditor(id); return; }
   if (action === "score") { void renderAdminScoreCorrection(id); return; }
   if (action === "q26043") { void renderQ26043Exception(); return; }
   if (action === "operations") { void operationsUI.renderAdmin(); return; }
@@ -2865,8 +2870,13 @@ async function submitQ26043Exception(form) {
   } finally {delete form.dataset.submitting;if(button.isConnected){button.disabled=false;button.textContent="Q26-043 점수 한 번 저장";}}
 }
 
+async function renderPaidLegacyEditor(id) {
+  await mountPaidLegacyEditor({root:main,id,store,systemAdmin:state.admin?.isSystemAdmin===true,navigate:go,notify:showToast,refresh:refreshData});
+}
+
 function renderAdminEdit(id) {
   const proposal = state.proposals.find((item) => item.id === id);
+  if (proposal?.approval_required === false && proposal?.payment_status === "완료") { void renderPaidLegacyEditor(id); return; }
   if (!proposal) {
     main.innerHTML = `<div class="empty-state"><h2>제안을 찾지 못했습니다.</h2><button class="button button-primary" data-route="admin">관리자 목록</button></div>`;
     return;

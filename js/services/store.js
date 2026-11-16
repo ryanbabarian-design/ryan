@@ -1,3 +1,4 @@
+import { paidLegacyDecision, validatePaidLegacyInput, preservedPaidLegacyFields } from "../review/paid-legacy-policy.js?v=2.9.4";
 import { reviewAwardPreview } from "../review/award-policy.js?v=2.9.1";
 import { thirdReviewDecision, validateThirdReview, buildLocalReviewContext } from "../review/third-review-policy.js?v=2.9.3";
 import { createOperationsRepository } from "../operations/operations-store.js?v=2.7.1";
@@ -73,6 +74,8 @@ function asArray(value) {
 
 function normalizeProposal(row) {
   return {
+    legacy_result_revision: 0,
+    legacy_result_corrected_at: null,
     admin_content_revision: 0,
     admin_content_updated_at: null,
     before_images: [],
@@ -568,6 +571,39 @@ class DemoStore {
     proposals[index] = normalizeProposal({ ...proposals[index], ...patch });
     localStorage.setItem(PROPOSAL_KEY, JSON.stringify(proposals));
     return proposals[index];
+  }
+
+  async getPaidLegacyStatus(id) {
+    const admin=await this.getAdminSession();
+    if(admin?.isSystemAdmin!==true)throw new Error("시스템 관리자 전용 기능입니다.");
+    const proposal=(await this.getProposals()).find(p=>p.id===id);
+    if(!proposal)throw new Error("제안을 찾지 못했습니다.");
+    const context=await this.getReviewApprovalContext(id);
+    const decision=paidLegacyDecision(proposal,context,true);
+    const history=JSON.parse(localStorage.getItem("proposal-system:v294:paid-legacy-history")||"[]").filter(h=>h.proposal_id===id).reverse().slice(0,50);
+    return {proposal:safeAdminContentRow(proposal),context,...decision,history};
+  }
+
+  async savePaidLegacyResult(id,input) {
+    const checked=validatePaidLegacyInput(input);
+    const status=await this.getPaidLegacyStatus(id);
+    if(!status.allowed)throw new Error(status.reason);
+    const proposals=await this.getProposals(),index=proposals.findIndex(p=>p.id===id),original=proposals[index];
+    if(original.updated_at!==checked.expectedUpdatedAt)throw new Error("다른 사용자가 변경했습니다. 다시 조회하세요.");
+    if(original.review_result===checked.review_result && (original.review_comment||"")===checked.review_comment)throw new Error("변경된 결과나 의견이 없습니다.");
+    const at=new Date(Math.max(Date.now(),Date.parse(original.updated_at)+1)).toISOString();
+    const saved=normalizeProposal({...original,review_result:checked.review_result,review_comment:checked.review_comment,
+      legacy_result_revision:Number(original.legacy_result_revision||0)+1,legacy_result_corrected_at:at,updated_at:at});
+    if(!preservedPaidLegacyFields(original,saved))throw new Error("지급·점수 보존 검증 실패로 정정을 취소했습니다.");
+    const admin=await this.getAdminSession();
+    const history=JSON.parse(localStorage.getItem("proposal-system:v294:paid-legacy-history")||"[]");
+    const entry={id:crypto.randomUUID(),proposal_id:id,revision:saved.legacy_result_revision,before_result:original.review_result,after_result:saved.review_result,
+      before_comment:original.review_comment||"",after_comment:saved.review_comment,paid_amount:original.award_amount,
+      payment_status:original.payment_status,reason:checked.reason,actor_name:admin.displayName||admin.email,created_at:at};
+    history.push(entry);proposals[index]=saved;
+    localStorage.setItem("proposal-system:v294:paid-legacy-history",JSON.stringify(history));
+    localStorage.setItem(PROPOSAL_KEY,JSON.stringify(proposals));
+    return {proposal:safeAdminContentRow(saved),history_id:entry.id};
   }
 
   async saveSecondEvaluation(id, evaluation, reviewPatch, options = {}) {
@@ -1150,6 +1186,24 @@ class SupabaseStore {
         Number(data.first_total)!==checked.firstTotal || Number(data.team_total)!==checked.teamTotal)
       throw new Error("저장 응답을 확인하지 못했습니다. 중복 저장하지 말고 재조회하세요.");
     return data;
+  }
+
+  async getPaidLegacyStatus(id) {
+    const {data,error}=await this.client.rpc("v294_get_paid_legacy_status",{p_proposal_id:id});
+    if(error)throw new Error(`과거 결과 정정 정보를 불러오지 못했습니다. V2.9.4 SQL 적용 상태를 확인하세요. ${error.message||error}`);
+    if(!data?.proposal || data.proposal.id!==id || typeof data.allowed!=="boolean" || !Array.isArray(data.history))throw new Error("정정 정보 응답을 확인하지 못했습니다.");
+    return {...data,proposal:normalizeProposal(data.proposal)};
+  }
+
+  async savePaidLegacyResult(id,input) {
+    const checked=validatePaidLegacyInput(input);
+    const {data,error}=await this.client.rpc("v294_save_paid_legacy_result",{
+      p_proposal_id:id,p_result:checked.review_result,p_comment:checked.review_comment,p_reason:checked.reason,
+      p_expected_updated_at:checked.expectedUpdatedAt,p_preserve_payment:checked.preservePayment});
+    if(error)throw error;
+    if(!data?.proposal || data.proposal.id!==id || data.history_id==null || data.proposal.review_result!==checked.review_result || data.proposal.payment_status!=="완료")
+      throw new Error("저장 응답을 확인하지 못했습니다. 반복 저장하지 말고 다시 조회하세요.");
+    return {...data,proposal:normalizeProposal(data.proposal)};
   }
 
   async getAdminContent(id) {

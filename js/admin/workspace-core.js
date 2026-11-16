@@ -5,7 +5,7 @@ import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, FINAL_RESU
 const str = v => String(v ?? '').trim();
 const numeric = v => v == null || str(v)==='' || !Number.isFinite(Number(v)) ? null : Number(v);
 const safeAmount = v => Number.isFinite(Number(v)) ? Math.max(0,Number(v)) : 0;
-export const WORKSPACE_VERSION = '2.9.3';
+export const WORKSPACE_VERSION = '2.9.4';
 export const QUEUES = Object.freeze([
   {key:'open',label:'처리할 제안'}, {key:'review',label:'3차 심사대기'},
   {key:'reviewed',label:'심사완료 · 상신 전'}, {key:'submitted',label:'대표결재 중'},
@@ -59,7 +59,15 @@ export function classifyWork(p,meta={}) {
     amount:thirdDone&&savedResult?safeAmount(p.award_amount):null,
     canSubmit:false,primary:'심사내용 확인',route:`admin/edit/${encodeURIComponent(id)}`,protected:false};
   const done=(group,label,note='',more={})=>({...base,group,label,note,...more});
-  if(p.payment_status==='완료')return done('closed','지급 완료','지급 완료된 자료입니다.',{amount:safeAmount(p.award_amount),protected:true});
+  if(p.payment_status==='완료') {
+    const legacy=p.approval_required===false;
+    const corrected=Number(p.legacy_result_revision||0)>0;
+    const oldThird=corrected?{text:'과거 결과 정정',tone:'ok'}:thirdDone?third:
+      {text:numeric(p.score)!==null?`기존 심사 ${Number(p.score)}점`:'과거 심사결과',tone:'muted'};
+    return done('closed','지급 완료',legacy?'기존 지급액 보존 · 결과 정정은 별도 이력':'지급 완료된 자료입니다.',{
+      amount:safeAmount(p.award_amount),protected:true,canSubmit:false,
+      ...(legacy?{third:oldThird,candidate:false,primary:'과거 결과 정정',route:`admin/paid-legacy/${encodeURIComponent(id)}`}:{})});
+  }
   if(p.ceo_submission_status==='승인완료'||roleHas('대표이사','승인'))return done('closed','대표이사 승인',safeAmount(p.award_amount)>0?'승인 완료 · 지급상태 별도 확인':'승인 완료 · 지급 예정액 0원',{amount:safeAmount(p.award_amount),protected:true});
   if(p.ceo_submission_status==='상신완료')return done('submitted','대표이사 결재 중','상신 완료 · 심사 수정 잠금',{amount:safeAmount(p.award_amount),protected:true});
   if(!id)return done('check','접수정보 확인','제안 ID가 없어 상세화면을 연결할 수 없습니다.',{route:'',primary:'자료 확인'});
