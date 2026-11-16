@@ -5,7 +5,7 @@
 export const RESULT_STATUS = Object.freeze([
   {key:'adopted',label:'채택'},
   {key:'countOnly',label:'건수처리'},
-  {key:'rejected',label:'미채택·기준미달'},
+  {key:'rejected',label:'미채택'},
   {key:'onHold',label:'보류'},
   {key:'duplicate',label:'중복제안'},
   {key:'pending',label:'심사·보완 중'},
@@ -16,17 +16,12 @@ const numeric=v=>v===null||v===undefined||v===''||!Number.isFinite(Number(v))?nu
 export function proposalResultCategory(detail={}) {
   const result=txt(detail.originalResult);
   const outcome=txt(detail.outcome);
+  const names={adopted:'채택',countOnly:'건수처리',rejected:'미채택',duplicate:'중복제안',onHold:'보류'};
+  const known={'채택':'adopted','건수처리':'countOnly','미채택':'rejected','중복제안':'duplicate','보류':'onHold'};
+  const key=known[result]||((outcome in names)?outcome:null);
+  if(key)return {category:key,label:names[key],provisional:false};
   const team=numeric(detail.team);
-  // Confirmed accepted is shown only when the reporting engine classifies
-  // the result as final; a preliminary '채택' without CEO approval is pending.
-  if(outcome==='adopted')return {category:'adopted',label:'채택',provisional:false};
-  if(outcome==='countOnly'||result==='건수처리')return {category:'countOnly',label:'건수처리',provisional:outcome!=='countOnly'};
-  if(outcome==='rejected'||result==='미채택')return {category:'rejected',label:'미채택',provisional:outcome!=='rejected'};
-  if(outcome==='duplicate'||result==='중복제안')return {category:'duplicate',label:'중복제안',provisional:outcome!=='duplicate'};
-  if(outcome==='onHold'||result==='보류')return {category:'onHold',label:'보류',provisional:false};
-  if(team!==null && team<50)return {category:'rejected',label:'기준미달(2차)',provisional:true};
-  if(team!==null && team>=50 && team<65)return {category:'pending',label:'건수처리 후보 · 3차 심사대기',provisional:true};
-  return {category:'pending',label:'심사·보완 중',provisional:false};
+  return {category:'pending',label:team!==null&&team>=50&&team<65?'건수처리 후보 · 3차 심사대기':'심사·보완 중',provisional:false};
 }
 
 export function summarizeProposalResults(details=[]) {

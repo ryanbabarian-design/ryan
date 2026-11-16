@@ -1,5 +1,5 @@
 /** Only the existing public read RPC and roster SELECT are used. No private keys or writes. */
-import { fetchAllPages } from '../reports/report-source.js?v=2.6.8';
+import { fetchAllPages } from '../reports/report-source.js?v=2.9.6';
 export async function loadQuestionData(store, {storage=globalThis.localStorage,now=()=>new Date(),signal}={}) {
   if (signal?.aborted) throw new Error('조회가 취소되었습니다.');
   const withSignal = q => signal && typeof q.abortSignal === 'function' ? q.abortSignal(signal) : q;

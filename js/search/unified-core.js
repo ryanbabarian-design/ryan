@@ -1,8 +1,8 @@
 /** V2.7.7 — one input for staff counts and literal proposal-content search.
  * Read-only: no generated SQL, no external model, no approval inference.
  */
-import {prepareQuestionResult, parseQuestion, suggestQuestions} from './question-core.js?v=2.8.7';
-import {koreaDate, reportDate} from '../reports/annual-report.js?v=2.6.8';
+import {prepareQuestionResult, parseQuestion, suggestQuestions} from './question-core.js?v=2.9.6';
+import {koreaDate, reportDate} from '../reports/annual-report.js?v=2.9.6';
 
 const text = value => String(value ?? '').normalize('NFKC').trim();
 const compact = value => text(value).replace(/\s+/g,'').toLocaleLowerCase('ko-KR');

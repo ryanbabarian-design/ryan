@@ -1,17 +1,20 @@
+import { buildCeoRows, filterCeoRows, ceoSelection, assertCeoUnchanged, ceoConfirmation } from "./admin/ceo-inbox-core.js?v=2.9.6";
+import { renderCeoInbox } from "./admin/ceo-inbox-ui.js?v=2.9.6";
+import { fetchAllPages } from "./reports/report-source.js?v=2.9.6";
 import { mountLegacyScoreEditor } from "./review/legacy-score-ui.js?v=2.9.5";
 import { hasLegacyScore } from "./review/legacy-score-policy.js?v=2.9.5";
 import { mountPaidLegacyEditor } from "./review/paid-legacy-ui.js?v=2.9.4";
 import { reviewAwardPreview } from "./review/award-policy.js?v=2.9.1";
-import { createAdminWorkspace } from "./admin/workspace-ui.js?v=2.9.5";
+import { createAdminWorkspace } from "./admin/workspace-ui.js?v=2.9.6";
 import { readWorkspaceFilters, proposalYear, currentKoreaYear, workspaceRoute, scopeSubmissionCandidates } from "./admin/workspace-core.js?v=2.9.5";
 import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, validateThirdReview, isLegacyOutcomeReview } from "./review/third-review-policy.js?v=2.9.3";
 import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.js?v=2.8.0";
 import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score-correction-core.js?v=2.8.7";
-import { createQuestionSearch } from "./search/question-ui.js?v=2.8.7";
+import { createQuestionSearch } from "./search/question-ui.js?v=2.9.6";
 import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
-import { createPerformancePage } from './reports/performance-ui.js?v=2.8.5';
-import { dashboardTopPeople } from "./reports/dashboard-top-person.js?v=2.8.7";
+import { createPerformancePage } from './reports/performance-ui.js?v=2.9.6';
+import { dashboardTopPeople } from "./reports/dashboard-top-person.js?v=2.9.6";
 import {
   calculateAward,
   currentYearProposalCount,
@@ -50,6 +53,7 @@ import {
   totalSelectedImages,
 } from "./image-manager.js?v=2.3.11";
 
+let ceoReviewRows = [];
 const FIRST_EVALUATION_MIN_PASS = 50;
 
 const RICH_TEXT_ALLOWED_TAGS = new Set(["P","DIV","BR","STRONG","B","EM","I","U","UL","OL","LI","TABLE","THEAD","TBODY","TFOOT","TR","TD","TH","CAPTION","SPAN"]);
@@ -1080,6 +1084,8 @@ function syncApprovalInboxBadge() {
 }
 
 function showApprovalLoginNotice() {
+  // CEO inbox already displays pending totals. Do not cover the work list with a modal.
+  if (currentUserHasApprovalRole("대표이사") || location.hash.startsWith("#admin/inbox")) return;
   const count = actionableApprovalCount();
   const dialog = $("#approvalNoticeDialog");
   const text = $("#approvalNoticeText");
@@ -2398,6 +2404,11 @@ function updateCeoBatchButton(kind) {
   if (!button) return;
   const count = selectedCheckboxIds(selector).length;
   if(isSubmit){const summary=$("#ceoSubmissionSummary");if(summary)summary.textContent=ceoSelectedSummary();}
+  if(!isSubmit){
+    try {const chosen=ceoSelection(ceoReviewRows,selectedCheckboxIds(selector));
+      const label=$("#ceoApprovalSelection");if(label)label.textContent=`선택 ${chosen.count}건 · ${Object.entries(chosen.results).map(([r,n])=>`${r} ${n}건`).join(" / ")} · 합계 ${formatCurrency(chosen.amount)}`;
+    } catch(error){button.disabled=true;return;}
+  }
   button.disabled = count === 0;
   button.textContent = isSubmit ? `선택 ${count}건 대표이사 상신` : `선택 ${count}건 일괄승인`;
 }
@@ -2445,8 +2456,34 @@ async function renderCeoSubmissionQueue() {
   }
 }
 
+async function readCeoSnapshot() {
+  return store.mode === "demo" ? store.getProposals() : fetchAllPages((from,to) => store.client.rpc("get_public_proposals_v258", {}, {count:"exact"}).range(from,to));
+}
+async function renderCeoApprovalInbox() {
+  const requestedRoute=location.hash;
+  const q=new URLSearchParams(location.hash.split("?")[1]||"");
+  const view=["pending","completed","rejected"].includes(q.get("view"))?q.get("view"):"pending";
+  const year=/^\d{4}$/.test(q.get("year")||"")||["all","unknown"].includes(q.get("year"))?q.get("year"):String(currentKoreaYear());
+  const filters={year,view,query:q.get("q")||"",department:q.get("department")||"",result:q.get("result")||""};
+  ceoReviewRows=[];
+  main.innerHTML=`${adminPageHeader("대표이사 결재", "심사결과·점수·지급액을 확인한 뒤 선택한 건만 승인합니다.", "inbox")}<div class="loading-card"><div class="spinner"></div><p>결재 목록과 최신 심사자료를 확인합니다.</p></div>`;
+  try {
+    const [inbox,proposals]=await Promise.all([store.getMyApprovalInbox(),readCeoSnapshot()]);
+    let source=inbox,historyError=false;
+    if(view!=="pending"){
+      try {source=(await store.getV272ApprovalHistory()).filter(r=>r.role_name==="대표이사"&&r.approval_status===(view==="completed"?"승인":"반려"));}
+      catch(error){historyError=true;source=[];}
+    }
+    if(location.hash!==requestedRoute||!state.admin||!currentUserHasApprovalRole("대표이사"))return;
+    const all=buildCeoRows(source,proposals);
+    ceoReviewRows=view==="pending"?filterCeoRows(all,filters):[];
+    main.innerHTML=`${adminPageHeader("대표이사 결재", "상신된 심사결과 확인 → 선택 승인 → 실제 지급은 별도 처리", "inbox")}${renderCeoInbox(all,filters,{historyError})}`;
+  }catch(error){if(location.hash===requestedRoute)main.innerHTML=`${adminPageHeader("대표이사 결재","자료 조회 실패 시 승인하지 않습니다.","inbox")}<section class="empty-state"><h2>최신 심사자료를 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p><button class="button button-primary" data-action="refresh-ceo-inbox">다시 조회</button></section>`;}
+}
+
 async function renderApproverInbox() {
   const isCeo = currentUserHasApprovalRole("대표이사");
+  if (isCeo) return renderCeoApprovalInbox();
   main.innerHTML = `${adminPageHeader("내 결재함", isCeo ? "관리자가 일괄상신한 대표이사 결재건만 표시됩니다. 여러 건을 선택해 일괄승인할 수 있으며 반려는 건별로 처리합니다." : "본인 계정에 지정된 결재만 표시됩니다. 이전 단계가 승인되어야 다음 단계가 활성화됩니다.", "inbox")}<div class="loading-card"><div class="spinner"></div><p>결재함을 불러오는 중입니다.</p></div>`;
   try {
     const rows = await store.getMyApprovalInbox();
@@ -3302,6 +3339,8 @@ document.addEventListener("click", async (event) => {
       await refreshData();
       render();
       showToast("로그아웃되었습니다.");
+    } else if (action === "refresh-ceo-inbox") {
+      await renderApproverInbox();
     } else if (action === "export-csv") {
       downloadCsv();
     } else if (action === "export-report-csv") {
@@ -3485,13 +3524,20 @@ document.addEventListener("click", async (event) => {
       showToast(`대표이사 일괄상신 완료 · ${count}건`);
     } else if (action === "batch-approve-ceo") {
       const ids = selectedCheckboxIds(".ceo-approve-checkbox");
-      if (!ids.length) throw new Error("일괄승인할 제안을 선택하세요.");
-      if (!confirm(`선택한 ${ids.length}건을 대표이사 일괄승인하시겠습니까?`)) return;
-      const result = await store.batchApproveCeo(ids);
-      await refreshData();
-      await renderApproverInbox();
-      const count = Number(result?.approved_count ?? result?.[0]?.approved_count ?? ids.length);
-      showToast(`대표이사 일괄승인 완료 · ${count}건`);
+      if (!ids.length) throw new Error("승인할 제안을 선택하세요.");
+      if(actionButton.dataset.busy==="true")return;
+      actionButton.dataset.busy="true";actionButton.disabled=true;
+      try {
+        const [freshInbox,freshProposals]=await Promise.all([store.getMyApprovalInbox(),readCeoSnapshot()]);
+        const checked=assertCeoUnchanged(ceoReviewRows,buildCeoRows(freshInbox,freshProposals),ids);
+        if(!confirm(ceoConfirmation(checked)))return;
+        const result = await store.batchApproveCeo(ids);
+        const returned=result?.approved_count ?? result?.[0]?.approved_count;
+        if(returned===undefined||Number(returned)!==ids.length)throw new Error("승인 응답 건수가 선택한 건수와 다릅니다. 결재함을 새로 조회해 확인하세요.");
+        await refreshData();await renderApproverInbox();
+        showToast(`대표이사 승인 완료 · ${Number(returned)}건 · 실제 지급은 별도 처리`);
+      } catch(error) {await renderApproverInbox();throw error;}
+      finally {if(actionButton.isConnected){delete actionButton.dataset.busy;updateCeoBatchButton("approve");}}
     } else if (action === "reset-demo") {
       if (!confirm("데모 데이터를 최초 상태로 되돌리시겠습니까?")) return;
       await store.resetDemo();
@@ -3507,7 +3553,11 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    if (event.target.id === "filterForm") {
+    if (event.target.id === "ceoInboxFilters") {
+      const data=new FormData(event.target);const q=new URLSearchParams();
+      for(const key of ["view","year","department","result","q"]){if(data.get(key))q.set(key,String(data.get(key)));}
+      location.hash=`#admin/inbox?${q}`;
+    } else if (event.target.id === "filterForm") {
       const data = new FormData(event.target);
       const params = new URLSearchParams();
       if (data.get("query")) params.set("q", data.get("query"));
@@ -3622,6 +3672,7 @@ document.addEventListener("change", (event) => {
     const form=$("#adminReviewForm");const p=state.proposals.find(x=>x.id===form?.dataset.id);applyReviewMode(form,p);return;
   }
 
+  if (event.target.matches?.("[data-ceo-filter]")) {event.target.closest("form").requestSubmit();return;}
   if (event.target.id === "ceoSubmitAll") {
     $$(".ceo-submit-checkbox").forEach((box) => { box.checked = event.target.checked; });
     updateCeoBatchButton("submit");
@@ -3642,7 +3693,7 @@ document.addEventListener("change", (event) => {
   if (event.target.matches?.(".ceo-approve-checkbox")) {
     const boxes = $$(".ceo-approve-checkbox");
     const all = $("#ceoApproveAll");
-    if (all) all.checked = boxes.length > 0 && boxes.every((box) => box.checked);
+    if (all) {all.checked = boxes.length > 0 && boxes.every((box) => box.checked);all.indeterminate=boxes.some(b=>b.checked)&&!all.checked;}
     updateCeoBatchButton("approve");
     return;
   }

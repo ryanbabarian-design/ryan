@@ -1,12 +1,13 @@
+import { savedReviewSnapshot } from './review-snapshot.js?v=2.9.6';
 import { normalizeDepartmentName } from '../core.js?v=2.8.5';
 /** V2.6.8 — read-only annual reporting. No approval/award decisions are written here. */
-export const REPORT_VERSION = '2.6.8';
+export const REPORT_VERSION = '2.9.6';
 export const REPORT_RULES = [
   '등록건수: 최초 접수일 기준. 같은 접수번호의 수정·재상신은 1건으로 집계합니다.',
-  '인정건수: 확정 채택 + 확정 건수처리. 반려·결재대기·보류는 인정건수에 포함하지 않습니다.',
+  '심사 인정건수=저장된 채택+건수처리. 대표결재 대기 여부는 별도이며, 심사 인정을 대표승인·지급완료로 간주하지 않습니다.',
   '부서별 집계는 접수부서 기준입니다. 가공/가공팀 등 확인된 동일부서 표기를 통합하며 부서 이동 이력은 접수 당시 부서 기준으로 표시합니다.',
   '참여율: 조회 가능한 현재 활성 직원명단 중 해당 연도에 1건 이상 제출한 직원 비율. 과거 연도의 재직인원 통계는 아닙니다.',
-  '사번/직원ID가 없는 제안은 성명+접수부서가 유일하게 일치할 때만 연결합니다. 명단 미확인 제안도 총건수에 포함됩니다.',
+  '직원ID/사번 우선, 성명+통합부서가 유일하게 맞을 때 연결합니다. 동일 이름·부서의 비활성 중복기록은 충돌 사번이 없고 활성 직원이 한 명일 때만 통합합니다. 동명이인·상충 사번은 확인 대상으로 남깁니다.',
   '포상 확정액/지급완료액과 예상/심사확정 효과금액을 분리합니다. 지급완료액은 지급연도 실적이 아닌 해당 접수연도 제안의 현재 지급현황입니다.',
   '화면의 연도·부서·직원검색·0건 필터가 엑셀 4개 시트에 동일하게 적용됩니다. 직원검색/0건 필터 사용 시 부서목표 비교는 생략합니다.',
 ];
@@ -25,33 +26,15 @@ export function koreaDate(now = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));
 }
 export function classifyProposal(proposal, approvals = []) {
-  const p = proposal;
-  const records = approvals.filter(a=>str(a.proposal_id)===str(p.id) && a.active !== false && !a.auto_author && a.role_name !== '담당');
-  if (p.ceo_submission_status === '반려' || records.some(r=>(r.status||r.approval_status)==='반려')) return {outcome:'pending',stage:'반려 · 수정/보완 중',final:false};
-  const third = score(p.second_evaluation_total);
-  const team = score(p.team_leader_evaluation_total);
-  const ceoApproved = p.ceo_submission_status === '승인완료' || records.some(r=>r.role_name==='대표이사' && (r.status||r.approval_status)==='승인');
-  if (!ceoApproved && (p.ceo_submission_status === '상신완료' || third !== null)) return {outcome:'pending',stage:p.ceo_submission_status==='상신완료'?'대표이사 결재 대기':'3차 평가 완료 · 최종결재 대기',final:false};
-  const known = {'채택':'adopted','건수처리':'countOnly','미채택':'rejected','중복제안':'duplicate','보류':'onHold'};
-  if (known[p.review_result] && (p.status === '심사완료' || ceoApproved)) {
-    const outcome = known[p.review_result];
-    return {outcome,stage:outcomeNames[outcome],final:outcome!=='onHold'};
-  }
-  if (p.review_result === '보류') return {outcome:'onHold',stage:'보류',final:false};
-  if (team !== null && team >=65) {
-    const execDone = records.some(r=>/임원/.test(r.role_name||'') && (r.status||r.approval_status)==='승인');
-    return {outcome:'pending',stage:execDone?'3차 심사위원 평가 대기':'2차 통과 · 임원/3차 평가 대기',final:false};
-  }
-  if (team !== null) return {outcome:'pending',stage:'2차 평가 완료 · 처리결과 확인 필요',final:false};
-  if (score(p.first_evaluation_total)>=50 || p.legacy_first_evaluation_exempt===true) return {outcome:'pending',stage:'2차 팀장평가 대기',final:false};
-  return {outcome:'pending',stage:'1차 자기평가 보완 필요',final:false};
+  return savedReviewSnapshot(proposal, approvals);
 }
+
 function blankTotals() {
-  return {total:0,adopted:0,countOnly:0,rejected:0,duplicate:0,onHold:0,pending:0,recognized:0,awardConfirmed:0,awardProvisional:0,awardPaid:0,awardUnpaid:0,proposedEffect:0,confirmedEffect:0,cost:0};
+  return {total:0,adopted:0,countOnly:0,rejected:0,duplicate:0,onHold:0,pending:0,recognized:0,ceoPending:0,ceoApproved:0,approvalReturned:0,finalRecognized:0,awardRecorded:0,awardConfirmed:0,awardProvisional:0,awardPaid:0,awardUnpaid:0,proposedEffect:0,confirmedEffect:0,cost:0};
 }
 function addDetail(target,d) {
   target.total++; target[d.outcome]++;
-  for (const k of ['awardConfirmed','awardProvisional','awardPaid','awardUnpaid','proposedEffect','confirmedEffect','cost']) target[k]+=d[k];
+  for (const k of ['ceoPending','ceoApproved','approvalReturned','finalRecognized','awardRecorded','awardConfirmed','awardProvisional','awardPaid','awardUnpaid','proposedEffect','confirmedEffect','cost']) target[k]+=d[k];
   target.recognized=target.adopted+target.countOnly;
 }
 function dedupeProposals(proposals,warnings) {
@@ -83,12 +66,26 @@ export function buildAnnualReport({proposals=[],employees=[],goals=[],approvals=
     const old=rosterMap.get(identity);
     if (!old || (old.active===false && e.active!==false)) rosterMap.set(identity,{...e,identity,name:str(e.name),department:normalizeDepartmentName(e.department),employee_no:str(e.employee_no)});
   });
-  const roster=[...rosterMap.values()];
+  const originalRoster=[...rosterMap.values()];
+  const aliases=new Map(), groupMap=new Map();
+  const cleanName=v=>str(v).replace(/\s+/g,'');
+  for(const e of originalRoster){
+    const key=JSON.stringify([cleanName(e.name),e.department]);
+    if(!groupMap.has(key))groupMap.set(key,[]);groupMap.get(key).push(e);
+  }
+  for(const group of groupMap.values()){
+    const active=group.filter(e=>e.active!==false);
+    const numbers=new Set(group.map(e=>e.employee_no).filter(Boolean));
+    if(active.length===1&&numbers.size<=1){for(const e of group)aliases.set(e.identity,active[0].identity);}
+  }
+  const roster=originalRoster.filter(e=>!aliases.has(e.identity)||aliases.get(e.identity)===e.identity);
+  const canonical=e=>roster.find(r=>r.identity===(aliases.get(e.identity)||e.identity))||e;
+
   const matches = p => {
     for (const [val,field] of [[p.employee_id??p.proposer_id,'id'],[p.proposer_employee_no??p.employee_no,'employee_no']]) {
-      if (str(val)) { const found=roster.filter(e=>str(e[field])===str(val));if(found.length===1)return {employee:found[0],basis:field==='id'?'직원ID':'사번'}; }
+      if (str(val)) { const found=originalRoster.filter(e=>str(e[field])===str(val));if(found.length===1)return {employee:canonical(found[0]),basis:field==='id'?'직원ID':'사번'}; }
     }
-    const found=roster.filter(e=>e.name===str(p.proposer_name) && e.department===(normalizeDepartmentName(p.department)));
+    const found=roster.filter(e=>cleanName(e.name)===cleanName(p.proposer_name) && e.department===(normalizeDepartmentName(p.department)));
     return found.length===1 ? {employee:found[0],basis:'성명+부서'} : {employee:null,basis:found.length?'동명이인 확인 필요':'직원명단 미확인'};
   };
   const peopleMap=new Map();
@@ -107,7 +104,7 @@ export function buildAnnualReport({proposals=[],employees=[],goals=[],approvals=
     const {employee,basis}=matches(p);const person=ensurePerson(employee,name,dept,basis);
     const result=classifyProposal(p,approvals); const awarded=result.final?cash(p.award_amount):0;
     const paid=p.payment_status==='완료'?cash(p.award_amount):0;
-    const d={id:str(p.id),no:str(p.proposal_no),date,name,department:dept,title:str(p.title),employeeNo:person.employeeNo,identity:person.identity,personKey:person.key,rosterStatus:person.rosterStatus,matchBasis:basis,first:score(p.first_evaluation_total),team:score(p.team_leader_evaluation_total),committee:score(p.second_evaluation_total),finalScore:result.final?score(p.score):null,originalResult:str(p.review_result),outcome:result.outcome,outcomeLabel:outcomeNames[result.outcome],stage:result.stage,ceo:str(p.ceo_submission_status),awardConfirmed:awarded,awardProvisional:result.final?0:cash(p.award_amount),awardPaid:paid,awardUnpaid:Math.max(0,awarded-paid),proposedEffect:cash(p.proposer_effect_amount),confirmedEffect:result.final?cash(p.effect_amount):0,cost:cash(p.cost_amount),paymentStatus:str(p.payment_status),implementationStatus:str(p.implementation_status)};
+    const d={id:str(p.id),no:str(p.proposal_no),date,name,department:dept,title:str(p.title),employeeNo:person.employeeNo,identity:person.identity,personKey:person.key,rosterStatus:person.rosterStatus,matchBasis:basis,first:score(p.first_evaluation_total),team:score(p.team_leader_evaluation_total),committee:score(p.second_evaluation_total),finalScore:result.reviewed?score(p.score):null,originalResult:str(p.review_result),outcome:result.outcome,reviewed:result.reviewed,approvalLabel:result.approvalLabel,ceoPending:result.ceoPending?1:0,ceoApproved:result.ceoApproved?1:0,approvalReturned:result.returned?1:0,finalRecognized:result.final&&['adopted','countOnly'].includes(result.outcome)?1:0,awardRecorded:result.reviewed?cash(p.award_amount):0,outcomeLabel:outcomeNames[result.outcome],stage:result.stage,ceo:str(p.ceo_submission_status),awardConfirmed:awarded,awardProvisional:result.final?0:cash(p.award_amount),awardPaid:paid,awardUnpaid:Math.max(0,awarded-paid),proposedEffect:cash(p.proposer_effect_amount),confirmedEffect:result.final?cash(p.effect_amount):0,cost:cash(p.cost_amount),paymentStatus:str(p.payment_status),implementationStatus:str(p.implementation_status)};
     if(paid>awarded)warnings.push(`${d.no||d.title}: 지급완료액이 포상 확정액보다 큽니다. 결재/지급 상태를 확인하세요.`);
     addDetail(person,d);person.months[Number(date.slice(5,7))-1]++;person.details.push(d);allDetails.push(d);
   }
@@ -125,6 +122,8 @@ export function buildAnnualReport({proposals=[],employees=[],goals=[],approvals=
   summary.zeroEmployees=summary.activeEmployees-summary.participants;
   summary.participationRate=summary.activeEmployees?summary.participants/summary.activeEmployees:0;
   summary.unmatchedProposals=details.filter(d=>d.rosterStatus==='명단 미확인').length;
+  summary.participationVerified=summary.unmatchedProposals===0;
+  summary.unmatchedPeople=new Set(details.filter(d=>d.rosterStatus==='명단 미확인').map(d=>d.identity)).size;
   summary.months=Array.from({length:12},(_,m)=>people.reduce((s,p)=>s+p.months[m],0));
   if(summary.unmatchedProposals)warnings.push(`직원명단 미확인 제안 ${summary.unmatchedProposals}건: 총건수에는 포함되지만 참여인원에는 포함하지 않습니다. 성명·부서 또는 사번을 확인하세요.`);
   if(!roster.length)warnings.push('조회 가능한 직원명단이 없습니다. 0건 직원과 참여율을 정확히 산출할 수 없습니다.');
