@@ -1,6 +1,6 @@
 /** Admin list only. All edits, reviews and submissions use existing secured routes. */
-import { buildWorkspace, readWorkspaceFilters, workspaceRoute, workspaceCsv, currentKoreaYear, QUEUES, RESULT_LABELS, WORKSPACE_VERSION } from './workspace-core.js?v=2.9.2';
-import { loadWorkspaceSnapshot } from './workspace-source.js?v=2.9.2';
+import { buildWorkspace, readWorkspaceFilters, workspaceRoute, workspaceCsv, currentKoreaYear, QUEUES, RESULT_LABELS, WORKSPACE_VERSION } from './workspace-core.js?v=2.9.3';
+import { loadWorkspaceSnapshot } from './workspace-source.js?v=2.9.3';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=v=>new Intl.NumberFormat('ko-KR').format(Number(v)||0)+'원';
 const scopeLabel=f=>f.year==='all'?'전체 연도':f.year==='unknown'?'접수일 미확인':`${f.year}년`;

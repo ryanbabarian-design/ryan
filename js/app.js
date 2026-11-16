@@ -1,7 +1,7 @@
 import { reviewAwardPreview } from "./review/award-policy.js?v=2.9.1";
-import { createAdminWorkspace } from "./admin/workspace-ui.js?v=2.9.2";
-import { readWorkspaceFilters, proposalYear, currentKoreaYear, workspaceRoute, scopeSubmissionCandidates } from "./admin/workspace-core.js?v=2.9.2";
-import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, validateThirdReview, isLegacyOutcomeReview } from "./review/third-review-policy.js?v=2.9.2";
+import { createAdminWorkspace } from "./admin/workspace-ui.js?v=2.9.3";
+import { readWorkspaceFilters, proposalYear, currentKoreaYear, workspaceRoute, scopeSubmissionCandidates } from "./admin/workspace-core.js?v=2.9.3";
+import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, validateThirdReview, isLegacyOutcomeReview } from "./review/third-review-policy.js?v=2.9.3";
 import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.js?v=2.8.0";
 import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score-correction-core.js?v=2.8.7";
@@ -36,7 +36,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.9.1";
-import { createStore } from "./services/store.js?v=2.9.2";
+import { createStore } from "./services/store.js?v=2.9.3";
 import {
   appendImageFiles,
   createImageSelection,
@@ -2885,7 +2885,7 @@ function renderAdminEdit(id) {
     </section>
 
     <form id="adminReviewForm" class="admin-review-form review-flow-form" data-id="${escapeHtml(proposal.id)}" data-expected-at="${escapeHtml(proposal.updated_at || '')}">
-      <section class="review-flow-summary"><div class="section-heading"><div><span class="eyebrow">EVALUATION FLOW · 2.9.2</span><h2>1차 → 2차 → 3차 평가</h2><p>앞선 평가를 확인한 뒤 점수심사 또는 결과심사를 선택하세요. 기존 1·2차 점수와 결재기록은 유지됩니다.</p></div></div>${renderEvaluationComparison(proposal)}</section>
+      <section class="review-flow-summary"><div class="section-heading"><div><span class="eyebrow">EVALUATION FLOW · 2.9.3</span><h2>1차 → 2차 → 3차 평가</h2><p>앞선 평가를 확인한 뒤 점수심사 또는 결과심사를 선택하세요. 기존 1·2차 점수와 결재기록은 유지됩니다.</p></div></div>${renderEvaluationComparison(proposal)}</section>
       <details class="review-content-box" open><summary>제안내용·사진 확인 <span>클릭하여 접기 / 펼치기</span></summary>
       <section class="admin-review-preview">
         <div class="review-preview-head">
@@ -2988,14 +2988,14 @@ async function hydrateAdminApproval(proposal) {
   const gate=form.querySelector("#secondEvaluationGateMessage");
   const fieldset=form.querySelector("#secondEvaluationFieldset");
   const save=form.querySelector("[data-review-save]");
-  let records;
-  try { records=await store.getApprovalRecords(proposal.id); }
-  catch(error){ if(!form.isConnected)return; gate.textContent="결재기록 조회 실패: 점수를 임의로 저장하지 않았습니다. 화면을 다시 열어 확인하세요."; if(save)save.disabled=true;return; }
+  let records,context;
+  try { context=await store.getReviewApprovalContext(proposal.id); records=context.records; }
+  catch(error){ if(!form.isConnected)return; gate.textContent=`결재기록 조회 실패: ${error.message||"다시 조회하세요."} 저장은 잠겨 있습니다.`; if(save)save.disabled=true;return; }
   if(!form.isConnected || $("#adminReviewForm")!==form)return;
   const target=form.querySelector("#adminApprovalProgress");
-  const legacyExcluded=isLegacyOutcomeReview(proposal,records);
+  const legacyExcluded=isLegacyOutcomeReview(proposal,records,context);
   if(target)target.innerHTML=legacyExcluded
-    ? `<div class="evaluation-lock-note"><strong>전자결재 제외 과거 제안</strong><br>당시 전자결재 적용 대상이 아니었으며 생성된 결재기록이 없습니다. 임원 승인을 새로 만들 필요가 없습니다.</div>`
+    ? `<div class="evaluation-lock-note"><strong>전자결재 제외 과거 제안</strong><br>실제 진행된 결재는 없습니다. 자동작성 ${Number(context.auto_author_count)||0}건과 빈 대기 ${Number(context.empty_pending_count)||0}건은 삭제하지 않고 보존합니다. 임원 승인을 임의로 만들지 않습니다.</div>`
     : renderApprovalProgress(state.approvalSteps,records);
   const actionTarget=form.querySelector("#adminApprovalAction");
   if(actionTarget){
@@ -3003,6 +3003,7 @@ async function hydrateAdminApproval(proposal) {
     else {const permission=resolveApprovalPermission(proposal,state.approvalSteps,records,state.admin?.assignments||[]);actionTarget.innerHTML=renderApprovalAction(permission,proposal.id)+`<p class="field-help">전자결재 서명권한과 위의 3차 심사 저장권한은 별도입니다.</p>`;}
   }
   form._reviewRecords=records;
+  form._reviewContext=context;
   applyReviewMode(form,proposal,records);
 
 }
@@ -3013,7 +3014,7 @@ function applyReviewMode(form, proposal, records=form?._reviewRecords) {
   const outcome=mode==="outcome";
   const scoreOption=form.elements.review_mode?.querySelector('option[value="score"]');
   if(scoreOption)scoreOption.disabled=proposal.approval_required===false;
-  const decision=thirdReviewDecision(proposal,state.approvalSteps,records,state.admin?.isSystemAdmin===true,mode);
+  const decision=thirdReviewDecision(proposal,state.approvalSteps,records,state.admin?.isSystemAdmin===true,mode,form._reviewContext);
   const fieldset=form.querySelector("#secondEvaluationFieldset");
   if(fieldset){fieldset.hidden=outcome;fieldset.disabled=outcome||!decision.allowed;}
   const notice=form.querySelector("#outcomeReviewNotice");if(notice)notice.hidden=!outcome;
@@ -3557,9 +3558,10 @@ document.addEventListener("submit", async (event) => {
       const data=new FormData(form);
       const proposal=state.proposals.find(p=>p.id===form.dataset.id);
       if(!proposal)throw new Error("제안을 찾지 못했습니다.");
-      const records=await store.getApprovalRecords(proposal.id);
+      const context=await store.getReviewApprovalContext(proposal.id);
+      const records=context.records;
       const mode=data.get("review_mode")||"score";
-      const decision=thirdReviewDecision(proposal,state.approvalSteps,records,state.admin?.isSystemAdmin===true,mode);
+      const decision=thirdReviewDecision(proposal,state.approvalSteps,records,state.admin?.isSystemAdmin===true,mode,context);
       if(!decision.allowed)throw new Error(decision.reason);
       const evaluation=mode==="outcome"?null:collectEvaluationFromForm(form,"second");
       const patch={review_result:data.get("review_result"),implementing_department:data.get("implementing_department")?.trim(),

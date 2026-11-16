@@ -1,11 +1,11 @@
 /** V2.9.0 — read-only admin-list view model. Saving/approval rules stay in V2.8.9. */
 import { normalizeDepartmentName } from '../core.js?v=2.8.7';
-import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, FINAL_RESULTS, isLegacyOutcomeReview } from '../review/third-review-policy.js?v=2.9.2';
+import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, FINAL_RESULTS, isLegacyOutcomeReview } from '../review/third-review-policy.js?v=2.9.3';
 
 const str = v => String(v ?? '').trim();
 const numeric = v => v == null || str(v)==='' || !Number.isFinite(Number(v)) ? null : Number(v);
 const safeAmount = v => Number.isFinite(Number(v)) ? Math.max(0,Number(v)) : 0;
-export const WORKSPACE_VERSION = '2.9.2';
+export const WORKSPACE_VERSION = '2.9.3';
 export const QUEUES = Object.freeze([
   {key:'open',label:'처리할 제안'}, {key:'review',label:'3차 심사대기'},
   {key:'reviewed',label:'심사완료 · 상신 전'}, {key:'submitted',label:'대표결재 중'},
@@ -46,7 +46,7 @@ const firstCell = p => numeric(p.first_evaluation_total)!==null
   : p.legacy_first_evaluation_exempt===true?{text:'기존건 면제',tone:'muted'}:{text:'미입력',tone:'warn'};
 const teamCell=p=>numeric(p.team_leader_evaluation_total)===null?{text:'미입력',tone:'warn'}:{text:`${Number(p.team_leader_evaluation_total)}점`,tone:Number(p.team_leader_evaluation_total)<50?'danger':'ok'};
 export function classifyWork(p,meta={}) {
-  const id=str(p.id),steps=meta.steps||[],records=meta.records?.get(id);
+  const id=str(p.id),steps=meta.steps||[],records=meta.records?.get(id),context=meta.contexts?.get(id);
   const scoped=(records||[]).filter(r=>!r.proposal_id||str(r.proposal_id)===id);
   const roleHas=(role,status)=>scoped.some(r=>r.status===status && steps.some(s=>s.active!==false && str(s.id)===str(r.step_id) && s.role_name===role));
   const thirdDone=hasThirdReview(p),savedResult=FINAL_RESULTS.includes(p.review_result),isCandidate=isLegacyCountCandidate(p);
@@ -65,8 +65,8 @@ export function classifyWork(p,meta={}) {
   if(!id)return done('check','접수정보 확인','제안 ID가 없어 상세화면을 연결할 수 없습니다.',{route:'',primary:'자료 확인'});
   if(meta.errors?.has(id)||meta.stepsError)return done('check','결재 조회 확인','결재기록을 읽지 못했습니다. 새로고침 후 다시 확인하세요.');
   if(p.ceo_submission_status==='반려'||scoped.some(r=>r.status==='반려'&&steps.some(s=>str(s.id)===str(r.step_id)&&s.active!==false)))return done('waiting','반려 · 보완 필요','기존 결재의 반려 내용을 확인하세요.');
-  if(isLegacyOutcomeReview(p,records)) {
-    const legacyDecision=thirdReviewDecision(p,steps,records,true,'outcome');
+  if(p.approval_required===false) {
+    const legacyDecision=thirdReviewDecision(p,steps,records,true,'outcome',context);
     if(!legacyDecision.allowed)return done('check','과거 제안 상태 확인',legacyDecision.reason);
     if(thirdDone && savedResult && p.third_review_mode==='outcome' && p.status==='심사완료')return done('archived','과거건 결과 정리완료','전자결재 제외 · 관리자 결과심사 저장 완료. 대표상신 완료를 뜻하지 않습니다.',{primary:'결과 확인',canSubmit:false,amount:safeAmount(p.award_amount)});
     return done('review','과거건 결과 확인','전자결재 제외 과거 제안 · 점수/승인기록을 만들지 않고 결과를 정정합니다.',{primary:'결과심사',mode:'outcome',amount:null});
@@ -75,8 +75,8 @@ export function classifyWork(p,meta={}) {
   if(thirdDone && savedResult)return done('reviewed','3차 심사완료',meta.candidateIds===null?'상신대상 조회 실패 · 일괄상신 화면에서 확인':'상신요건 확인 필요 · 임원/대표 결재 상태 확인',{canSubmit:meta.candidateIds===null?null:false,primary:'결과 확인'});
   if(!thirdDone && p.status==='심사완료'&&savedResult&&!isCandidate)return done('check','기존 심사기록 확인','3차 평가기록 없이 저장된 과거 결과입니다. 자동으로 다시 심사하지 않습니다.',{third:{text:'기존 결과',tone:'muted'},amount:null});
   if(!Array.isArray(records))return done('check','결재 상태 확인','결재기록을 확인한 뒤 처리단계를 표시합니다.');
-  const outcome=thirdReviewDecision(p,steps,records,true,'outcome');
-  const score=thirdReviewDecision(p,steps,records,true,'score');
+  const outcome=thirdReviewDecision(p,steps,records,true,'outcome',context);
+  const score=thirdReviewDecision(p,steps,records,true,'score',context);
   if(outcome.allowed || score.allowed)return done('review','3차 심사대기',score.allowed?(base.candidate?'건수처리 후보 · 최종 결과는 3차에서 결정':'점수심사 또는 결과심사 선택 가능'):'결과심사 가능 · 1·2차 보완은 별도',{primary:score.allowed?'3차 심사':'결과심사',mode:score.allowed?'score':'outcome',amount:null,result:'미심사',resultLabel:isCandidate?'건수처리 후보':'미심사'});
   if(numeric(p.first_evaluation_total)===null&&p.legacy_first_evaluation_exempt!==true)return done('waiting','1차 평가 확인','기존 점수 누락 여부를 확인하세요.',{primary:'1·2차 확인',route:`admin/score/${encodeURIComponent(id)}`});
   if(numeric(p.first_evaluation_total)!==null&&Number(p.first_evaluation_total)<50)return done('waiting','1차 기준미달','1차 기준미달 상태를 확인하세요.',{primary:'1·2차 확인',route:`admin/score/${encodeURIComponent(id)}`});

@@ -1,5 +1,5 @@
 import { reviewAwardPreview } from "../review/award-policy.js?v=2.9.1";
-import { thirdReviewDecision, validateThirdReview } from "../review/third-review-policy.js?v=2.9.2";
+import { thirdReviewDecision, validateThirdReview, buildLocalReviewContext } from "../review/third-review-policy.js?v=2.9.3";
 import { createOperationsRepository } from "../operations/operations-store.js?v=2.7.1";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "../oneoff/q26043-core.js?v=2.8.0";
 import { validateAdminScoreCorrection, ADMIN_EVAL_KEYS } from "../admin/score-correction-core.js?v=2.8.1";
@@ -575,8 +575,9 @@ class DemoStore {
     const proposals = await this.getProposals();
     const index = proposals.findIndex(item => item.id === id);
     const original = proposals[index];
-    const records = await this.getApprovalRecords(id);
-    const decision = thirdReviewDecision(original, await this.getApprovalSteps(), records, admin?.isSystemAdmin === true, options.mode||"score");
+    const context = await this.getReviewApprovalContext(id);
+    const records = context.records;
+    const decision = thirdReviewDecision(original, context.steps, records, admin?.isSystemAdmin === true, options.mode||"score", context);
     if (!decision.allowed) throw new Error(decision.reason);
     if (original.updated_at !== options.expectedUpdatedAt) throw new Error("다른 사용자가 변경했습니다. 화면을 다시 열어 확인하세요.");
     const checked = validateThirdReview(evaluation, reviewPatch, {...options,proposal:original});
@@ -768,6 +769,14 @@ class DemoStore {
     else rows.push({ ...normalized, id: Date.now() });
     localStorage.setItem(APPROVAL_STEPS_KEY, JSON.stringify(rows));
     return normalized;
+  }
+
+  async getReviewApprovalContext(proposalId) {
+    const admin=await this.getAdminSession();
+    if(admin?.isSystemAdmin!==true)throw new Error('시스템 관리자만 결재검증 자료를 조회할 수 있습니다.');
+    const p=(await this.getProposals()).find(row=>String(row.id)===String(proposalId));
+    if(!p)throw new Error('제안을 찾지 못했습니다.');
+    return buildLocalReviewContext(p,await this.getApprovalSteps(true),await this.getApprovalRecords(proposalId));
   }
 
   async getApprovalRecords(proposalId) {
@@ -1416,6 +1425,16 @@ class SupabaseStore {
     };
     const { data, error } = await this.client.from("approval_steps").upsert(payload).select().single();
     if (error) throw error;
+    return data;
+  }
+
+  async getReviewApprovalContext(proposalId) {
+    const {data,error}=await this.client.rpc("v293_get_review_context",{p_proposal_id:proposalId});
+    if(error)throw new Error(`관리자 결재검증을 불러오지 못했습니다. V2.9.3 SQL 적용 상태를 확인하세요. ${error.message||error}`);
+    if(!data || data.source!=="v293" || String(data.proposal_id)!==String(proposalId) ||
+       !Array.isArray(data.records) || !Array.isArray(data.steps) || typeof data.legacy_eligible!=="boolean") {
+      throw new Error("서버 결재검증 응답이 올바르지 않습니다. 공개 조회 결과로 대신 저장하지 않습니다.");
+    }
     return data;
   }
 

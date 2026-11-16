@@ -1,6 +1,6 @@
 import { reviewAwardPreview } from "./award-policy.js?v=2.9.1";
 /** V2.8.7: shared presentation/test rules. The database repeats all authority checks. */
-export const REVIEW_VERSION = '2.9.2';
+export const REVIEW_VERSION = '2.9.3';
 export const REVIEW_KEYS = Object.freeze(['originality','effort','feasibility','applicability','continuity','tangible_effect']);
 export const FINAL_RESULTS = Object.freeze(['채택','미채택','보류','중복제안','건수처리']);
 export const hasThirdReview = p => p?.second_evaluation_total != null || !!p?.second_evaluation_completed_at;
@@ -13,27 +13,49 @@ export function isLegacyCountCandidate(p) {
   return !hasThirdReview(p) && !isReviewProtected(p) && p?.team_leader_evaluation_total!=null && n>=50 && n<65 &&
     (p.review_result==='건수처리' || (['미채택','채택'].includes(p.review_result) && p.award_grade==='건수처리'));
 }
-/** Explicit legacy flag only. Never infer an exemption from a missing approval. */
-export function isLegacyOutcomeReview(p, records) {
+/** The live UI must use the admin-only server context, never the public filtered list. */
+export function isLegacyOutcomeReview(p, records, context) {
   return p?.approval_required === false && Array.isArray(records) &&
-    !records.some(r => !r.proposal_id || String(r.proposal_id) === String(p.id));
+    context?.source === 'v293' && String(context.proposal_id) === String(p.id) &&
+    context.approval_required === false && context.legacy_eligible === true;
 }
-export function thirdReviewDecision(p,steps=[],records=[],systemAdmin=true,mode="score") {
+/** In-memory demo/test analogue of the SQL classifier. NOT a substitute for server authority. */
+export function buildLocalReviewContext(p, steps, records) {
+  if(!p || !Array.isArray(steps) || !Array.isArray(records))throw new Error('결재검증 자료를 확인하지 못했습니다.');
+  const blank=v=>v==null || String(v).trim()==='';
+  const scoped=records.filter(r=>!r.proposal_id || String(r.proposal_id)===String(p.id));
+  let auto=0,empty=0,blocking=0;
+  for(const r of scoped) {
+    const step=steps.find(s=>String(s.id)===String(r.step_id));
+    if(!step){blocking++;continue;}
+    if(r.status==='대기' && ['approved_by','approver_name','acted_at','actionable_at','comment'].every(k=>blank(r[k]))) {empty++;continue;}
+    if(step.auto_author===true && step.role_name==='담당' && r.status==='승인' &&
+       blank(r.approved_by) && blank(r.actionable_at) && String(r.comment??'').trim()==='제안 제출 시 자동작성') {auto++;continue;}
+    blocking++;
+  }
+  return {source:'v293',proposal_id:p.id,proposal_updated_at:p.updated_at,approval_required:p.approval_required,
+    legacy_eligible:p.approval_required===false && blocking===0,record_count:scoped.length,
+    auto_author_count:auto,empty_pending_count:empty,blocking_count:blocking,records:scoped,steps};
+}
+export function thirdReviewDecision(p,steps=[],records=[],systemAdmin=true,mode="score",context=null) {
   const fail=reason=>({allowed:false,reason,editing:hasThirdReview(p)});
   if(!systemAdmin)return fail('시스템 관리자(심사위원)로 로그인하세요. 전자결재 서명권한과는 별도입니다.');
   if(!p)return fail('제안을 찾지 못했습니다.');
   if(!Array.isArray(steps))return fail('결재단계를 확인하지 못했습니다. 다시 확인하세요.');
   if(!Array.isArray(records))return fail('결재기록을 확인하지 못했습니다. 다시 확인하세요.');
-  const rowForRole=role=>records.filter(r=>(!r.proposal_id||String(r.proposal_id)===String(p.id)) && steps.some(s=>String(s.id)===String(r.step_id)&&s.role_name===role&&s.active!==false));
+  if(context?.source==='v293' && String(context.proposal_id)===String(p.id) && Array.isArray(context.steps))steps=context.steps;
+  const rowForRole=role=>records.filter(r=>(!r.proposal_id||String(r.proposal_id)===String(p.id)) && steps.some(s=>String(s.id)===String(r.step_id)&&s.role_name===role&&(role==='대표이사'||s.active!==false)));
   if(p.payment_status==='완료')return fail('포상금 지급완료 건은 일반 심사 수정이 잠겨 있습니다. 지급 정정 절차를 먼저 확인하세요.');
   if(['상신완료','승인완료'].includes(p.ceo_submission_status)||rowForRole('대표이사').some(r=>r.status==='승인'))return fail('대표이사 상신·승인 이후에는 3차 평가를 수정할 수 없습니다.');
   if(!['score','outcome'].includes(mode))return fail('심사방식을 확인하세요.');
   // Legacy proposals were never enrolled in electronic approvals. Do not invent signatures.
   if(p.approval_required === false) {
     if(!['', '미상신'].includes(String(p.ceo_submission_status ?? '').trim()))return fail('과거 제안의 대표결재 상태를 확인하세요. 상신·반려 이력을 자동 해제하지 않습니다.');
-    if(!isLegacyOutcomeReview(p,records))return fail('전자결재 제외 표시와 실제 결재기록이 일치하지 않습니다. 기존 결재를 삭제하지 말고 확인하세요.');
+    if(context?.source!=='v293' || String(context.proposal_id)!==String(p.id))return fail('관리자 전용 결재검증이 필요합니다. V2.9.3 SQL 적용 후 새로고침하세요.');
+    if(context.approval_required!==false)return fail('전자결재 대상 정보가 변경되었습니다. 최신 제안을 다시 열어 주세요.');
+    if(!isLegacyOutcomeReview(p,records,context))return fail(`실제 승인·반려·결재활성 또는 확인이 필요한 기록 ${Number(context.blocking_count)||1}건이 있어 저장을 중단했습니다. 기록은 삭제하지 않습니다.`);
     if(mode !== 'outcome')return fail('전자결재 제외 과거 건은 결과심사로 정정하세요. 점수심사·채택에는 기존 평가·결재 절차가 필요합니다.');
-    return {allowed:true,editing:hasThirdReview(p),legacy:true,reason:'전자결재 제외 과거 제안입니다. 관리자 결과심사로 저장할 수 있습니다. 기존 점수·내용은 보존하며 승인기록을 새로 만들지 않습니다.'};
+    return {allowed:true,editing:hasThirdReview(p),legacy:true,reason:`전자결재 제외 과거 제안입니다. 자동작성 ${Number(context.auto_author_count)||0}건·빈 대기 ${Number(context.empty_pending_count)||0}건만 확인되어 결과심사를 저장할 수 있습니다. 기존 기록은 그대로 보존합니다.`};
   }
   if(mode==='score' && !firstReviewPassed(p))return fail('1차 본인평가 50점 이상 또는 확인된 기존건 면제가 필요합니다.');
   const team=Number(p.team_leader_evaluation_total);
