@@ -1,18 +1,18 @@
 /** V2.9.0 — read-only admin-list view model. Saving/approval rules stay in V2.8.9. */
 import { normalizeDepartmentName } from '../core.js?v=2.8.7';
-import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, FINAL_RESULTS } from '../review/third-review-policy.js?v=2.8.9';
+import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, FINAL_RESULTS, isLegacyOutcomeReview } from '../review/third-review-policy.js?v=2.9.2';
 
 const str = v => String(v ?? '').trim();
 const numeric = v => v == null || str(v)==='' || !Number.isFinite(Number(v)) ? null : Number(v);
 const safeAmount = v => Number.isFinite(Number(v)) ? Math.max(0,Number(v)) : 0;
-export const WORKSPACE_VERSION = '2.9.0';
+export const WORKSPACE_VERSION = '2.9.2';
 export const QUEUES = Object.freeze([
   {key:'open',label:'처리할 제안'}, {key:'review',label:'3차 심사대기'},
   {key:'reviewed',label:'심사완료 · 상신 전'}, {key:'submitted',label:'대표결재 중'},
   {key:'closed',label:'승인·지급 완료'}, {key:'all',label:'전체 제안'},
 ]);
 export const RESULT_LABELS = Object.freeze({미심사:'미심사',채택:'채택',건수처리:'건수처리 인정',미채택:'미채택',보류:'보류',중복제안:'중복제안'});
-const validQueues=new Set([...QUEUES.map(x=>x.key),'waiting','check']);
+const validQueues=new Set([...QUEUES.map(x=>x.key),'waiting','check','archived']);
 export function currentKoreaYear(now=new Date()) {
   return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric'}).format(new Date(now));
 }
@@ -65,6 +65,12 @@ export function classifyWork(p,meta={}) {
   if(!id)return done('check','접수정보 확인','제안 ID가 없어 상세화면을 연결할 수 없습니다.',{route:'',primary:'자료 확인'});
   if(meta.errors?.has(id)||meta.stepsError)return done('check','결재 조회 확인','결재기록을 읽지 못했습니다. 새로고침 후 다시 확인하세요.');
   if(p.ceo_submission_status==='반려'||scoped.some(r=>r.status==='반려'&&steps.some(s=>str(s.id)===str(r.step_id)&&s.active!==false)))return done('waiting','반려 · 보완 필요','기존 결재의 반려 내용을 확인하세요.');
+  if(isLegacyOutcomeReview(p,records)) {
+    const legacyDecision=thirdReviewDecision(p,steps,records,true,'outcome');
+    if(!legacyDecision.allowed)return done('check','과거 제안 상태 확인',legacyDecision.reason);
+    if(thirdDone && savedResult && p.third_review_mode==='outcome' && p.status==='심사완료')return done('archived','과거건 결과 정리완료','전자결재 제외 · 관리자 결과심사 저장 완료. 대표상신 완료를 뜻하지 않습니다.',{primary:'결과 확인',canSubmit:false,amount:safeAmount(p.award_amount)});
+    return done('review','과거건 결과 확인','전자결재 제외 과거 제안 · 점수/승인기록을 만들지 않고 결과를 정정합니다.',{primary:'결과심사',mode:'outcome',amount:null});
+  }
   if(meta.candidateIds?.has(id))return done('reviewed','대표상신 가능','서버의 상신대기 목록에서 확인한 제안입니다.',{canSubmit:true,primary:'결과 확인',amount:safeAmount(p.award_amount)});
   if(thirdDone && savedResult)return done('reviewed','3차 심사완료',meta.candidateIds===null?'상신대상 조회 실패 · 일괄상신 화면에서 확인':'상신요건 확인 필요 · 임원/대표 결재 상태 확인',{canSubmit:meta.candidateIds===null?null:false,primary:'결과 확인'});
   if(!thirdDone && p.status==='심사완료'&&savedResult&&!isCandidate)return done('check','기존 심사기록 확인','3차 평가기록 없이 저장된 과거 결과입니다. 자동으로 다시 심사하지 않습니다.',{third:{text:'기존 결과',tone:'muted'},amount:null});
@@ -88,9 +94,9 @@ export function buildWorkspace(proposals=[],filters={},meta={},now=new Date()) {
   const needle=f.q.toLocaleLowerCase('ko').replace(/\s+/g,'');
   const source=annual.filter(p=>(!f.department||normalizeDepartmentName(p.department)===f.department) && (!needle||[p.proposal_no,p.title,p.proposer_name,p.department,normalizeDepartmentName(p.department)].some(x=>str(x).toLocaleLowerCase('ko').replace(/\s+/g,'').includes(needle))));
   const items=source.map(proposal=>({proposal,...classifyWork(proposal,meta)})).filter(row=>!f.result||row.result===f.result);
-  const counts={all:items.length,open:0,waiting:0,review:0,reviewed:0,submitted:0,closed:0,check:0,canSubmit:0};
-  for(const row of items){counts[row.group]++;if(!['submitted','closed'].includes(row.group))counts.open++;if(row.canSubmit===true)counts.canSubmit++;}
-  let filtered=items.filter(r=>f.queue==='all'||(f.queue==='open'?!['submitted','closed'].includes(r.group):r.group===f.queue));
+  const counts={all:items.length,open:0,waiting:0,review:0,reviewed:0,submitted:0,closed:0,check:0,archived:0,canSubmit:0};
+  for(const row of items){counts[row.group]++;if(!['submitted','closed','archived'].includes(row.group))counts.open++;if(row.canSubmit===true)counts.canSubmit++;}
+  let filtered=items.filter(r=>f.queue==='all'||(f.queue==='open'?!['submitted','closed','archived'].includes(r.group):r.group===f.queue));
   filtered.sort((a,b)=>{
     const ap=a.proposal,bp=b.proposal;
     const ad=proposalDate(ap)||'',bd=proposalDate(bp)||'';

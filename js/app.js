@@ -1,7 +1,7 @@
 import { reviewAwardPreview } from "./review/award-policy.js?v=2.9.1";
-import { createAdminWorkspace } from "./admin/workspace-ui.js?v=2.9.0";
-import { readWorkspaceFilters, proposalYear, currentKoreaYear, workspaceRoute, scopeSubmissionCandidates } from "./admin/workspace-core.js?v=2.9.0";
-import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, validateThirdReview } from "./review/third-review-policy.js?v=2.9.1";
+import { createAdminWorkspace } from "./admin/workspace-ui.js?v=2.9.2";
+import { readWorkspaceFilters, proposalYear, currentKoreaYear, workspaceRoute, scopeSubmissionCandidates } from "./admin/workspace-core.js?v=2.9.2";
+import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, validateThirdReview, isLegacyOutcomeReview } from "./review/third-review-policy.js?v=2.9.2";
 import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.js?v=2.8.0";
 import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score-correction-core.js?v=2.8.7";
@@ -36,7 +36,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.9.1";
-import { createStore } from "./services/store.js?v=2.9.1";
+import { createStore } from "./services/store.js?v=2.9.2";
 import {
   appendImageFiles,
   createImageSelection,
@@ -2885,7 +2885,7 @@ function renderAdminEdit(id) {
     </section>
 
     <form id="adminReviewForm" class="admin-review-form review-flow-form" data-id="${escapeHtml(proposal.id)}" data-expected-at="${escapeHtml(proposal.updated_at || '')}">
-      <section class="review-flow-summary"><div class="section-heading"><div><span class="eyebrow">EVALUATION FLOW · 2.9.1</span><h2>1차 → 2차 → 3차 평가</h2><p>앞선 평가를 확인한 뒤 점수심사 또는 결과심사를 선택하세요. 기존 1·2차 점수와 결재기록은 유지됩니다.</p></div></div>${renderEvaluationComparison(proposal)}</section>
+      <section class="review-flow-summary"><div class="section-heading"><div><span class="eyebrow">EVALUATION FLOW · 2.9.2</span><h2>1차 → 2차 → 3차 평가</h2><p>앞선 평가를 확인한 뒤 점수심사 또는 결과심사를 선택하세요. 기존 1·2차 점수와 결재기록은 유지됩니다.</p></div></div>${renderEvaluationComparison(proposal)}</section>
       <details class="review-content-box" open><summary>제안내용·사진 확인 <span>클릭하여 접기 / 펼치기</span></summary>
       <section class="admin-review-preview">
         <div class="review-preview-head">
@@ -2912,10 +2912,10 @@ function renderAdminEdit(id) {
       ${renderStoredEvaluationStage(proposal, 2, { allowCorrection: true, prefix: "admin" })}
       <section class="admin-review-fields review-flow-third" data-evaluation-stage="3" aria-label="3차 심사위원 평가">
         <section class="second-evaluation-section">
-          <div class="section-heading"><div><span class="eyebrow">STEP 03 · 3RD EVALUATION</span><h2>3차 심사위원 평가</h2><p>채택은 점수심사, 건수처리·미채택·보류·중복제안은 점수 없이 결과심사가 가능합니다. 임원 승인과 최종상신·지급 보호는 유지합니다.</p></div></div>
+          <div class="section-heading"><div><span class="eyebrow">STEP 03 · 3RD EVALUATION</span><h2>3차 심사위원 평가</h2><p>채택은 점수심사, 건수처리·미채택·보류·중복제안은 점수 없이 결과심사가 가능합니다. 전자결재 대상은 임원 승인이 필요합니다. 전자결재 제외 과거 건은 관리자 결과 정정이 가능하며, 상신·승인·지급 완료 보호는 유지합니다.</p></div></div>
           <div class="review-third-saved">저장된 3차 평가: <strong>${proposal.third_review_mode === "outcome" ? "결과심사 완료" : proposal.second_evaluation_total == null ? "미평가" : `${Number(proposal.second_evaluation_total)}점`}</strong> · 심사결과: <strong>${escapeHtml(proposal.review_result || "미심사")}</strong><span>아래 입력값은 저장 버튼을 눌러야 반영됩니다.</span></div>
           <label class="field">심사방식
-            <select name="review_mode" id="reviewMode"><option value="score" ${proposal.third_review_mode !== "outcome" && Number(proposal.team_leader_evaluation_total) >= 65 ? "selected" : ""}>점수심사 — 6개 항목 평가</option><option value="outcome" ${proposal.third_review_mode === "outcome" || Number(proposal.team_leader_evaluation_total) < 65 ? "selected" : ""}>결과심사 — 건수처리·미채택·보류 (점수 입력 없음)</option></select>
+            <select name="review_mode" id="reviewMode"><option value="score" ${proposal.approval_required !== false && proposal.third_review_mode !== "outcome" && Number(proposal.team_leader_evaluation_total) >= 65 ? "selected" : ""}>점수심사 — 6개 항목 평가</option><option value="outcome" ${proposal.approval_required === false || proposal.third_review_mode === "outcome" || Number(proposal.team_leader_evaluation_total) < 65 ? "selected" : ""}>결과심사 — 건수처리·미채택·보류 (점수 입력 없음)</option></select>
           </label>
           <p class="evaluation-lock-note" id="outcomeReviewNotice" hidden>결과심사는 점수를 새로 넣지 않습니다. 기존 점수는 보존하며, 건수처리는 2차 점수 기준 50~59점 5,000원 · 60~65점 10,000원 / 미채택·보류·중복제안 0원을 지급 예정액으로 저장합니다.</p>
           <fieldset id="secondEvaluationFieldset" class="evaluation-fieldset" disabled>
@@ -2993,9 +2993,15 @@ async function hydrateAdminApproval(proposal) {
   catch(error){ if(!form.isConnected)return; gate.textContent="결재기록 조회 실패: 점수를 임의로 저장하지 않았습니다. 화면을 다시 열어 확인하세요."; if(save)save.disabled=true;return; }
   if(!form.isConnected || $("#adminReviewForm")!==form)return;
   const target=form.querySelector("#adminApprovalProgress");
-  if(target)target.innerHTML=renderApprovalProgress(state.approvalSteps,records);
+  const legacyExcluded=isLegacyOutcomeReview(proposal,records);
+  if(target)target.innerHTML=legacyExcluded
+    ? `<div class="evaluation-lock-note"><strong>전자결재 제외 과거 제안</strong><br>당시 전자결재 적용 대상이 아니었으며 생성된 결재기록이 없습니다. 임원 승인을 새로 만들 필요가 없습니다.</div>`
+    : renderApprovalProgress(state.approvalSteps,records);
   const actionTarget=form.querySelector("#adminApprovalAction");
-  if(actionTarget){const permission=resolveApprovalPermission(proposal,state.approvalSteps,records,state.admin?.assignments||[]);actionTarget.innerHTML=renderApprovalAction(permission,proposal.id)+`<p class="field-help">전자결재 서명권한과 위의 3차 심사 저장권한은 별도입니다.</p>`;}
+  if(actionTarget){
+    if(legacyExcluded)actionTarget.innerHTML=`<p class="field-help">관리자는 위 결과심사에서 사유를 남기고 심사완료로 저장할 수 있습니다. 이 작업은 대표이사 상신·승인이나 지급 처리가 아닙니다.</p>`;
+    else {const permission=resolveApprovalPermission(proposal,state.approvalSteps,records,state.admin?.assignments||[]);actionTarget.innerHTML=renderApprovalAction(permission,proposal.id)+`<p class="field-help">전자결재 서명권한과 위의 3차 심사 저장권한은 별도입니다.</p>`;}
+  }
   form._reviewRecords=records;
   applyReviewMode(form,proposal,records);
 
@@ -3005,6 +3011,8 @@ function applyReviewMode(form, proposal, records=form?._reviewRecords) {
   if(!form || !proposal)return;
   const mode=form.elements.review_mode?.value||"score";
   const outcome=mode==="outcome";
+  const scoreOption=form.elements.review_mode?.querySelector('option[value="score"]');
+  if(scoreOption)scoreOption.disabled=proposal.approval_required===false;
   const decision=thirdReviewDecision(proposal,state.approvalSteps,records,state.admin?.isSystemAdmin===true,mode);
   const fieldset=form.querySelector("#secondEvaluationFieldset");
   if(fieldset){fieldset.hidden=outcome;fieldset.disabled=outcome||!decision.allowed;}
