@@ -1,3 +1,5 @@
+import { createAdminWorkspace } from "./admin/workspace-ui.js?v=2.9.0";
+import { readWorkspaceFilters, proposalYear, currentKoreaYear, workspaceRoute, scopeSubmissionCandidates } from "./admin/workspace-core.js?v=2.9.0";
 import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, validateThirdReview } from "./review/third-review-policy.js?v=2.8.9";
 import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.js?v=2.8.0";
@@ -576,6 +578,16 @@ const main = $("#app");
 const toast = $("#toast");
 const performancePage = createPerformancePage({root:main, store, navigate:go, notify:(message,error)=>showToast(message,error?"error":"success")});
 const questionSearch = createQuestionSearch({root:main, store});
+const adminWorkspace = createAdminWorkspace({
+  root:main,store,getState:()=>state,navigate:go,nav:()=>adminNav("proposals"),
+  notify:message=>showToast(message),
+  onRead:(rows,steps)=>{
+    const previous = new Map(state.proposals.map(p=>[String(p.id),p]));
+    state.proposals = rows.map(p=>({...previous.get(String(p.id)),...p}));
+    if (Array.isArray(steps)) state.approvalSteps = steps;
+  },
+});
+
 
 const operationsUI = createOperationsUI({root:main, repository:store.operations, getAdmin:()=>state.admin, adminHeader:()=>adminPageHeader("접수·공지 관리", "신규 접수 상태와 직원 공지를 한곳에서 관리합니다.", "operations"), notify:(message,error)=>showToast(message,error?"error":"success")});
 
@@ -984,6 +996,7 @@ function routeParts() {
 }
 
 function go(path) {
+  if (path === "admin" || path === "#admin") path = adminWorkspace.getReturnRoute();
   location.hash = path.startsWith("#") ? path : `#${path}`;
 }
 
@@ -1068,6 +1081,7 @@ function showApprovalLoginNotice() {
 }
 
 async function refreshData() {
+  adminWorkspace.invalidate();
   const [proposals, employees, approvalDepartments, departmentGoals, approvalSteps, admin, approverAssignments] = await Promise.all([
     store.getProposals(), store.getEmployees(), store.getApprovalDepartments().catch(() => []), store.getDepartmentGoals().catch(() => []), store.getApprovalSteps(true).catch(() => []), store.getAdminSession(), store.getApproverAssignments(false).catch(() => []),
   ]);
@@ -1092,11 +1106,13 @@ async function init() {
 }
 
 function render() {
+  adminWorkspace.suspend();
   authorPicker?.destroy(); authorPicker = null;
   questionSearch.suspend();
   operationsUI.syncChrome();
   const [route = "dashboard"] = routeParts();
   document.body.classList.toggle("print-route", route === "print" || route === "report");
+  document.body.classList.toggle("admin-route", route === "admin");
   setActiveNav(["detail", "edit", "print", "person"].includes(route) ? "list" : route === "report" ? "dashboard" : route);
   $("#modeBadge").textContent = store.mode === "demo" ? "데모 모드" : "Supabase 연결";
   $("#modeBadge").className = `mode-badge ${store.mode}`;
@@ -2242,15 +2258,23 @@ function adminNav(active = "proposals") {
   if (!state.admin?.isSystemAdmin) {
     return `<nav class="admin-subnav"><button class="${active === "inbox" ? "active" : ""}" data-route="admin/inbox">내 결재함${actionableApprovalCount() ? ` <span class="approval-inbox-badge inline">${actionableApprovalCount()}</span>` : ""}</button></nav>`;
   }
-  return `<nav class="admin-subnav">
-    <button class="${active === "proposals" ? "active" : ""}" data-route="admin">제안 심사</button>
-    <button class="${active === "inbox" ? "active" : ""}" data-route="admin/inbox">내 결재함${actionableApprovalCount() ? ` <span class="approval-inbox-badge inline">${actionableApprovalCount()}</span>` : ""}</button>
-    <button class="${active === "ceo-submit" ? "active" : ""}" data-route="admin/ceo-submit">대표이사 일괄상신</button>
-    <button class="${active === "operations" ? "active" : ""}" data-route="admin/operations">접수·공지 관리</button>
-    <button class="${active === "goals" ? "active" : ""}" data-route="admin/goals">부서 목표관리</button>
-    <button class="${active === "approvals" ? "active" : ""}" data-route="admin/approvals">전자결재 설정</button>
-    <button class="${active === "notifications" ? "active" : ""}" data-route="admin/notifications">메일알림</button>
-    <button class="${active === "audit" ? "active" : ""}" data-route="admin/audit">관리자 변경이력</button>
+  const year=readWorkspaceFilters(adminWorkspace.getReturnRoute()).year;
+  const adminList=adminWorkspace.getReturnRoute();
+  return `<nav class="admin-subnav admin-nav-v290" aria-label="관리자 업무 메뉴">
+    <div class="aw-nav-main">
+      <button class="${active === "proposals" ? "active" : ""}" data-route="${escapeHtml(adminList)}">제안 심사</button>
+      <button class="${active === "inbox" ? "active" : ""}" data-route="admin/inbox">내 결재함${actionableApprovalCount() ? ` <span class="approval-inbox-badge inline">${actionableApprovalCount()}</span>` : ""}</button>
+      <button class="${active === "ceo-submit" ? "active" : ""}" data-route="admin/ceo-submit?year=${escapeHtml(year)}">대표이사 상신</button>
+      <button class="${active === "operations" ? "active" : ""}" data-route="admin/operations">접수·공지</button>
+    </div>
+    <details class="${['goals','approvals','notifications','audit'].includes(active)?'is-active':''}"><summary>운영 설정</summary><div>
+      <button data-route="${escapeHtml(adminList)}&amp;tools=employees">직원명단 관리</button>
+      <button data-route="admin/goals">부서 목표관리</button>
+      <button data-route="admin/approvals">전자결재 설정</button>
+      <button data-route="admin/notifications">메일알림</button>
+      <button data-route="admin/audit">관리자 변경이력</button>
+      <button data-route="admin/password">비밀번호 변경</button>
+    </div></details>
   </nav>`;
 }
 
@@ -2377,23 +2401,37 @@ function ceoSelectedSummary(){
 
 async function renderCeoSubmissionQueue() {
   if (!state.admin?.isSystemAdmin) { void renderApproverInbox(); return; }
+  const requestedRoute=location.hash;
+  const ceoFilters=readWorkspaceFilters(location.hash);
+  const selectedYear=ceoFilters.year;
+  const makeYearbar=(allRows=[])=>{
+    const known=new Map(state.proposals.map(p=>[String(p.id),p]));
+    const years=[...new Set([currentKoreaYear(),...state.proposals.map(proposalYear),...allRows.map(r=>proposalYear(r.received_date?r:known.get(String(r.proposal_id))))])].filter(y=>y!=="unknown").sort().reverse();
+    return `<section class="aw-ceo-yearbar"><label>대표상신 대상 접수연도<select id="ceoQueueYear">${years.map(y=>`<option value="${escapeHtml(y)}" ${selectedYear===y?'selected':''}>${escapeHtml(y)}년</option>`).join('')}<option value="all" ${selectedYear==='all'?'selected':''}>전체 연도</option><option value="unknown" ${selectedYear==='unknown'?'selected':''}>접수일 미확인</option></select></label><p>선택한 접수연도의 건만 표시·선택합니다. 상신은 지급완료가 아닙니다.${[ceoFilters.q,ceoFilters.department,ceoFilters.result].some(Boolean)?`<br>추가조건: ${escapeHtml([ceoFilters.q,ceoFilters.department,ceoFilters.result].filter(Boolean).join(' · '))} <button class="button button-small button-ghost" data-route="admin/ceo-submit?year=${escapeHtml(selectedYear)}">추가조건 해제</button>`:''}</p></section>`;
+  };
+  let yearbar=makeYearbar();
   main.innerHTML = `${adminPageHeader("대표이사 일괄상신", "임원 승인과 관리자 심사가 모두 끝난 제안만 선택하여 대표이사에게 한꺼번에 상신합니다.", "ceo-submit")}<div class="loading-card"><div class="spinner"></div><p>대표이사 상신대기 제안을 불러오는 중입니다.</p></div>`;
   try {
-    const rows = await store.getCeoSubmissionCandidates();
+    const allRows = await store.getCeoSubmissionCandidates();
+    if(location.hash!==requestedRoute||!state.admin?.isSystemAdmin)return;
+    const rows=scopeSubmissionCandidates(allRows,state.proposals,ceoFilters);
+    yearbar=makeYearbar(allRows);
     const aiSummaries = rows.length ? await store.getAiAnalysisSummaries(rows.map((row) => row.proposal_id)).catch(() => []) : [];
     const aiSummaryMap = new Map((aiSummaries || []).map((row) => [String(row.proposal_id), row]));
+    if(location.hash!==requestedRoute||!state.admin?.isSystemAdmin)return;
     const content = rows.length ? `
       <section class="section">
-        <div class="section-heading"><div><span class="eyebrow">CEO BATCH SUBMISSION</span><h2>대표이사 상신대기 ${rows.length}건</h2><p>건수처리·미채택 0원도 함께 상신합니다. 체크한 제안만 대표이사 결재단계가 활성화되고 요약메일 1통이 발송됩니다.</p></div>
-          <div class="header-buttons"><label class="check-label"><input type="checkbox" id="ceoSubmitAll"> 전체 선택</label><button id="ceoSubmitSelectedButton" class="button button-primary" data-action="submit-selected-to-ceo" disabled>선택 0건 대표이사 상신</button></div>
+        <div class="section-heading"><div><span class="eyebrow">CEO BATCH SUBMISSION</span><h2>${selectedYear==='all'?'전체 연도':selectedYear==='unknown'?'접수일 미확인':`${escapeHtml(selectedYear)}년`} 대표상신 대기 ${rows.length}건</h2><p>건수처리·미채택 0원도 함께 상신합니다. 체크한 제안만 대표이사 결재단계가 활성화되고 요약메일 1통이 발송됩니다.</p></div>
+          <div class="header-buttons"><label class="check-label"><input type="checkbox" id="ceoSubmitAll"> 현재 목록 전체 선택</label><button id="ceoSubmitSelectedButton" class="button button-primary" data-action="submit-selected-to-ceo" disabled>선택 0건 대표이사 상신</button></div>
         </div>
         <p id="ceoSubmissionSummary" class="evaluation-lock-note">선택 0건 · 지급 예정액 합계 0원</p>
         <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>선택</th><th>접수번호</th><th>제안명</th><th>제안자</th><th>부서</th><th>심사결과</th><th>점수</th><th>포상금</th><th>제안자 예상 효과금액</th><th>심사 확정 효과금액</th><th>AI 참고</th><th>임원 승인일</th></tr></thead><tbody>
           ${rows.map((row) => `<tr><td><input class="ceo-submit-checkbox" type="checkbox" value="${escapeHtml(row.proposal_id)}" data-result="${escapeHtml(row.review_result)}" data-award="${Number(row.award_amount||0)}" aria-label="${escapeHtml(row.proposal_no)} 선택"></td><td><strong>${escapeHtml(row.proposal_no)}</strong></td><td>${escapeHtml(row.title)}</td><td>${escapeHtml(row.proposer_name)}</td><td>${escapeHtml(row.department)}</td><td>${statusBadge(row.review_result)}</td><td>${row.score == null ? "-" : `${Number(row.score)}점`}</td><td>${formatCurrency(row.award_amount)}</td><td>${formatCurrency(row.proposer_effect_amount)}</td><td><strong>${formatCurrency(row.effect_amount)}</strong></td><td>${(() => { const ai = aiSummaryMap.get(String(row.proposal_id)); return ai ? `<div class="ceo-ai-summary"><strong>${escapeHtml((ai.effect_types || []).join(", ") || "AI 분석")}</strong><span>${ai.ai_effect_amount == null ? "추가정보 필요" : formatCurrency(ai.ai_effect_amount)} · 신뢰도 ${escapeHtml(ai.confidence || "-")}</span></div>` : `<span class="ceo-ai-summary">미분석</span>`; })()}</td><td>${escapeHtml(row.executive_approved_at ? new Date(row.executive_approved_at).toLocaleString("ko-KR") : "-")}</td></tr>`).join("")}
         </tbody></table></div>
-      </section>` : `<div class="empty-state"><h2>대표이사 상신대기 제안이 없습니다.</h2><p>해당부서 임원 승인 + 관리자 심사완료가 모두 끝난 제안이 이곳에 표시됩니다.</p></div>`;
-    main.innerHTML = `${adminPageHeader("대표이사 일괄상신", "임원 승인과 관리자 심사가 모두 끝난 제안만 선택하여 대표이사에게 한꺼번에 상신합니다.", "ceo-submit")}${content}`;
+      </section>` : `<div class="empty-state"><h2>선택한 연도의 대표상신 대기 제안이 없습니다.</h2><p>해당부서 임원 승인 + 관리자 심사완료가 모두 끝난 제안이 이곳에 표시됩니다.</p></div>`;
+    main.innerHTML = `${adminPageHeader("대표이사 일괄상신", "임원 승인과 관리자 심사가 모두 끝난 제안만 선택하여 대표이사에게 한꺼번에 상신합니다.", "ceo-submit")}${yearbar}${content}`;
   } catch (error) {
+    if(location.hash!==requestedRoute||!state.admin?.isSystemAdmin)return;
     main.innerHTML = `${adminPageHeader("대표이사 일괄상신", "V2.3.15 SQL 적용 후 사용할 수 있습니다.", "ceo-submit")}<div class="empty-state"><h2>상신대기 목록을 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p></div>`;
   }
 }
@@ -2539,76 +2577,7 @@ function renderAdmin(action = "", id = "") {
   if (action === "notifications") { void renderAdminNotifications(); return; }
   if (action === "audit") { void renderAdminAudit(); return; }
 
-  const metrics = dashboardMetrics(state.proposals);
-  const proposals = filterProposals(state.proposals);
-  main.innerHTML = `
-    <section class="page-header">
-      <div><span class="eyebrow">ADMIN CONSOLE</span><h1>제안관리 관리자</h1><p>${escapeHtml(state.admin.displayName || state.admin.email)} 로그인 중 · 관리자 작업만 수정권한이 있습니다.</p></div>
-      <div class="header-buttons">
-        <button class="button button-ghost" data-action="export-csv">CSV 내보내기</button>
-        <button class="button button-secondary" data-action="logout-admin">로그아웃</button>
-      </div>
-    </section>
-    ${adminNav("proposals")}
-
-    <section class="metric-grid admin-metrics approval-admin-summary">
-      <div class="metric-card"><span class="metric-icon">✅</span><div><small>현재 결재대기</small><strong>${Number(state.approvalOverdueSummary.pending_total || 0)}건</strong></div></div>
-      <div class="metric-card"><span class="metric-icon">⚠️</span><div><small>결재 지연 3일+</small><strong>${Number(state.approvalOverdueSummary.overdue_3 || 0)}건</strong></div></div>
-      <div class="metric-card"><span class="metric-icon">🚨</span><div><small>장기 미결재 7일+</small><strong>${Number(state.approvalOverdueSummary.overdue_7 || 0)}건</strong></div></div>
-    </section>
-
-    <section class="metric-grid admin-metrics">
-      <div class="metric-card"><span class="metric-icon">💡</span><div><small>전체</small><strong>${metrics.total}</strong></div></div>
-      <div class="metric-card"><span class="metric-icon">🕒</span><div><small>심사 대기</small><strong>${metrics.pending}</strong></div></div>
-      <div class="metric-card"><span class="metric-icon">💰</span><div><small>포상금</small><strong class="metric-money">${formatCurrency(metrics.awardTotal)}</strong></div></div>
-      <div class="metric-card"><span class="metric-icon">📈</span><div><small>효과금액</small><strong class="metric-money">${formatCurrency(metrics.effectTotal)}</strong></div></div>
-    </section>
-
-    <section class="admin-layout">
-      <div class="admin-main">
-        <div class="section-heading"><div><span class="eyebrow">REVIEW QUEUE</span><h2>접수·심사 관리</h2></div></div>
-        <div class="admin-table-wrap">
-          <table class="admin-table">
-            <thead><tr><th>접수번호</th><th>제안명</th><th>제안자</th><th>심사상태</th><th>1차평가</th><th>결과</th><th>실시</th><th></th></tr></thead>
-            <tbody>
-              ${proposals.map((p) => `
-                <tr>
-                  <td><strong>${escapeHtml(p.proposal_no)}</strong><small>${escapeHtml(formatDate(p.received_date))}</small></td>
-                  <td><button class="table-title" data-action="detail" data-no="${escapeHtml(p.proposal_no)}">${escapeHtml(p.title)}</button></td>
-                  <td>${escapeHtml(p.proposer_name)}<small>${escapeHtml(p.department)}</small></td>
-                  <td>${statusBadge(p.status)}</td>
-                  <td>${p.first_evaluation_total == null ? (p.legacy_first_evaluation_exempt === true ? `<span class="evaluation-admin-state done">기존건 · 1차 면제</span>` : `<span class="evaluation-admin-state pending">미입력</span>`) : Number(p.first_evaluation_total) < FIRST_EVALUATION_MIN_PASS ? `<span class="evaluation-admin-state pending">기준 미달 · ${Number(p.first_evaluation_total)}점</span>` : `<span class="evaluation-admin-state done">완료 ${Number(p.first_evaluation_total)}점</span>`}</td>
-                  <td>${statusBadge(p.review_result)}</td>
-                  <td>${statusBadge(p.implementation_status)}</td>
-                  <td><button class="button button-small button-primary" data-route="admin/edit/${escapeHtml(p.id)}">3차 심사·관리</button> <button class="button button-small button-secondary" data-route="admin/score/${escapeHtml(p.id)}">1·2차 보완</button></td>
-                </tr>`).join("")}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <aside class="admin-side">
-        <section class="side-card">
-          <span class="eyebrow">EMPLOYEE MASTER</span>
-          <h2>직원명단 엑셀 업로드</h2>
-          <p>첫 번째 시트에서 ‘성명/이름/직원명’과 ‘부서/소속’ 열을 자동 인식합니다.</p>
-          <label class="upload-box compact-upload">
-            <input id="employeeFile" type="file" accept=".xlsx,.xls,.csv">
-            <span>직원명단 파일 선택</span>
-          </label>
-          <button class="button button-primary button-wide" data-action="import-employees">직원명단 반영</button>
-          <small>현재 활성 직원 ${state.employees.length}명</small>
-        </section>
-        ${store.mode === "demo" ? `
-        <section class="side-card danger-card">
-          <span class="eyebrow">DEMO RESET</span>
-          <h2>데모 데이터 초기화</h2>
-          <p>테스트로 등록한 제안과 직원명단을 최초 상태로 되돌립니다.</p>
-          <button class="button button-danger button-wide" data-action="reset-demo">초기화</button>
-        </section>` : ""}
-      </aside>
-    </section>
-  `;
+  void adminWorkspace.render();
 }
 
 // V2.7.4 — administrative text corrections, never review/approval changes.
@@ -3274,6 +3243,7 @@ document.addEventListener("click", async (event) => {
       $("#lightbox").close();
     } else if (action === "logout-admin") {
       await store.logoutAdmin();
+      adminWorkspace.resetSession();
       await refreshData();
       render();
       showToast("로그아웃되었습니다.");
@@ -3585,6 +3555,8 @@ document.addEventListener("submit", async (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  if(event.target.id === "ceoQueueYear") { go(`admin/ceo-submit?year=${encodeURIComponent(event.target.value)}`); return; }
+
   if(event.target.name==="review_mode" || (event.target.name==="review_result" && $("#adminReviewForm")?.elements?.review_mode?.value==="outcome")){
     const form=$("#adminReviewForm");const p=state.proposals.find(x=>x.id===form?.dataset.id);applyReviewMode(form,p);return;
   }
