@@ -1,5 +1,6 @@
+import { reviewAwardPreview } from "./award-policy.js?v=2.9.1";
 /** V2.8.7: shared presentation/test rules. The database repeats all authority checks. */
-export const REVIEW_VERSION = '2.8.9';
+export const REVIEW_VERSION = '2.9.1';
 export const REVIEW_KEYS = Object.freeze(['originality','effort','feasibility','applicability','continuity','tangible_effect']);
 export const FINAL_RESULTS = Object.freeze(['채택','미채택','보류','중복제안','건수처리']);
 export const hasThirdReview = p => p?.second_evaluation_total != null || !!p?.second_evaluation_completed_at;
@@ -46,8 +47,9 @@ export function validateThirdReview(evaluation,patch,options={}) {
   if(!options.expectedUpdatedAt)throw new Error('최신 자료를 다시 불러온 후 저장하세요.');
   const amount=Number(patch.effect_amount??0);if(!Number.isSafeInteger(amount)||amount<0)throw new Error('효과금액을 0 이상의 정수로 입력하세요.');
   const result=patch.review_result;
-  const award=result==='건수처리'?{grade:'건수처리',amount:5000}:result==='채택'?
-    total>=90?{grade:'A',amount:100000}:total>=80?{grade:'B',amount:50000}:total>=70?{grade:'C',amount:30000}:total>=60?{grade:'D',amount:10000}:{grade:'',amount:0}:{grade:'',amount:0};
+  const preview=reviewAwardPreview(options.proposal||{},mode,result,total);
+  if(!preview.ready)throw new Error(preview.message);
+  const award=preview.award;
   if(patch.payment_status==='완료')throw new Error('심사 저장은 지급 처리가 아닙니다. 대표이사 승인 후 별도 지급 처리하세요.');
-  return {total,reason,award,mode};
+  return {total,reason,award,mode,awardBasis:preview.basis,awardBasisScore:preview.basisScore};
 }

@@ -1,6 +1,7 @@
+import { reviewAwardPreview } from "./review/award-policy.js?v=2.9.1";
 import { createAdminWorkspace } from "./admin/workspace-ui.js?v=2.9.0";
 import { readWorkspaceFilters, proposalYear, currentKoreaYear, workspaceRoute, scopeSubmissionCandidates } from "./admin/workspace-core.js?v=2.9.0";
-import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, validateThirdReview } from "./review/third-review-policy.js?v=2.8.9";
+import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, validateThirdReview } from "./review/third-review-policy.js?v=2.9.1";
 import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.js?v=2.8.0";
 import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score-correction-core.js?v=2.8.7";
@@ -34,8 +35,8 @@ import {
   resolveApprovalPermission,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=2.8.7";
-import { createStore } from "./services/store.js?v=2.8.9";
+} from "./core.js?v=2.9.1";
+import { createStore } from "./services/store.js?v=2.9.1";
 import {
   appendImageFiles,
   createImageSelection,
@@ -2884,7 +2885,7 @@ function renderAdminEdit(id) {
     </section>
 
     <form id="adminReviewForm" class="admin-review-form review-flow-form" data-id="${escapeHtml(proposal.id)}" data-expected-at="${escapeHtml(proposal.updated_at || '')}">
-      <section class="review-flow-summary"><div class="section-heading"><div><span class="eyebrow">EVALUATION FLOW · 2.8.9</span><h2>1차 → 2차 → 3차 평가</h2><p>앞선 평가를 확인한 뒤 점수심사 또는 결과심사를 선택하세요. 기존 1·2차 점수와 결재기록은 유지됩니다.</p></div></div>${renderEvaluationComparison(proposal)}</section>
+      <section class="review-flow-summary"><div class="section-heading"><div><span class="eyebrow">EVALUATION FLOW · 2.9.1</span><h2>1차 → 2차 → 3차 평가</h2><p>앞선 평가를 확인한 뒤 점수심사 또는 결과심사를 선택하세요. 기존 1·2차 점수와 결재기록은 유지됩니다.</p></div></div>${renderEvaluationComparison(proposal)}</section>
       <details class="review-content-box" open><summary>제안내용·사진 확인 <span>클릭하여 접기 / 펼치기</span></summary>
       <section class="admin-review-preview">
         <div class="review-preview-head">
@@ -2916,7 +2917,7 @@ function renderAdminEdit(id) {
           <label class="field">심사방식
             <select name="review_mode" id="reviewMode"><option value="score" ${proposal.third_review_mode !== "outcome" && Number(proposal.team_leader_evaluation_total) >= 65 ? "selected" : ""}>점수심사 — 6개 항목 평가</option><option value="outcome" ${proposal.third_review_mode === "outcome" || Number(proposal.team_leader_evaluation_total) < 65 ? "selected" : ""}>결과심사 — 건수처리·미채택·보류 (점수 입력 없음)</option></select>
           </label>
-          <p class="evaluation-lock-note" id="outcomeReviewNotice" hidden>결과심사는 점수를 새로 넣지 않습니다. 기존 점수는 보존하며, 건수처리 5,000원 / 미채택·보류·중복제안 0원을 지급 예정액으로 저장합니다.</p>
+          <p class="evaluation-lock-note" id="outcomeReviewNotice" hidden>결과심사는 점수를 새로 넣지 않습니다. 기존 점수는 보존하며, 건수처리는 2차 점수 기준 50~59점 5,000원 · 60~65점 10,000원 / 미채택·보류·중복제안 0원을 지급 예정액으로 저장합니다.</p>
           <fieldset id="secondEvaluationFieldset" class="evaluation-fieldset" disabled>
             ${renderEvaluationTable("second", proposal.second_evaluation || {}, { title:"3차 심사위원 평가표", subtitle:"심사위원회 공동평가 · 입력 및 수정" })}
           </fieldset>
@@ -2960,7 +2961,9 @@ function renderAdminEdit(id) {
         </label>
         <div class="award-preview" id="awardPreview">
           <small>대표이사 승인 전 지급 예정액</small>
-          <strong>${(() => { const award = calculateAward(proposal.second_evaluation_total ?? proposal.score, proposal.category, proposal.review_result); return `${escapeHtml(award.grade || "-")} · ${formatCurrency(award.amount)}`; })()}</strong>
+          <strong>산정기준 확인 중</strong>
+          <small id="awardBasis" role="status" aria-live="polite"></small>
+          <small>입력 중 계산액입니다. 저장 후 목록·대표상신에 반영됩니다.</small>
         </div>
         <section class="admin-approval-box">
           <div class="section-heading"><div><span class="eyebrow">APPROVAL</span><h2>전자결재 처리</h2></div></div>
@@ -2974,6 +2977,7 @@ function renderAdminEdit(id) {
       </section>
     </form>
   `;
+  refreshReviewAwardPreview($("#adminReviewForm"),proposal);
   hydrateAdminApproval(proposal).catch((error) => console.warn("전자결재 현황을 불러오지 못했습니다.", error));
   hydrateAiEffectAnalysis(proposal, true).catch((error) => console.warn("AI 효과분석을 불러오지 못했습니다.", error));
 }
@@ -3013,8 +3017,29 @@ function applyReviewMode(form, proposal, records=form?._reviewRecords) {
   const values={};for(const item of EVALUATION_CRITERIA)values[item.key]=Number(form.elements[`second_eval_${item.key}`]?.value||0);
   const score=outcome?null:calculateEvaluationTotal(values);
   if(form.elements.score_display)form.elements.score_display.value=outcome?"결과심사 · 점수 신규 입력 없음":`${score}점`;
-  const award=calculateAward(score,proposal.category,select?.value);
-  const amount=form.querySelector("#awardPreview strong");if(amount)amount.textContent=`${award.grade||"-"} · ${formatCurrency(award.amount)}`;
+  refreshReviewAwardPreview(form,proposal);
+}
+
+function refreshReviewAwardPreview(form,proposal) {
+  if(!form || !proposal)return;
+  const amount=form.querySelector("#awardPreview strong"),basis=form.querySelector("#awardBasis");
+  if(!amount)return;
+  if(["상신완료","승인완료"].includes(proposal.ceo_submission_status)||proposal.payment_status==="완료") {
+    amount.textContent=formatCurrency(proposal.award_amount||0);
+    if(basis)basis.textContent="이미 상신·승인·지급된 저장금액입니다. 자동 변경하지 않습니다.";
+    return;
+  }
+  const mode=form.elements.review_mode?.value||"score";
+  const values={};let complete=true;
+  for(const item of EVALUATION_CRITERIA) {
+    const raw=form.elements[`second_eval_${item.key}`]?.value;
+    const n=Number(raw);if(raw==null||String(raw).trim()===""||!Number.isInteger(n)||n<1||n>10)complete=false;
+    values[item.key]=n;
+  }
+  const total=mode==="score"&&complete?calculateEvaluationTotal(values):null;
+  const preview=reviewAwardPreview(proposal,mode,form.elements.review_result?.value,total);
+  amount.textContent=preview.ready?formatCurrency(preview.award.amount):"미확정";
+  if(basis)basis.textContent=preview.message;
 }
 
 function buildProposalPayload(form) {
@@ -3532,9 +3557,9 @@ document.addEventListener("submit", async (event) => {
       const patch={review_result:data.get("review_result"),implementing_department:data.get("implementing_department")?.trim(),
         implementation_status:data.get("implementation_status"),implemented_date:data.get("implemented_date")||null,
         payment_status:data.get("payment_status"),effect_amount:Number(data.get("effect_amount")||0),review_comment:data.get("review_comment")?.trim()};
-      const options={mode,expectedUpdatedAt:form.dataset.expectedAt,reason:String(data.get("review_reason")||"").trim()};
+      const options={mode,proposal,expectedUpdatedAt:form.dataset.expectedAt,reason:String(data.get("review_reason")||"").trim()};
       const checked=validateThirdReview(evaluation,patch,options);
-      if(!confirm(`3차 ${mode==="outcome"?"결과심사":`${checked.total}점`} · ${patch.review_result} · 지급 예정액 ${formatCurrency(checked.award.amount)}으로 ${decision.editing?"수정":"저장"}하시겠습니까?\n1·2차 점수와 전자결재 기록은 유지됩니다.`))return;
+      if(!confirm(`3차 ${mode==="outcome"?"결과심사":`${checked.total}점`} · ${patch.review_result} · 지급 예정액 ${formatCurrency(checked.award.amount)} (${checked.awardBasis}${checked.awardBasisScore==null?"":` ${checked.awardBasisScore}점`})으로 ${decision.editing?"수정":"저장"}하시겠습니까?\n1·2차 점수와 전자결재 기록은 유지됩니다.`))return;
       const button=form.querySelector("[data-review-save]");let saved=false;
       form.dataset.submitting="true";if(button)button.disabled=true;
       try {
@@ -3555,6 +3580,10 @@ document.addEventListener("submit", async (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  if(event.target.name==="review_result") {
+    const f=$("#adminReviewForm");const p=state.proposals.find(x=>x.id===f?.dataset.id);
+    refreshReviewAwardPreview(f,p);
+  }
   if(event.target.id === "ceoQueueYear") { go(`admin/ceo-submit?year=${encodeURIComponent(event.target.value)}`); return; }
 
   if(event.target.name==="review_mode" || (event.target.name==="review_result" && $("#adminReviewForm")?.elements?.review_mode?.value==="outcome")){
@@ -3795,8 +3824,7 @@ document.addEventListener("input", (event) => {
       const proposal = state.proposals.find((p) => p.id === form?.dataset.id);
       const values = {}; EVALUATION_CRITERIA.forEach((item) => { values[item.key] = Number(form?.elements?.[`second_eval_${item.key}`]?.value || 0); });
       const total = calculateEvaluationTotal(values);
-      const award = calculateAward(total, proposal?.category, form?.elements?.review_result?.value);
-      $("#awardPreview strong").textContent = `${award.grade || "-"} · ${formatCurrency(award.amount)}`;
+      refreshReviewAwardPreview(form,proposal);
       const scoreDisplay = form?.elements?.score_display; if (scoreDisplay) scoreDisplay.value = `${total}점`;
     }
   }
@@ -3804,8 +3832,7 @@ document.addEventListener("input", (event) => {
     const form = $("#adminReviewForm");
     const proposal = state.proposals.find((p) => p.id === form?.dataset.id);
     const values = {}; EVALUATION_CRITERIA.forEach((item) => { values[item.key] = Number(form?.elements?.[`second_eval_${item.key}`]?.value || 0); });
-    const award = calculateAward(form?.elements?.review_mode?.value==="outcome"?null:calculateEvaluationTotal(values), proposal?.category, event.target.value);
-    $("#awardPreview strong").textContent = `${award.grade || "-"} · ${formatCurrency(award.amount)}`;
+    refreshReviewAwardPreview(form,proposal);
   }
 });
 

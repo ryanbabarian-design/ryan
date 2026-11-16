@@ -1,4 +1,5 @@
-import { thirdReviewDecision, validateThirdReview } from "../review/third-review-policy.js?v=2.8.9";
+import { reviewAwardPreview } from "../review/award-policy.js?v=2.9.1";
+import { thirdReviewDecision, validateThirdReview } from "../review/third-review-policy.js?v=2.9.1";
 import { createOperationsRepository } from "../operations/operations-store.js?v=2.7.1";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "../oneoff/q26043-core.js?v=2.8.0";
 import { validateAdminScoreCorrection, ADMIN_EVAL_KEYS } from "../admin/score-correction-core.js?v=2.8.1";
@@ -578,7 +579,7 @@ class DemoStore {
     const decision = thirdReviewDecision(original, await this.getApprovalSteps(), records, admin?.isSystemAdmin === true, options.mode||"score");
     if (!decision.allowed) throw new Error(decision.reason);
     if (original.updated_at !== options.expectedUpdatedAt) throw new Error("다른 사용자가 변경했습니다. 화면을 다시 열어 확인하세요.");
-    const checked = validateThirdReview(evaluation, reviewPatch, options);
+    const checked = validateThirdReview(evaluation, reviewPatch, {...options,proposal:original});
     const allowed = ["review_result","implementing_department","implementation_status","implemented_date","payment_status","effect_amount","review_comment"];
     if (Object.keys(reviewPatch).some(k=>!allowed.includes(k))) throw new Error("수정할 수 없는 심사 항목입니다.");
     const saved = normalizeProposal({...original,...reviewPatch,
@@ -830,6 +831,10 @@ class DemoStore {
     const candidates = await this.getCeoSubmissionCandidates();
     if (selected.some((id) => !candidates.some((row) => row.proposal_id === id))) throw new Error("상신 조건을 충족하지 않는 제안이 있습니다.");
     const proposals = await this.getProposals();
+    for(const p of proposals.filter(row=>selected.includes(row.id))) {
+      const expected=reviewAwardPreview(p,p.third_review_mode||"score",p.review_result,p.second_evaluation_total);
+      if(!expected.ready||Number(p.award_amount)!==expected.award.amount)throw new Error(`${p.proposal_no}: 저장 포상금과 기준금액이 다릅니다. 3차 화면에서 확인 후 다시 저장하세요.`);
+    }
     const records = JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY) || "[]");
     const steps = await this.getApprovalSteps();
     const ceoStep = steps.find((step) => step.role_name === "대표이사");
@@ -1196,7 +1201,7 @@ class SupabaseStore {
 
   async saveSecondEvaluation(id, evaluation, reviewPatch, options = {}) {
     validateThirdReview(evaluation, reviewPatch, options);
-    const { data, error } = await this.client.rpc("v289_save_third_review", {
+    const { data, error } = await this.client.rpc("v291_save_third_review", {
       p_mode:options.mode||"score",
       p_proposal_id:id,p_evaluation:evaluation,p_review_patch:reviewPatch,
       p_expected_updated_at:options.expectedUpdatedAt,p_reason:options.reason,
