@@ -24,3 +24,14 @@
  .evaluation-correction-workspace .admin-review-actions { flex-direction:column; align-items:stretch; }
  .evaluation-correction-workspace .admin-review-actions>div { display:flex; justify-content:flex-end; }
 }
+
+/* V2.9.9: visible, safe path for legacy adoption without rewriting approval history. */
+.legacy-adoption-path {display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;margin:15px 0;padding:18px;border:1px solid #9dc9c2;border-left:4px solid #0c8176;border-radius:12px;background:#f0faf8;color:#173c38}
+.legacy-adoption-path>div{flex:1 1 350px;min-width:0}
+.legacy-adoption-path .legacy-adoption-kicker{display:block;font-size:12px;font-weight:800;color:#08665d;letter-spacing:.035em;margin-bottom:7px}
+.legacy-adoption-path strong{display:block;font-size:16px;color:#102d2a;margin-bottom:7px}
+.legacy-adoption-path p{line-height:1.65;margin:5px 0;font-size:13px}
+.legacy-adoption-path .legacy-adoption-meta{color:#415b58;margin-top:10px}
+.legacy-adoption-path button{flex:0 0 auto;white-space:nowrap}
+.legacy-adoption-alert{background:#fff6ea!important;color:#7f3904!important;border-color:#efc18e!important}
+@media(max-width:640px){.legacy-adoption-path{padding:15px}.legacy-adoption-path button{width:100%;white-space:normal}}
