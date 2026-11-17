@@ -1,5 +1,5 @@
-import { buildCeoRows, filterCeoRows, ceoSelection, assertCeoUnchanged, ceoConfirmation } from "./admin/ceo-inbox-core.js?v=2.9.6";
-import { renderCeoInbox } from "./admin/ceo-inbox-ui.js?v=2.9.6";
+import { buildCeoRows, filterCeoRows, ceoSelection, assertCeoUnchanged, ceoConfirmation } from "./admin/ceo-inbox-core.js?v=2.9.7";
+import { renderCeoInbox } from "./admin/ceo-inbox-ui.js?v=2.9.7";
 import { fetchAllPages } from "./reports/report-source.js?v=2.9.6";
 import { mountLegacyScoreEditor } from "./review/legacy-score-ui.js?v=2.9.5";
 import { hasLegacyScore } from "./review/legacy-score-policy.js?v=2.9.5";

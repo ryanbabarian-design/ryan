@@ -12,7 +12,7 @@ export function buildCeoRows(inbox=[],proposals=[]) {
   const missing=!p||cash===null||!resultKnown;
   const entered=text(p?.received_date||r.received_date).slice(0,10);
   const direct=Number(p?.legacy_score_revision||0)>0||p?.third_review_mode==='legacy';
-  rows.push({id:text(r.proposal_id),no:text(p?.proposal_no||r.proposal_no),title:text(p?.title||r.title),name:text(p?.proposer_name||r.proposer_name),department:text(p?.department||r.department),date:entered,year:/^\d{4}-\d{2}-\d{2}$/.test(entered)?entered.slice(0,4):'unknown',result:resultKnown?result:'확인 필요',amount:cash,score:p?.third_review_mode==='outcome'?null:score(p?.score),scoreLabel:p?.third_review_mode==='outcome'?'점수 없이 결과심사':direct?'기존 심사':'3차 심사',team:score(p?.team_leader_evaluation_total),updatedAt:text(p?.updated_at),approval:text(r.approval_status||r.status||'대기'),selectable:r.can_act===true&&!missing,missing,reason:missing?'심사결과·금액 원자료를 확인하세요.':text(r.block_reason),pendingDays:Math.max(0,Number(r.pending_days)||0),submittedAt:text(r.actionable_at||p?.ceo_submitted_at),actedAt:text(r.acted_at),effect:amount(p?.effect_amount)});
+  rows.push({id:text(r.proposal_id),no:text(p?.proposal_no||r.proposal_no),title:text(p?.title||r.title),name:text(p?.proposer_name||r.proposer_name),department:text(p?.department||r.department),date:entered,year:/^\d{4}-\d{2}-\d{2}$/.test(entered)?entered.slice(0,4):'unknown',result:resultKnown?result:'확인 필요',amount:cash,score:p?.third_review_mode==='outcome'?null:score(p?.score),scoreLabel:p?.third_review_mode==='outcome'?'점수 없이 결과심사':direct?'기존 심사':'3차 심사',first:score(p?.first_evaluation_total),firstExempt:p?.legacy_first_evaluation_exempt===true,team:score(p?.team_leader_evaluation_total),updatedAt:text(p?.updated_at),approval:text(r.approval_status||r.status||'대기'),selectable:r.can_act===true&&!missing,missing,reason:missing?'심사결과·금액 원자료를 확인하세요.':text(r.block_reason),pendingDays:Math.max(0,Number(r.pending_days)||0),submittedAt:text(r.actionable_at||p?.ceo_submitted_at),actedAt:text(r.acted_at),effect:amount(p?.effect_amount)});
  }
  return rows;
 }
@@ -29,7 +29,7 @@ export function ceoSelection(rows,ids=[]) {
 }
 export function assertCeoUnchanged(before,after,ids){
  const old=ceoSelection(before,ids),fresh=ceoSelection(after,ids);
- for(let i=0;i<old.rows.length;i++)for(const k of ['result','amount','score','updatedAt'])if(old.rows[i][k]!==fresh.rows[i][k])throw new Error('선택한 제안의 심사결과 또는 금액이 변경되었습니다. 새로 조회한 내용을 확인하고 다시 선택하세요.');
+ for(let i=0;i<old.rows.length;i++)for(const k of ['result','amount','first','firstExempt','team','score','scoreLabel','updatedAt'])if(old.rows[i][k]!==fresh.rows[i][k])throw new Error('선택한 제안의 평가점수·심사결과 또는 금액이 변경되었습니다. 새로 조회한 내용을 확인하고 다시 선택하세요.');
  return fresh;
 }
 export function ceoConfirmation(selection){
