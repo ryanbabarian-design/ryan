@@ -1,0 +1,17 @@
+/* V2.9.14: evaluator identities; no global input, authorization or approval changes. */
+.ceo-workspace .ceo-table{min-width:1260px}
+.ceo-workspace .ceo-table .ceo-title{width:24%;min-width:230px}
+.ceo-workspace .ceo-table th.ceo-stage,.ceo-workspace .ceo-table td.ceo-stage{min-width:112px;white-space:normal}
+.ceo-workspace .ceo-table [data-ceo-stage="third"]{min-width:190px;max-width:270px}
+.ceo-evaluator{margin-top:7px;font-size:12px;line-height:1.6;color:#304b66;white-space:normal;overflow-wrap:anywhere;font-weight:600}
+.ceo-evaluator>span{display:block}.ceo-workspace .ceo-table .ceo-evaluator small,.ceo-evaluator small{display:block;font-size:11px;font-weight:400;line-height:1.5;color:#61738a;margin-top:3px}
+.ceo-evaluator .ceo-inputter{border-top:1px solid #e3eaf0;padding-top:4px;margin-top:6px;color:#718196}
+.ceo-committee-confirmed>span{color:#067765}.ceo-committee-error>span,.ceo-committee-reconfirm>span{color:#a2471b}
+.ceo-committee-unassigned>span,.ceo-committee-assigned>span{color:#815e28}
+.ceo-evaluator-detail{padding:16px;margin:18px 0;border:1px solid #c9dce3;border-radius:10px;background:#f5fafb}
+.ceo-evaluator-detail h2{font-size:16px!important;margin:0 0 12px!important}.ceo-evaluator-detail h3{font-size:12px;margin:0;color:#526b82}
+.ceo-evaluator-grid{display:grid;grid-template-columns:1fr 1fr 1.4fr;gap:14px}.ceo-evaluator-grid>div{min-width:0}
+.ceo-evaluator-detail>p{font-size:11px!important;line-height:1.6;color:#607286!important;margin:12px 0 0!important;white-space:normal!important}
+.ceo-workspace .ceo-footnote [data-ceo-reviewers-refresh]{margin:3px 0 8px}
+@media(max-width:640px){.ceo-evaluator-grid{grid-template-columns:1fr}.ceo-evaluator-grid>div+div{border-top:1px solid #dce7eb;padding-top:10px}.ceo-evaluator-detail{padding:12px}}
+@media print{[data-ceo-reviewers-refresh]{display:none!important}.ceo-evaluator-detail{break-inside:avoid;background:white}}
