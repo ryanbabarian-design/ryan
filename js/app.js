@@ -2953,6 +2953,15 @@ function renderThirdReviewFields(proposal, { correction = false } = {}) {
           <label class="field">심사방식
             <select name="review_mode" id="reviewMode"><option value="score" ${defaultThirdReviewMode(proposal) === "score" ? "selected" : ""}>점수심사 — 3차 점수 입력·수정</option><option value="outcome" ${defaultThirdReviewMode(proposal) === "outcome" ? "selected" : ""}>결과심사 — 결과만 수정 (점수 입력 없음)</option></select>
           </label>
+          ${proposal.approval_required === false && proposal.payment_status !== "완료" ? `<aside class="legacy-adoption-path" aria-label="기존 심사 건 채택 변경 안내">
+            <div><span class="legacy-adoption-kicker">기존 심사 건 · 채택 변경</span>
+              <strong>‘채택’은 기존 확정 심사 총점 등록 화면에서 처리합니다.</strong>
+              <p>이 건은 전자결재 제외 과거 제안입니다. 결과심사에서는 채택 점수·포상금을 확정할 수 없습니다. 실제 기존 평가표의 <b>확정 총점</b>과 근거를 확인한 뒤, 별도 등록 화면에서 ‘채택’을 저장하고 대표이사 상신 목록으로 이어가세요.</p>
+              <p class="legacy-adoption-meta">현재 결과: <b>${escapeHtml(proposal.review_result || "미심사")}</b> · 저장된 기존 총점: <b>${proposal.score == null ? "미등록" : `${Number(proposal.score)}점 (원본 확인 필요)`}</b></p>
+            </div>
+            <button type="button" class="button button-primary" data-route="admin/legacy-score/${escapeHtml(proposal.id)}">기존 심사 채택 변경하기</button>
+          </aside>` : ""}
+          <p class="evaluation-lock-note legacy-adoption-alert" id="legacyAdoptionHint" role="status" hidden>기존 과거 제안의 ‘채택’은 이 3차 결과심사 저장 버튼으로 저장되지 않습니다. 위 ‘기존 심사 채택 변경하기’에서 실제 확정 총점·근거를 등록해 주세요.</p>
           <p class="evaluation-lock-note" id="outcomeReviewNotice" hidden>결과심사는 점수를 새로 넣지 않습니다. 기존 점수는 보존하며, 건수처리는 2차 점수 기준 50~59점 5,000원 · 60~65점 10,000원 / 미채택·보류·중복제안 0원을 지급 예정액으로 저장합니다.</p>
           <fieldset id="secondEvaluationFieldset" class="evaluation-fieldset" disabled>
             ${renderEvaluationTable("second", proposal.second_evaluation || {}, { title:"3차 심사위원 평가표", subtitle:"심사위원회 공동평가 · 입력 및 수정" })}
@@ -3142,9 +3151,21 @@ function applyReviewMode(form, proposal, records=form?._reviewRecords) {
   if(fieldset){fieldset.hidden=outcome;fieldset.disabled=outcome||!decision.allowed;}
   const notice=form.querySelector("#outcomeReviewNotice");if(notice)notice.hidden=!outcome;
   const select=form.elements.review_result;
-  if(select){for(const option of select.options)option.disabled=outcome&&option.value==="채택";if(outcome&&select.value==="채택")select.value="미심사";}
-  const gate=form.querySelector("#secondEvaluationGateMessage");if(gate){gate.textContent=decision.reason;gate.classList.toggle("evaluation-ready-note",decision.allowed);}
-  const save=form.querySelector("[data-review-save]");if(save){save.disabled=!decision.allowed;save.textContent=decision.editing?"3차 심사 수정 저장":"3차 심사 저장";}
+  const isLegacy=proposal.approval_required===false;
+  if(select){
+    // Never silently change an existing saved result from 채택 to 미심사.
+    // Legacy adoption is handled by the dedicated verified-total workflow.
+    for(const option of select.options)option.disabled=outcome&&option.value==="채택"&&!isLegacy;
+  }
+  const needsDedicatedAdoption=outcome&&isLegacy&&select?.value==="채택";
+  const hint=form.querySelector("#legacyAdoptionHint");if(hint)hint.hidden=!needsDedicatedAdoption;
+  const gate=form.querySelector("#secondEvaluationGateMessage");if(gate){
+    gate.textContent=needsDedicatedAdoption
+      ? "기존 과거 건의 채택은 ‘기존 심사 채택 변경하기’에서 원본 확정 총점으로 처리하세요. 여기서 채택을 임의 저장하지 않습니다."
+      : decision.reason;
+    gate.classList.toggle("evaluation-ready-note",decision.allowed&&!needsDedicatedAdoption);
+  }
+  const save=form.querySelector("[data-review-save]");if(save){save.disabled=!decision.allowed||needsDedicatedAdoption;save.textContent=decision.editing?"3차 심사 수정 저장":"3차 심사 저장";}
   const total=outcome?null:updateEvaluationTotalFromForm(form,"second");
   const values={};for(const item of EVALUATION_CRITERIA)values[item.key]=Number(form.elements[`second_eval_${item.key}`]?.value||0);
   const score=outcome?null:calculateEvaluationTotal(values);
@@ -3700,6 +3721,9 @@ document.addEventListener("submit", async (event) => {
       const context=await store.getReviewApprovalContext(proposal.id);
       const records=context.records;
       const mode=data.get("review_mode")||"score";
+      if(mode==="outcome" && proposal.approval_required===false && data.get("review_result")==="채택") {
+        throw new Error("기존 과거 제안의 채택은 위 ‘기존 심사 채택 변경하기’에서 실제 확정 총점과 근거로 저장하세요. 3차 결과심사는 채택 저장용이 아닙니다.");
+      }
       const decision=thirdReviewDecision(proposal,state.approvalSteps,records,state.admin?.isSystemAdmin===true,mode,context);
       if(!decision.allowed)throw new Error(decision.reason);
       const evaluation=mode==="outcome"?null:collectEvaluationFromForm(form,"second");
