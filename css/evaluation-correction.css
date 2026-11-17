@@ -1,0 +1,26 @@
+/* V2.9.8: unified editor; do not alter public, CEO or printing layouts. */
+.evaluation-correction-workspace { max-width: 1160px; margin: 0 auto; }
+.evaluation-correction-workspace .admin-review-form { width:100%; max-width:none !important; }
+.evaluation-correction-workspace .admin-review-preview { box-sizing:border-box; min-width:0; }
+.evaluation-correction-workspace .correction-current-state { margin-bottom:18px; }
+.evaluation-correction-workspace .correction-current-state h2 { margin-top:0; }
+.correction-stage-nav { display:flex; gap:8px; padding:12px; margin:16px 0; border:1px solid #dbe3ed; border-radius:14px; background:#fff; position:sticky; top:76px; z-index:10; box-shadow:0 3px 12px rgba(15,32,52,.05); }
+.correction-stage-nav button { flex:1; border:1px solid #dbe3ed; border-radius:9px; background:#f6f8fb; color:#172b44; padding:12px 10px; font:inherit; font-weight:700; cursor:pointer; }
+.correction-stage-nav .primary-stage { color:#fff; background:#12283f; border-color:#12283f; }
+.correction-stage-nav button:focus-visible { outline:3px solid #58b5ba; outline-offset:3px; }
+.evaluation-correction-workspace #firstCorrectionStage, .evaluation-correction-workspace #teamCorrectionStage, .evaluation-correction-workspace #thirdCorrectionStage { scroll-margin-top:158px; }
+.evaluation-correction-workspace .form-submit-bar { position:static; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; padding:16px 0 0; box-shadow:none; border:0; }
+.evaluation-correction-workspace .review-flow-third { margin-top:22px; border-top:4px solid #0b8d80; }
+.evaluation-correction-workspace .correction-special-stage { margin-top:22px; border-top:4px solid #0b8d80; }
+.evaluation-correction-workspace .review-third-saved span { line-height:1.6; }
+.evaluation-correction-workspace .eval-input { min-width:48px; }
+.evaluation-correction-workspace .admin-review-actions { gap:12px; }
+@media(max-width:640px) {
+ .correction-stage-nav { top:64px; gap:5px; padding:7px; }
+ .correction-stage-nav button { padding:10px 3px; font-size:12px; }
+ .evaluation-correction-workspace .page-header { padding:20px 16px; }
+ .evaluation-correction-workspace .page-header h1 { font-size:22px; }
+ .evaluation-correction-workspace .form-submit-bar button { flex:1; }
+ .evaluation-correction-workspace .admin-review-actions { flex-direction:column; align-items:stretch; }
+ .evaluation-correction-workspace .admin-review-actions>div { display:flex; justify-content:flex-end; }
+}
