@@ -1,0 +1,34 @@
+/* V2.9.12: independent first/second/third review records in public list and cards. */
+#app[data-workspace=list]{width:min(1560px,calc(100% - 40px))}
+#app[data-workspace] .ws-review-table{min-width:1180px}
+#app[data-workspace] .ws-review-table th:nth-child(1){width:105px}
+#app[data-workspace] .ws-review-table th:nth-child(2){width:auto}
+#app[data-workspace] .ws-review-table th:nth-child(3){width:110px}
+#app[data-workspace] .ws-review-table th:nth-child(4){width:118px}
+#app[data-workspace] .ws-review-table th:nth-child(5){width:134px}
+#app[data-workspace] .ws-review-table th:nth-child(6){width:156px}
+#app[data-workspace] .ws-review-table th:nth-child(7){width:166px}
+#app[data-workspace] .ws-review-table th:nth-child(8){width:88px}
+#app[data-workspace] .ws-review-table :is(th,td){padding:12px 10px}
+#app[data-workspace] .ws-review-table th:nth-child(4),#app[data-workspace] .ws-review-table th:nth-child(5),#app[data-workspace] .ws-review-table th:nth-child(6){background:#eaf2f7;border-left:1px solid #dce7ef;color:#234965}
+#app[data-workspace] .ws-review-table .ws-stage-cell{border-left:1px solid #edf1f6;vertical-align:top}
+#app[data-workspace] .ws-review-stage{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0;line-height:1.5}
+#app[data-workspace] .ws-review-stage .ws-review-score{font-size:14px;line-height:1.4;color:#243e59;word-break:keep-all;overflow-wrap:anywhere}
+#app[data-workspace] .ws-review-stage.ok .ws-review-score{color:#08766b}
+#app[data-workspace] .ws-review-stage.warn .ws-review-score{color:#965b0e}
+#app[data-workspace] .ws-review-stage.danger .ws-review-score{color:#b3303b}
+#app[data-workspace] .ws-review-stage.legacy .ws-review-score{color:#465c9a}
+#app[data-workspace] .ws-review-state{font-size:11px;color:#526b81;word-break:keep-all}
+#app[data-workspace] .ws-review-stage :is(.ws-review-note,.ws-review-date,.ws-review-by){font-size:10px;line-height:1.5;color:#66798d;margin:0}
+#app[data-workspace] .ws-review-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 10px}
+#app[data-workspace] .ws-review-info{font-size:12px;line-height:1.6;color:#536e86;margin:0;flex:1}
+#app[data-workspace] .ws-review-info.has-warning{color:#94610f}
+#app[data-workspace] .ws-review-bar .ws-button{font-size:11px;padding:5px 9px;min-height:30px}
+#app[data-workspace] .ws-review-candidate{color:#966312!important;font-weight:600}
+#app[data-workspace] .ws-review-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:12px 0;margin-top:8px;border-top:1px solid #e2eaf1;border-bottom:1px solid #e2eaf1}
+#app[data-workspace] .ws-review-strip .ws-review-stage{padding:0 6px;border-left:1px solid #e1e9f1}
+#app[data-workspace] .ws-review-strip .ws-review-stage:first-child{padding-left:0;border-left:0}
+#app[data-workspace] .ws-review-label{font-size:11px;font-weight:700;color:#4a647e;margin-bottom:3px;word-break:keep-all}
+#app[data-workspace] .ws-review-progress{font-size:11px;color:#64778c;line-height:1.6;margin:8px 0 12px}
+@media(max-width:640px){#app[data-workspace=list]{width:calc(100% - 24px)}#app[data-workspace] .ws-review-bar{gap:7px}#app[data-workspace] .ws-review-info{font-size:11px;flex-basis:100%}#app[data-workspace] .ws-review-strip{gap:5px}}
+@media print{#app[data-workspace] .ws-review-bar .ws-button{display:none!important}}
