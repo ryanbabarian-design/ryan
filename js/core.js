@@ -45,6 +45,7 @@ const DEPARTMENT_ALIASES = new Map([
   ["가공", "가공"], ["가공팀", "가공"],
   ["압출인발", "압출인발"], ["압출인발팀", "압출인발"],
   ["공무", "공무"], ["공무팀", "공무"],
+  ["압연", "압연"], ["압연팀", "압연"],
 ]);
 export function normalizeDepartmentName(value) {
   const label = String(value ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");

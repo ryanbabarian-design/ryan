@@ -13,7 +13,8 @@ import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.j
 import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score-correction-core.js?v=2.8.7";
 import { createQuestionSearch } from "./search/question-ui.js?v=2.9.6";
 import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
-import { createPerformancePage } from './reports/performance-ui.js?v=2.9.6';
+import { createPerformancePage } from './reports/performance-ui.js?v=2.9.15';
+import { installEvaluationGuide } from './ui/evaluation-guide.js?v=2.9.15';
 import { dashboardTopPeople } from "./reports/dashboard-top-person.js?v=2.9.6";
 import {
   calculateAward,
@@ -41,7 +42,7 @@ import {
   resolveApprovalPermission,
   toProposalCsv,
   WORKFLOW_STATUSES,
-} from "./core.js?v=2.9.5";
+} from "./core.js?v=2.9.15";
 import { createStore } from "./services/store.js?v=2.9.5";
 import {
   appendImageFiles,
@@ -584,6 +585,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const main = $("#app");
 const toast = $("#toast");
+installEvaluationGuide({root:document});
 const performancePage = createPerformancePage({root:main, store, navigate:go, notify:(message,error)=>showToast(message,error?"error":"success")});
 const questionSearch = createQuestionSearch({root:main, store});
 const adminWorkspace = createAdminWorkspace({
@@ -1838,6 +1840,7 @@ function renderProposalForm(proposalNo = "") {
 
       <section class="form-section evaluation-section">
         <div class="form-section-title"><span>05</span><div><h2>1차 제안평가</h2><p>제안자가 엑셀 평가표와 동일한 기준으로 직접 평가합니다. 6개 항목을 모두 1~10점으로 입력하세요.</p></div></div>
+        <button type="button" class="evaluation-guide-link" data-evaluation-guide-open aria-haspopup="dialog">평가 기준·절차 보기</button>
         ${renderEvaluationTable("first", proposal?.first_evaluation || {}, { title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}
         ${firstEvaluationCriteriaMarkup(proposal?.first_evaluation || {})}
         <div class="evaluation-lock-note evaluation-ready-note">작성자는 자기평가 점수를 입력하면서 50점 기준을 즉시 확인할 수 있습니다. 자기평가 총점이 50점 이상이어야 등록·수정할 수 있습니다.</div>

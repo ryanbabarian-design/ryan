@@ -1,0 +1,126 @@
+/* Scoped help styles: no proposal form, evaluation, or workflow overrides. */
+html.evaluation-guide-open { overflow: hidden; }
+
+.evaluation-guide-dialog {
+  width: min(960px, calc(100% - 40px));
+  max-width: none;
+  max-height: calc(100vh - 40px);
+  max-height: min(920px, calc(100dvh - 40px));
+  margin: auto;
+  padding: 0;
+  border: 1px solid #d7e0e8;
+  border-radius: 20px;
+  background: #fff;
+  color: #182b3d;
+  box-shadow: 0 24px 80px rgb(13 29 47 / 25%);
+  overflow: hidden;
+  font: inherit;
+  line-height: 1.65;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.evaluation-guide-dialog[open] { display: flex; flex-direction: column; }
+.evaluation-guide-dialog::backdrop { background: rgb(10 25 43 / 58%); }
+.evaluation-guide-fallback { position: fixed; inset: 0; z-index: 10000; box-shadow: 0 0 0 100vmax rgb(10 25 43 / 58%); }
+.evaluation-guide-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex: none;
+  padding: 24px 30px 20px;
+  border-bottom: 1px solid #e2e9f0;
+  background: #f8fbfd;
+}
+.evaluation-guide-eyebrow { display: block; margin-bottom: 4px; color: #28616b; font-size: 12px; font-weight: 800; letter-spacing: .04em; }
+.evaluation-guide-header h2 { margin: 0; font-size: 26px; line-height: 1.3; letter-spacing: -.035em; }
+.evaluation-guide-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid #d2dce5;
+  border-radius: 12px;
+  color: #294158;
+  background: #fff;
+  font: inherit;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+.evaluation-guide-close:hover { background: #edf4f7; }
+.evaluation-guide-body { min-height: 0; padding: 22px 30px 24px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.evaluation-guide-intro { margin: 0 0 24px; color: #526577; font-size: 14px; }
+.evaluation-guide-section + .evaluation-guide-section { margin-top: 28px; }
+.evaluation-guide-section > h3 { margin: 0 0 13px; font-size: 17px; line-height: 1.5; letter-spacing: -.02em; }
+.evaluation-guide-stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+.evaluation-guide-stages > li { min-width: 0; padding: 18px; border: 1px solid #d9e3eb; border-radius: 13px; background: #fff; }
+.evaluation-guide-step { display: inline-grid; place-items: center; width: 32px; height: 32px; margin-bottom: 12px; border-radius: 9px; background: #e8f2f4; color: #245c65; font-size: 12px; font-weight: 850; }
+.evaluation-guide-stages h4 { margin: 0 0 8px; font-size: 16px; line-height: 1.5; }
+.evaluation-guide-stages p { margin: 0 0 14px; min-height: 3.3em; color: #54687a; font-size: 13px; }
+.evaluation-guide-stages strong { display: block; color: #1f5061; font-size: 13px; }
+.evaluation-guide-stages small { display: block; margin-top: 5px; color: #596f80; font-size: 12px; }
+.evaluation-guide-callout { margin-top: 12px; padding: 14px 17px; border: 1px solid #efd7a9; border-left: 4px solid #c18a24; border-radius: 10px; background: #fffbf1; font-size: 13px; color: #694b16; }
+.evaluation-guide-callout p { margin: 4px 0 0; }
+.evaluation-guide-after { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 17px 19px; border: 1px solid #dce6ee; border-radius: 12px; background: #f6f9fc; }
+.evaluation-guide-after h4 { margin: 0 0 6px; font-size: 14px; }
+.evaluation-guide-after p { margin: 0; color: #54687a; font-size: 13px; }
+.evaluation-guide-questions { overflow: hidden; border: 1px solid #dae3eb; border-radius: 12px; }
+.evaluation-guide-questions > details + details { border-top: 1px solid #e2e9ef; }
+.evaluation-guide-questions summary { min-height: 54px; padding: 15px 18px; color: #263f53; background: #fff; font-size: 14px; font-weight: 750; cursor: pointer; }
+.evaluation-guide-questions summary::marker { color: #40717e; }
+.evaluation-guide-questions summary:hover { background: #f7fafc; }
+.evaluation-guide-questions details[open] > summary { border-bottom: 1px solid #e9eef3; background: #f6f9fc; }
+.evaluation-guide-answer { padding: 3px 20px 18px; color: #455e72; font-size: 13px; }
+.evaluation-guide-answer p { margin: 13px 0 0; }
+.evaluation-guide-answer h4 { margin: 20px 0 0; color: #223c51; font-size: 14px; }
+.evaluation-guide-answer strong { color: #243d51; }
+.evaluation-guide-table-wrap { max-width: 100%; margin-top: 14px; overflow-x: auto; border: 1px solid #dbe4ec; border-radius: 8px; -webkit-overflow-scrolling: touch; }
+.evaluation-guide-table-wrap table { width: 100%; min-width: 300px; margin: 0; border-collapse: collapse; color: #344f64; font-size: 13px; }
+.evaluation-guide-table-wrap th, .evaluation-guide-table-wrap td { padding: 9px 12px; border-bottom: 1px solid #e5ecf1; text-align: left; }
+.evaluation-guide-table-wrap thead th { color: #39556a; background: #edf3f7; font-size: 12px; font-weight: 750; }
+.evaluation-guide-table-wrap tbody th { font-weight: 650; }
+.evaluation-guide-table-wrap tbody tr:last-child > * { border-bottom: 0; }
+.evaluation-guide-table-wrap .evaluation-guide-amount { font-variant-numeric: tabular-nums; font-weight: 750; white-space: nowrap; }
+.evaluation-guide-example, .evaluation-guide-note { padding: 11px 13px; border-radius: 8px; background: #f0f5f8; color: #4c667b; }
+.evaluation-guide-definitions { margin: 13px 0 0; }
+.evaluation-guide-definitions > div { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid #e7edf2; }
+.evaluation-guide-definitions > div:last-child { border-bottom: 0; }
+.evaluation-guide-definitions dt { color: #2f5064; font-weight: 750; }
+.evaluation-guide-definitions dd { margin: 0; }
+.evaluation-guide-scope { margin: 19px 0 0; color: #64798b; font-size: 12px; }
+.evaluation-guide-footer { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 30px; border-top: 1px solid #e2e9f0; background: #fff; }
+.evaluation-guide-footer p { margin: 0; color: #627588; font-size: 12px; }
+.evaluation-guide-done { flex: none; min-height: 44px; padding: 10px 20px; border: 1px solid #23465c; border-radius: 9px; background: #23465c; color: #fff; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }
+.evaluation-guide-done:hover { background: #18374a; }
+.evaluation-guide-dialog :is(button, summary, [tabindex]):focus-visible, .evaluation-guide-link:focus-visible { outline: 3px solid #28849a; outline-offset: 3px; }
+.evaluation-guide-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.evaluation-guide-link { display: inline-flex; align-items: center; min-height: 40px; gap: 7px; padding: 7px 0; border: 0; background: transparent; color: #235b75; font: inherit; font-size: 13px; font-weight: 750; text-align: left; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.evaluation-guide-link:hover { color: #133e54; }
+[data-evaluation-guide-open].nav-link { white-space: nowrap; }
+
+@media (max-width: 700px) {
+  .evaluation-guide-dialog { width: calc(100% - 24px); max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); border-radius: 16px; }
+  .evaluation-guide-header { padding: 18px 18px 15px; }
+  .evaluation-guide-header h2 { font-size: 23px; }
+  .evaluation-guide-body { padding: 18px; }
+  .evaluation-guide-stages { grid-template-columns: 1fr; gap: 10px; }
+  .evaluation-guide-stages > li { position: relative; padding: 15px 15px 15px 62px; }
+  .evaluation-guide-step { position: absolute; left: 15px; top: 15px; margin: 0; }
+  .evaluation-guide-stages p { min-height: 0; margin-bottom: 9px; }
+  .evaluation-guide-after { grid-template-columns: 1fr; gap: 16px; padding: 16px; }
+  .evaluation-guide-questions summary { padding: 15px 14px; }
+  .evaluation-guide-answer { padding: 1px 14px 16px; }
+  .evaluation-guide-definitions > div { grid-template-columns: 1fr; gap: 4px; }
+  .evaluation-guide-footer { padding: 13px 18px; }
+  .evaluation-guide-footer p { max-width: 180px; }
+}
+@media (max-width: 380px) {
+  .evaluation-guide-body { padding: 16px 13px; }
+  .evaluation-guide-header, .evaluation-guide-footer { padding-left: 15px; padding-right: 15px; }
+  .evaluation-guide-footer p { max-width: 125px; }
+  .evaluation-guide-table-wrap th, .evaluation-guide-table-wrap td { padding: 8px; }
+}
+@media print { .evaluation-guide-dialog, [data-evaluation-guide-open] { display: none !important; } }

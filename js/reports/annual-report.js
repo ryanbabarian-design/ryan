@@ -1,11 +1,11 @@
 import { savedReviewSnapshot } from './review-snapshot.js?v=2.9.6';
-import { normalizeDepartmentName } from '../core.js?v=2.8.5';
+import { normalizeDepartmentName } from '../core.js?v=2.9.15';
 /** V2.6.8 — read-only annual reporting. No approval/award decisions are written here. */
-export const REPORT_VERSION = '2.9.6';
+export const REPORT_VERSION = '2.9.15';
 export const REPORT_RULES = [
   '등록건수: 최초 접수일 기준. 같은 접수번호의 수정·재상신은 1건으로 집계합니다.',
   '심사 인정건수=저장된 채택+건수처리. 대표결재 대기 여부는 별도이며, 심사 인정을 대표승인·지급완료로 간주하지 않습니다.',
-  '부서별 집계는 접수부서 기준입니다. 가공/가공팀 등 확인된 동일부서 표기를 통합하며 부서 이동 이력은 접수 당시 부서 기준으로 표시합니다.',
+  '부서별 제안건수는 접수부서 기준입니다. 가공/가공팀, 압출인발/압출인발팀, 공무/공무팀, 압연/압연팀은 같은 부서로 집계합니다. 연천압연팀은 별도 부서로 유지하며, 부서 이동 이력은 접수 당시 부서 기준으로 표시합니다.',
   '참여율: 조회 가능한 현재 활성 직원명단 중 해당 연도에 1건 이상 제출한 직원 비율. 과거 연도의 재직인원 통계는 아닙니다.',
   '직원ID/사번 우선, 성명+통합부서가 유일하게 맞을 때 연결합니다. 동일 이름·부서의 비활성 중복기록은 충돌 사번이 없고 활성 직원이 한 명일 때만 통합합니다. 동명이인·상충 사번은 확인 대상으로 남깁니다.',
   '포상 확정액/지급완료액과 예상/심사확정 효과금액을 분리합니다. 지급완료액은 지급연도 실적이 아닌 해당 접수연도 제안의 현재 지급현황입니다.',

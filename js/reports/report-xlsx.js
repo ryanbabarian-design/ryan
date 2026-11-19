@@ -1,4 +1,4 @@
-import { writeXlsx, columnName, excelDate, XLSX_STYLES } from './xlsx-writer.js?v=2.6.8';
+import { writeXlsx, columnName, excelDate, XLSX_STYLES } from './xlsx-writer.js?v=2.9.15';
 import { koreaDate } from './annual-report.js?v=2.9.6';
 const S=XLSX_STYLES;
 const v=(value,style=S.body)=>({value,style});
@@ -50,30 +50,43 @@ export function buildReportSheets(report){
    total[c-1]=f(departments.length?`SUM(${columnName(c)}7:${columnName(c)}${6+departments.length})`:'0',totals[c-1],c>=16?S.totalMoney:S.total);
  }
  const dr=7+departments.length;total[3]=f(`IF(B${dr}=0,0,C${dr}/B${dr})`,s.participationRate,S.percent);dept.rows.push(total);
- const summary={name:'관리부 제출요약',widths:[11,11,11,10,10,10,10,11,11,16],rows:[],merges:[],heights:{1:12,2:30,3:26,4:10,5:25,6:24,8:24,9:38,11:24,12:28,14:24,15:28,17:28},paperSize:9,orientation:'portrait',onePage:true,logo:true};
+ const panelWidths=[17,6,6,6,6,6,6,14];
+ const summary={name:'관리부 제출요약',widths:[...panelWidths,3,...panelWidths],rows:[],merges:[],heights:{1:8,2:26,3:18,4:20,5:4,6:16,7:28,8:4,9:16,10:20,11:4,12:16,13:22,14:6,15:28},paperSize:9,orientation:'landscape',repeatFromRow:15,repeatRows:15,logo:true};
  const put=(r,c,val)=>{while(summary.rows.length<r)summary.rows.push([]);summary.rows[r-1][c-1]=val;};
  const merge=(ref)=>summary.merges.push(ref);
- for(let r=1;r<=4;r++)for(let c=1;c<=10;c++)put(r,c,v('',S.title));
- put(2,4,v(`${report.year}년 제안실적 보고`,S.title));merge('D2:J3');
- put(5,1,v(report.scopeText,S.subtitle));merge('A5:J5');
- put(6,1,v(`${report.mode==='demo'?'예시 데이터 · 운영 실적 아님 | ':''}기준일 ${koreaDate(report.asOf)} · 금액단위 원`,report.mode==='demo'?S.warning:S.subtitle));merge('A6:J6');
- const card=(a,b,label,formula,result)=>{put(8,a,v(label,S.section));merge(`${columnName(a)}8:${columnName(b)}8`);put(9,a,f(formula,result,S.kpi));merge(`${columnName(a)}9:${columnName(b)}9`);};
- card(1,2,'등록 제안',sum(personal.name,'R',7,pEnd),s.total);card(3,5,'심사 인정건수',sum(personal.name,'U',7,pEnd),s.recognized);card(6,7,'참여인원',`'부서별 실적'!C${dr}`,s.participants);card(8,10,'미참여 직원',`'부서별 실적'!E${dr}`,s.zeroEmployees);
+ const wrappedHeight=(text,capacity,min=20)=>Math.max(min,4+13*String(text).split('\n').reduce((lines,line)=>lines+Math.max(1,Math.ceil(Array.from(line).reduce((n,ch)=>n+(ch.charCodeAt(0)>255?2:1),0)/capacity)),0));
+ for(let r=1;r<=3;r++)for(let c=1;c<=17;c++)put(r,c,v('',S.title));
+ put(2,4,v(`${report.year}년 제안실적 보고`,S.title));merge('D2:Q3');
+ const reference=`${report.mode==='demo'?'예시 데이터 · 운영 실적 아님 | ':''}기준일 ${koreaDate(report.asOf)} · 금액단위 원`;
+ put(4,1,v(report.scopeText,S.note));merge('A4:H4');
+ put(4,10,v(reference,report.mode==='demo'?S.warning:S.note));merge('J4:Q4');
+ summary.heights[4]=Math.max(wrappedHeight(report.scopeText,80),wrappedHeight(reference,80));
+ const card=(a,b,label,formula,result)=>{put(6,a,v(label,S.section));merge(`${columnName(a)}6:${columnName(b)}6`);put(7,a,f(formula,result,S.kpi));merge(`${columnName(a)}7:${columnName(b)}7`);};
+ card(1,4,'등록 제안',sum(personal.name,'R',7,pEnd),s.total);card(5,8,'심사 인정건수',sum(personal.name,'U',7,pEnd),s.recognized);card(10,13,'참여인원',`'부서별 실적'!C${dr}`,s.participants);card(14,17,'미참여 직원',`'부서별 실적'!E${dr}`,s.zeroEmployees);
  const small=(row,c,end,label,col,key,style=S.integer)=>{put(row,c,v(label,S.section));merge(`${columnName(c)}${row}:${columnName(end)}${row}`);put(row+1,c,f(sum(personal.name,col,7,pEnd),s[key],style));merge(`${columnName(c)}${row+1}:${columnName(end)}${row+1}`);};
- small(11,1,2,'채택','S','adopted');small(11,3,4,'건수처리','T','countOnly');small(11,5,6,'미채택·중복','V','rejected');put(12,5,f(`${sum(personal.name,'V',7,pEnd)}+${sum(personal.name,'W',7,pEnd)}`,s.rejected+s.duplicate));small(11,7,8,'보류','X','onHold');small(11,9,10,'심사·보완 중','Y','pending');
- small(14,1,3,'포상 확정액','Z','awardConfirmed',S.money);small(14,4,6,'지급완료액','AA','awardPaid',S.money);small(14,7,10,'심사확정 효과금액','AE','confirmedEffect',S.money);
- ['접수부서','','','현재대상','참여','등록','채택','건수','진행','포상 확정액'].forEach((h,i)=>put(17,i+1,v(h,S.header)));merge('A17:C17');
- const visible=departments.slice(0,11);const remainder=departments.slice(11);
- const display=[...visible,...(remainder.length?[{department:`기타 ${remainder.length}개 부서`,...['activeEmployees','participants','total','adopted','countOnly','pending','awardConfirmed'].reduce((o,k)=>({...o,[k]:remainder.reduce((n,d)=>n+d[k],0)}),{}),remainder:true}]:[])];
- display.forEach((d,i)=>{const r=18+i;put(r,1,v(d.department));merge(`A${r}:C${r}`);for(const [c,col,key] of [[4,'B','activeEmployees'],[5,'C','participants'],[6,'F','total'],[7,'I','adopted'],[8,'J','countOnly'],[9,'O','pending'],[10,'P','awardConfirmed']])put(r,c,f(d.remainder?`SUM('부서별 실적'!${col}18:${col}${6+departments.length})`:`'부서별 실적'!${col}${i+7}`,d[key],c===10?S.money:S.integer));});
- const tr=18+display.length;put(tr,1,v('합계',S.section));merge(`A${tr}:C${tr}`);for(const[c,col,key]of [[4,'B','activeEmployees'],[5,'C','participants'],[6,'F','total'],[7,'I','adopted'],[8,'J','countOnly'],[9,'O','pending'],[10,'P','awardConfirmed']])put(tr,c,f(`'부서별 실적'!${col}${dr}`,s[key],c===10?S.totalMoney:S.total));
- let r=tr+2;
+ small(9,1,3,'채택','S','adopted');small(9,4,6,'건수처리','T','countOnly');small(9,7,10,'미채택·중복','V','rejected');put(10,7,f(`${sum(personal.name,'V',7,pEnd)}+${sum(personal.name,'W',7,pEnd)}`,s.rejected+s.duplicate));small(9,11,13,'보류','X','onHold');small(9,14,17,'심사·보완 중','Y','pending');
+ small(12,1,5,'포상 확정액','Z','awardConfirmed',S.money);small(12,6,11,'지급완료액','AA','awardPaid',S.money);small(12,12,17,'심사확정 효과금액','AE','confirmedEffect',S.money);
+ const panelRows=Math.max(1,Math.ceil(departments.length/2));
+ const deptColumns=[[1,'B','activeEmployees'],[2,'C','participants'],[3,'F','total'],[4,'I','adopted'],[5,'J','countOnly'],[6,'O','pending'],[7,'P','awardConfirmed']];
+ for(const start of [1,10])['접수부서','현재\n대상','참여\n인원','등록','채택','건수\n처리','진행중','포상 확정액'].forEach((h,i)=>put(15,start+i,v(h,S.header)));
+ // Keep every department visible; each panel points to the original department row.
+ departments.forEach((d,i)=>{
+   const start=i<panelRows?1:10,r=16+i%panelRows;
+   put(r,start,v(d.department,S.wrap));
+   summary.heights[r]=Math.max(summary.heights[r]||20,wrappedHeight(d.department,16));
+   for(const [offset,col,key] of deptColumns)put(r,start+offset,f(`'부서별 실적'!${col}${i+7}`,d[key],col==='P'?S.money:S.integer));
+ });
+ if(!departments.length){put(16,1,v('조회 조건에 해당하는 부서가 없습니다.',S.note));merge('A16:Q16');}
+ const tr=16+panelRows;summary.heights[tr]=22;put(tr,1,v('전체 합계',S.section));
+ for(const [offset,col,key] of deptColumns)put(tr,1+offset,f(`'부서별 실적'!${col}${dr}`,s[key],col==='P'?S.totalMoney:S.total));
+ put(tr,10,v(`조회 범위 내 전체 ${departments.length}개 부서 합계`,S.section));merge(`J${tr}:Q${tr}`);
+ summary.heights[tr+1]=4;let r=tr+2;
  for(const text of [
   `참여율 ${(s.participationRate*100).toFixed(1)}% · 현재 활성 ${s.activeEmployees}명 중 ${s.participants}명 참여. 비활성/명단 미확인 직원은 분모에서 제외.`,
   `심사 인정=저장된 채택+건수처리(대표승인과 별도). 결재대기 지급 예정액 ${s.awardProvisional.toLocaleString('ko-KR')}원은 포상 확정액에서 제외.`,
   '최초 접수일·접수부서 기준. 재상신은 중복 집계하지 않음. 부서별 전체내역과 집계 근거는 뒤의 3개 시트 참조.',
-  `주의사항: ${report.warnings.length?report.warnings.join(' / '):'집계 확인 항목 없음'}`,
- ]){put(r,1,v(text,text.startsWith('주의사항')&&report.warnings.length?S.warning:S.subtitle));merge(`A${r}:J${r}`);summary.heights[r]=text.length>120?45:30;r++;}
+  ...(report.warnings.length?report.warnings.map(w=>`주의사항: ${w}`):['주의사항: 집계 확인 항목 없음']),
+ ]){put(r,1,v(text,text.startsWith('주의사항')&&report.warnings.length?S.warning:S.note));merge(`A${r}:Q${r}`);summary.heights[r]=wrappedHeight(text,170,17);r++;}
  const lastDetail=detail.rows.length+2;detail.rows.push([], [v('집계 기준',S.section)]);detail.merges.push(`A${lastDetail}:Y${lastDetail}`);
  report.rules.forEach(rule=>{detail.rows.push([v(rule,S.subtitle)]);detail.merges.push(`A${detail.rows.length}:Y${detail.rows.length}`);detail.heights[detail.rows.length]=28;});
  report.warnings.forEach(w=>{detail.rows.push([v(w,S.warning)]);detail.merges.push(`A${detail.rows.length}:Y${detail.rows.length}`);detail.heights[detail.rows.length]=32;});
