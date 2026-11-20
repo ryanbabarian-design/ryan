@@ -51,6 +51,8 @@ Deno.serve(async (req) => {
 
   let sent = 0;
   let failed = 0;
+  let cancelled = 0;
+  let uncertain = 0;
   for (const item of queue ?? []) {
     const { data: claimed } = await supabase
       .from("proposal_notification_queue")
@@ -61,8 +63,111 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (!claimed) continue;
 
+    if (item.notification_type === "ceo_reminder_7d") {
+      let deliveryStage = "not_requested";
+      try {
+        // Revalidate every member after claiming: approval, submission, assignee,
+        // seven-day age, and the original waiting period are checked by this RPC.
+        const { data: reminderItems, error: reminderError } = await supabase
+          .rpc("v2916_get_ceo_reminder_items", { p_notification_id: item.id });
+        if (reminderError) throw new Error(reminderError.message);
+        if (!Array.isArray(reminderItems)) throw new Error("대표이사 미결재 목록 응답 형식이 올바르지 않습니다.");
+        if (!reminderItems.length) {
+          const { error: cancelError } = await supabase.from("proposal_notification_queue").update({
+            status: "cancelled", last_error: "현재 7일 이상 대기 중인 대표이사 결재대상이 없어 발송하지 않았습니다.", updated_at: new Date().toISOString(),
+          }).eq("id", item.id).eq("status", "sending");
+          if (cancelError) throw new Error(cancelError.message);
+          cancelled += 1;
+          continue;
+        }
+
+        const reminderRows = reminderItems.map((row) => `<tr>
+          <td style="padding:7px;border-bottom:1px solid #eaecf0"><b>${htmlEscape(row.proposal_no)}</b></td>
+          <td style="padding:7px;border-bottom:1px solid #eaecf0">${htmlEscape(row.title)}</td>
+          <td style="padding:7px;border-bottom:1px solid #eaecf0">${htmlEscape(row.proposer_name)}</td>
+          <td style="padding:7px;border-bottom:1px solid #eaecf0">${htmlEscape(row.department)}</td>
+          <td style="padding:7px;border-bottom:1px solid #eaecf0">${htmlEscape(new Date(row.actionable_at).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul" }))}</td>
+          <td style="padding:7px;border-bottom:1px solid #eaecf0">${htmlEscape(row.pending_days)}일</td>
+        </tr>`).join("");
+        const subject = `[하나금속 제안관리] 대표이사 미결재 제안 ${reminderItems.length}건 안내`;
+        const html = `
+          <div style="font-family:Arial,'Noto Sans KR',sans-serif;line-height:1.6;color:#172033;max-width:900px;margin:auto">
+            <div style="padding:18px 22px;background:#10213b;color:white"><strong style="font-size:20px">HANA METAL 제안관리</strong></div>
+            <div style="padding:24px;border:1px solid #e4e7ec;border-top:0">
+              <h2 style="margin:0 0 16px">대표이사 미결재 제안 안내</h2>
+              <p>${htmlEscape(item.recipient_name || "대표이사")}님, 대표이사 결재를 <strong>7일 이상</strong> 기다리는 제안 <strong>${reminderItems.length}건</strong>을 모아 안내드립니다.</p>
+              <table style="width:100%;border-collapse:collapse;margin:18px 0"><thead><tr><th style="text-align:left;padding:7px;background:#f8fafc">접수번호</th><th style="text-align:left;padding:7px;background:#f8fafc">제안명</th><th style="text-align:left;padding:7px;background:#f8fafc">제안자</th><th style="text-align:left;padding:7px;background:#f8fafc">부서</th><th style="text-align:left;padding:7px;background:#f8fafc">상신일</th><th style="text-align:left;padding:7px;background:#f8fafc">대기일</th></tr></thead><tbody>${reminderRows}</tbody></table>
+              <p style="color:#667085;font-size:13px">미결재 안내는 상신 후 7일이 지난 제안만 대상으로 하며, 각 제안의 동일한 결재 대기 기간에 1회 발송됩니다.</p>
+              <a href="${htmlEscape(`${SITE_URL}/#admin/inbox`)}" style="display:inline-block;background:#d92d20;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:bold">대표이사 결재함 열기</a>
+              <p style="margin-top:20px;color:#667085;font-size:12px">본 메일은 하나금속 제안관리 시스템에서 자동 발송되었습니다.</p>
+            </div>
+          </div>`;
+        deliveryStage = "requested";
+        const response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${RESEND_API_KEY}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": `hana-proposal/${item.id}/ceo_reminder_7d`,
+          },
+          body: JSON.stringify({ from: RESEND_FROM_EMAIL, to: [item.recipient_email], subject, html }),
+        });
+        deliveryStage = response.ok ? "accepted" : "rejected";
+        const responseBody = await response.text();
+        if (!response.ok) throw new Error(`Resend ${response.status}: ${responseBody.slice(0, 500)}`);
+        const { error: sentError } = await supabase.from("proposal_notification_queue").update({
+          status: "sent", sent_at: new Date().toISOString(), last_error: null, updated_at: new Date().toISOString(),
+          digest_sent_items: reminderItems.map((row) => ({ proposal_id: row.proposal_id, actionable_at: row.actionable_at })),
+        }).eq("id", item.id).eq("status", "sending");
+        if (sentError) throw new Error(sentError.message);
+        sent += 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const needsVerification = deliveryStage === "requested" || deliveryStage === "accepted";
+        // The provider's idempotency protection expires. An accepted or unknown
+        // request must remain non-retryable until its delivery is verified.
+        const lastError = needsVerification
+          ? `발송 확인 필요: ${deliveryStage === "accepted" ? "메일 제공자에 접수되었으나 발송 완료 처리를 확인하지 못했습니다." : "메일 요청 후 제공자 접수 여부를 확인하지 못했습니다."} 중복 발송 방지를 위해 재시도를 중단했습니다. 제공자 발송 기록을 확인하세요. ${message}`
+          : message;
+        await supabase.from("proposal_notification_queue").update({
+          status: needsVerification ? "sending" : "failed", last_error: lastError, updated_at: new Date().toISOString(),
+        }).eq("id", item.id).eq("status", "sending");
+        if (needsVerification) uncertain += 1;
+        else failed += 1;
+      }
+      continue;
+    }
+
     const proposal = Array.isArray(item.proposals) ? item.proposals[0] : item.proposals;
     const step = Array.isArray(item.approval_steps) ? item.approval_steps[0] : item.approval_steps;
+
+    if (step?.role_name === "대표이사" && ["reminder_1d", "reminder_3d", "reminder_7d"].includes(item.notification_type)) {
+      await supabase.from("proposal_notification_queue").update({
+        status: "cancelled", last_error: "대표이사 미결재 안내는 7일 이후 묶음 메일로 발송됩니다.", updated_at: new Date().toISOString(),
+      }).eq("id", item.id);
+      cancelled += 1;
+      continue;
+    }
+    if (step?.role_name === "대표이사" && item.notification_type === "admin_7d") {
+      const { data: currentAssignments, error: assignmentError } = await supabase.from("approval_assignments")
+        .select("email,department,active,id")
+        .eq("step_id", item.step_id)
+        .eq("active", true)
+        .order("id", { ascending: false });
+      if (assignmentError) {
+        await supabase.from("proposal_notification_queue").update({ status: "failed", last_error: assignmentError.message, updated_at: new Date().toISOString() }).eq("id", item.id);
+        failed += 1;
+        continue;
+      }
+      const currentEmail = String((currentAssignments ?? []).find((row) => String(row.department ?? "").trim() === "" && row.email)?.email ?? "").trim().toLowerCase();
+      if (currentEmail && currentEmail === String(item.recipient_email ?? "").trim().toLowerCase()) {
+        await supabase.from("proposal_notification_queue").update({
+          status: "cancelled", last_error: "현재 대표이사 결재자에게는 7일 미결재 묶음 안내만 발송합니다.", updated_at: new Date().toISOString(),
+        }).eq("id", item.id);
+        cancelled += 1;
+        continue;
+      }
+    }
 
     if (item.notification_type === "ceo_batch") {
       const { data: currentAssignments } = await supabase.from("approval_assignments")
@@ -221,6 +326,6 @@ Deno.serve(async (req) => {
     }
   }
 
-  return Response.json({ processed: (queue ?? []).length, sent, failed });
+  return Response.json({ processed: (queue ?? []).length, sent, failed, cancelled, uncertain });
 });
 

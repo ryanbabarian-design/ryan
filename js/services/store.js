@@ -1498,7 +1498,7 @@ class SupabaseStore {
 
   async getNotificationLogs(limit = 100) {
     const { data, error } = await this.client.from("proposal_notification_queue")
-      .select("id,proposal_id,step_id,recipient_email,recipient_name,notification_type,status,attempts,available_at,sent_at,last_error,created_at,updated_at,proposals(proposal_no,title),approval_steps(role_name)")
+      .select("id,proposal_id,step_id,recipient_email,recipient_name,notification_type,status,attempts,available_at,sent_at,last_error,created_at,updated_at,digest_items,digest_sent_items,proposals(proposal_no,title),approval_steps(role_name)")
       .order("created_at", { ascending: false }).limit(limit);
     if (error) throw error;
     return data || [];

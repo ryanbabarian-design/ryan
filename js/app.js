@@ -43,7 +43,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.9.15";
-import { createStore } from "./services/store.js?v=2.9.5";
+import { createStore } from "./services/store.js?v=2.9.16";
 import {
   appendImageFiles,
   createImageSelection,
@@ -1044,6 +1044,8 @@ function statusBadge(value) {
     완료: "green",
     미지급: "gray",
     예정: "amber",
+    "발송 중": "amber",
+    "발송 확인 필요": "amber",
   }[value] || "gray";
   return `<span class="badge badge-${tone}">${escapeHtml(value || "-")}</span>`;
 }
@@ -2558,8 +2560,21 @@ async function renderAdminNotifications() {
   main.innerHTML = `${adminPageHeader("메일알림", "결재 요청 이메일의 전송 성공·실패를 확인하고 실패 건을 재전송합니다.", "notifications")}<div class="loading-card"><div class="spinner"></div><p>메일 발송기록을 불러오는 중입니다.</p></div>`;
   try {
     const logs = await store.getNotificationLogs(150);
-    const rows = logs.length ? `<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>일시</th><th>제안</th><th>단계</th><th>수신자</th><th>유형</th><th>상태</th><th>처리</th></tr></thead><tbody>${logs.map(row=>`<tr><td>${escapeHtml(new Date(row.created_at).toLocaleString("ko-KR"))}</td><td>${escapeHtml(row.proposals?.proposal_no||"-")}<br><small>${escapeHtml(row.proposals?.title||"")}</small></td><td>${escapeHtml(row.approval_steps?.role_name||"-")}</td><td>${escapeHtml(row.recipient_name||"")}<br><small>${escapeHtml(row.recipient_email||"")}</small></td><td>${escapeHtml(row.notification_type||"")}</td><td>${statusBadge(row.status === "sent" ? "완료" : row.status === "failed" ? "보류" : "진행중")}<br><small>${escapeHtml(row.last_error||"")}</small></td><td>${row.status === "failed" ? `<button class="button button-small button-primary" data-action="retry-notification" data-id="${row.id}">재전송</button>` : "-"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state"><h2>메일 발송기록이 없습니다.</h2><p>V2.3 이후 신규 제안이 결재대상으로 등록되면 이곳에 기록됩니다.</p></div>`;
-    main.innerHTML = `${adminPageHeader("메일알림", "결재 요청 이메일의 전송 성공·실패를 확인하고 실패 건을 재전송합니다.", "notifications")}<section class="section"><div class="section-heading"><div><span class="eyebrow">EMAIL LOG</span><h2>최근 발송 150건</h2></div></div>${rows}</section>`;
+    const typeLabels = {new:"신규 결재 요청",reminder_1d:"1일 미결재 안내",reminder_3d:"3일 미결재 안내",reminder_7d:"7일 미결재 안내",admin_7d:"관리자 지연 안내",ceo_batch:"대표이사 일괄상신",ceo_reminder_7d:"대표이사 7일 미결재 · 묶음 1통"};
+    const tableRows = logs.map(row => {
+      const digest = row.notification_type === "ceo_reminder_7d";
+      const members = row.status === "sent" ? row.digest_sent_items : row.digest_items;
+      const count = Array.isArray(members) ? members.length : 0;
+      const uncertain = row.status === "sending" && String(row.last_error||"").startsWith("발송 확인 필요:");
+      const proposalLabel = digest ? `미결재 제안 ${count}건` : row.proposals?.proposal_no || "-";
+      const proposalDetail = digest ? (row.status === "sent" ? "묶음메일 1통 발송" : row.status === "cancelled" ? "묶음메일 발송 취소" : uncertain ? "메일서버 발송결과 확인 필요" : "묶음메일 1통으로 처리") : row.proposals?.title || "";
+      const obsolete = row.approval_steps?.role_name === "대표이사" && ["reminder_1d","reminder_3d","reminder_7d"].includes(row.notification_type);
+      const stateLabel = uncertain ? "발송 확인 필요" : ({sent:"완료",failed:"보류",cancelled:"발송 취소",sending:"발송 중",pending:"발송 대기"}[row.status] || row.status);
+      const retry = row.status === "failed" && !obsolete;
+      return `<tr><td>${escapeHtml(new Date(row.created_at).toLocaleString("ko-KR",{timeZone:"Asia/Seoul"}))}</td><td>${escapeHtml(proposalLabel)}<br><small>${escapeHtml(proposalDetail)}</small></td><td>${escapeHtml(row.approval_steps?.role_name||"-")}</td><td>${escapeHtml(row.recipient_name||"")}<br><small>${escapeHtml(row.recipient_email||"")}</small></td><td>${escapeHtml(typeLabels[row.notification_type]||row.notification_type||"")}</td><td>${statusBadge(stateLabel)}<br><small>${escapeHtml(row.last_error||"")}</small></td><td>${retry ? `<button class="button button-small button-primary" data-action="retry-notification" data-id="${escapeHtml(String(row.id))}">재전송</button>` : "-"}</td></tr>`;
+    }).join("");
+    const rows = logs.length ? `<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>일시</th><th>제안</th><th>단계</th><th>수신자</th><th>유형</th><th>상태</th><th>처리</th></tr></thead><tbody>${tableRows}</tbody></table></div>` : `<div class="empty-state"><h2>메일 발송기록이 없습니다.</h2><p>결재 알림이 생성되면 이곳에 기록됩니다.</p></div>`;
+    main.innerHTML = `${adminPageHeader("메일알림", "대표이사 미결재 안내는 7일 경과 후 한 통으로 발송합니다. 이미 안내한 동일 대기 건은 다시 보내지 않습니다.", "notifications")}<section class="section"><div class="section-heading"><div><span class="eyebrow">EMAIL LOG</span><h2>최근 메일 처리기록 ${logs.length}건</h2><p>매일 오전 9시 대상 확인 · 최초 상신 요약메일은 상신 시 별도 발송</p></div></div>${rows}</section>`;
   } catch (error) {
     main.innerHTML = `${adminPageHeader("메일알림", "V2.3 SQL과 Edge Function 적용 후 사용할 수 있습니다.", "notifications")}<div class="empty-state"><h2>메일 발송기록을 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p></div>`;
   }
