@@ -7,7 +7,7 @@ const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 test("header loads the supplied HANA METAL logo through the brand stylesheet", async () => {
   const html = await read("index.html");
   const css = await read("css/brand-dashboard.css");
-  assert.match(html, /css\/brand-dashboard\.css\?v=1\.8/);
+  assert.match(html, /css\/brand-dashboard\.css\?v=[0-9.]+/);
   assert.match(css, /assets\/hana-metal-logo\.png/);
 });
 
@@ -22,11 +22,12 @@ test("dashboard keeps the approved brand, analytics, navigation, image, and prin
   const app = await read("js/app.js");
   assert.match(app, /hero brand-hero/);
   assert.match(app, /workflow-metric-grid/);
-  assert.match(app, /brand-quick-search/);
+  assert.match(app, /questionSearch\.markup\(/);
   assert.match(app, /analytics-dashboard/);
   assert.match(app, /data-route="new"/);
   assert.match(app, /data-route="list"/);
-  assert.match(app, /id="quickSearchForm"/);
+  const search = await read("js/search/question-ui.js");
+  assert.match(search, /id="questionSearchForm"/);
   assert.match(app, /initializeFormImageSelections/);
   assert.match(app, /buildPrintModel/);
 });

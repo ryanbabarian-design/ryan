@@ -70,6 +70,7 @@ function createHarness(options = {}) {
     limit(count) { this.count = count; return this; }
     async execute(single = false) {
       state.queries.push({ table: this.table, update: this.values ?? null });
+      if (!this.values && options.queryError?.(this.table)) return { data: null, error: { message: 'Lookup unavailable' } };
       let rows = tables[this.table].filter(row => this.filters.every(filter => filter(row)));
       if (this.sort) {
         const { key, ascending } = this.sort;
@@ -126,6 +127,40 @@ function createHarness(options = {}) {
       ...requestOptions,
     })),
   };
+}
+
+function createBatchHarness(options = {}) {
+  return createHarness({
+    queue: [notification({ proposal_id: 1, notification_type: 'ceo_batch', ceo_batch_id: 'batch-1' })],
+    proposals: [1, 2].map(id => ({ id, proposal_no: `P-${id}`, title: `Original ${id}`, department: '생산부', proposer_name: '제안자', review_result: '승인', score: 90, award_amount: 0, proposer_effect_amount: 0, effect_amount: 0, ceo_batch_id: 'batch-1', ceo_submission_status: '상신완료' })),
+    ...options,
+  });
+}
+
+for (const [kind, makeHarness] of [['CEO digest', createHarness], ['initial CEO batch', createBatchHarness]]) {
+  for (const status of [409, 408, 500, 504]) {
+    test(`${kind} HTTP ${status} remains sending and cannot produce a second delivery`, async () => {
+      const harness = makeHarness({ fetchResult: () => new Response('Provider outcome is not definitive', { status }) });
+      const response = await harness.invoke();
+      assert.equal(harness.state.queue[0].status, 'sending');
+      assert.match(harness.state.queue[0].last_error, /^발송 확인 필요:/);
+      assert.ok(harness.state.queue[0].last_error.includes(`Resend ${status}:`));
+      assert.deepEqual(await response.json(), { processed: 1, sent: 0, failed: 0, cancelled: 0, uncertain: 1 });
+      await harness.invoke();
+      assert.equal(harness.state.requests.length, 1);
+      assert.equal(harness.state.queue[0].attempts, 1);
+    });
+  }
+
+  test(`${kind} keeps the six definite rejection statuses safely failed`, async () => {
+    for (const status of [400, 401, 403, 404, 422, 429]) {
+      const harness = makeHarness({ fetchResult: () => new Response('Request rejected', { status }) });
+      const response = await harness.invoke();
+      assert.equal(harness.state.queue[0].status, 'failed', `HTTP ${status}`);
+      assert.ok(harness.state.queue[0].last_error.startsWith(`Resend ${status}:`));
+      assert.deepEqual(await response.json(), { processed: 1, sent: 0, failed: 1, cancelled: 0, uncertain: 0 });
+    }
+  });
 }
 
 test('one claimed CEO digest sends all 25 eligible members in one email', async () => {
@@ -342,10 +377,7 @@ test('non-CEO reminders retain individual delivery and proposal links', async ()
 });
 
 test('first CEO submission keeps its original batch subject, payload and idempotency key', async () => {
-  const harness = createHarness({
-    queue: [notification({ proposal_id: 1, notification_type: 'ceo_batch', ceo_batch_id: 'batch-1' })],
-    proposals: [1, 2].map(id => ({ id, proposal_no: `P-${id}`, title: `Original ${id}`, department: '생산부', proposer_name: '제안자', review_result: '승인', score: 90, award_amount: 0, proposer_effect_amount: 0, effect_amount: 0, ceo_batch_id: 'batch-1', ceo_submission_status: '상신완료' })),
-  });
+  const harness = createBatchHarness();
   await harness.invoke();
   assert.equal(harness.state.requests.length, 1);
   assert.equal(harness.state.requests[0].payload.subject, '[하나금속 제안관리] 대표이사 결재 2건이 상신되었습니다.');
@@ -355,6 +387,110 @@ test('first CEO submission keeps its original batch subject, payload and idempot
   assert.equal(harness.state.rpcCalls.length, 0);
   assert.equal(harness.state.queue[0].digest_sent_items, undefined);
 });
+
+test('an accepted initial CEO batch with a lost connection stays sending without a second delivery', async () => {
+  let acceptedCount = 0;
+  const harness = createBatchHarness({ fetchResult: () => {
+    acceptedCount += 1;
+    throw new Error('Connection closed after provider acceptance');
+  } });
+  const response = await harness.invoke();
+  assert.equal(harness.state.queue[0].status, 'sending');
+  assert.match(harness.state.queue[0].last_error, /^발송 확인 필요:/);
+  assert.deepEqual(await response.json(), { processed: 1, sent: 0, failed: 0, cancelled: 0, uncertain: 1 });
+  assert.equal(harness.state.requests[0].headers['Idempotency-Key'], 'hana-proposal/91/ceo_batch');
+  assert.equal(harness.state.requests[0].payload.subject, '[하나금속 제안관리] 대표이사 결재 2건이 상신되었습니다.');
+  await harness.invoke();
+  assert.equal(acceptedCount, 1);
+  assert.equal(harness.state.requests.length, 1);
+  assert.equal(harness.state.queue[0].attempts, 1);
+});
+
+test('an initial CEO batch with a 2xx response-body failure stays sending for verification', async () => {
+  const harness = createBatchHarness({ fetchResult: () => new Response(new ReadableStream({
+    start(controller) { controller.error(new Error('Batch response body stream failed')); },
+  }), { status: 200 }) });
+  const response = await harness.invoke();
+  assert.equal(harness.state.queue[0].status, 'sending');
+  assert.match(harness.state.queue[0].last_error, /^발송 확인 필요:/);
+  assert.match(harness.state.queue[0].last_error, /Batch response body stream failed/);
+  assert.equal((await response.json()).uncertain, 1);
+  await harness.invoke();
+  assert.equal(harness.state.requests.length, 1);
+});
+
+test('an accepted initial CEO batch with a failed sent-history write reports uncertainty', async () => {
+  const harness = createBatchHarness({ updateError: values => values.status === 'sent' });
+  const response = await harness.invoke();
+  assert.deepEqual(await response.json(), { processed: 1, sent: 0, failed: 0, cancelled: 0, uncertain: 1 });
+  assert.equal(harness.state.queue[0].status, 'sending');
+  assert.match(harness.state.queue[0].last_error, /^발송 확인 필요:/);
+  assert.match(harness.state.queue[0].last_error, /Queue write failed/);
+  await harness.invoke();
+  assert.equal(harness.state.requests.length, 1);
+  assert.equal(harness.state.queue[0].attempts, 1);
+});
+
+test('an explicit 429 rejection permits an initial CEO batch retry with the same key and body', async () => {
+  const harness = createBatchHarness({ fetchResult: number => new Response(number === 1 ? 'Rate limit exceeded' : '{}', { status: number === 1 ? 429 : 200 }) });
+  const response = await harness.invoke();
+  assert.deepEqual(await response.json(), { processed: 1, sent: 0, failed: 1, cancelled: 0, uncertain: 0 });
+  assert.equal(harness.state.queue[0].status, 'failed');
+  assert.match(harness.state.queue[0].last_error, /Resend 429:/);
+  harness.state.queue[0].status = 'pending';
+  await harness.invoke();
+  assert.equal(harness.state.queue[0].status, 'sent');
+  assert.equal(harness.state.queue[0].attempts, 2);
+  assert.equal(harness.state.requests.length, 2);
+  assert.equal(harness.state.requests[0].body, harness.state.requests[1].body);
+  assert.deepEqual(harness.state.requests.map(request => request.headers['Idempotency-Key']), ['hana-proposal/91/ceo_batch', 'hana-proposal/91/ceo_batch']);
+});
+
+test('an explicitly rejected initial CEO batch keeps its provider status when the error body is unreadable', async () => {
+  const harness = createBatchHarness({ fetchResult: () => new Response(new ReadableStream({
+    start(controller) { controller.error(new Error('Error response body stream failed')); },
+  }), { status: 429 }) });
+  const response = await harness.invoke();
+  assert.equal(harness.state.queue[0].status, 'failed');
+  assert.match(harness.state.queue[0].last_error, /^Resend 429: .*Error response body stream failed/);
+  assert.deepEqual(await response.json(), { processed: 1, sent: 0, failed: 1, cancelled: 0, uncertain: 0 });
+});
+
+for (const fixture of [{ assignments: [] }, { proposals: [] }]) {
+  test(`an initial CEO batch rejected before sending remains safely failed (${Object.keys(fixture)[0]})`, async () => {
+    const harness = createBatchHarness(fixture);
+    const response = await harness.invoke();
+    assert.deepEqual(await response.json(), { processed: 1, sent: 0, failed: 1, cancelled: 0, uncertain: 0 });
+    assert.equal(harness.state.queue[0].status, 'failed');
+    assert.equal(harness.state.requests.length, 0);
+    assert.match(harness.state.queue[0].last_error, /^발송 전 확인 실패: /);
+  });
+}
+
+for (const table of ['approval_assignments', 'proposals']) {
+  test(`an initial CEO batch ${table} lookup error records a definite pre-send failure`, async () => {
+    const harness = createBatchHarness({ queryError: queriedTable => queriedTable === table });
+    const response = await harness.invoke();
+    assert.deepEqual(await response.json(), { processed: 1, sent: 0, failed: 1, cancelled: 0, uncertain: 0 });
+    assert.equal(harness.state.queue[0].status, 'failed');
+    assert.equal(harness.state.requests.length, 0);
+    assert.match(harness.state.queue[0].last_error, /^발송 전 확인 실패: Lookup unavailable$/);
+  });
+}
+
+for (const outcome of ['accepted', 'rejected', 'unknown']) {
+  test(`initial CEO batch ${outcome} completion preserves a row whose sending claim ended`, async () => {
+    const harness = createBatchHarness({ fetchResult: () => {
+      harness.state.queue[0].status = 'cancelled';
+      harness.state.queue[0].last_error = 'Changed by another owner';
+      if (outcome === 'unknown') throw new Error('Unknown batch provider outcome');
+      return new Response('{}', { status: outcome === 'rejected' ? 429 : 200 });
+    } });
+    await harness.invoke();
+    assert.equal(harness.state.queue[0].status, 'cancelled');
+    assert.equal(harness.state.queue[0].last_error, 'Changed by another owner');
+  });
+}
 
 test('the existing hook secret still protects the worker before any database or email access', async () => {
   const harness = createHarness();

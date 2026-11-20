@@ -15,10 +15,11 @@ export function createOperationsUI({root,repository,getAdmin,adminHeader,notify}
     if(banner){banner.className=`intake-banner ${settings?.is_open===true?'is-open':settings?.is_open===false?'is-paused':'is-unknown'}`;banner.innerHTML=`<div class="intake-banner-inner"><span class="ops-status-dot" aria-hidden="true"></span><strong>${settingsLabel()}</strong><span class="intake-banner-copy">${esc(message())}</span><button type="button" data-route="notices">공지 보기 →</button></div>`;}
     const form=root.querySelector('#proposalForm[data-edit="false"]');
     if(form){
-      const blocked=settings?.is_open!==true;const submit=form.querySelector('button[type="submit"]');
-      if(submit&&!submit.dataset.submitting){submit.disabled=blocked;submit.textContent=blocked?'신규 접수 중단':'제안 제출';}
+      const blocked=settings?.is_open!==true,canRetry=form.dataset.draftCanRetry==='true';const submit=form.querySelector('button[type="submit"]');
+      form.dataset.intakeBlocked=String(blocked);
+      if(submit&&!submit.dataset.submitting){submit.disabled=form.dataset.draftLocked==='true'||(blocked&&!canRetry);submit.textContent=canRetry?'이전 제출 결과 확인':blocked?'신규 접수 중단':'제안 제출';}
       let note=form.querySelector('[data-intake-form-message]');if(!note){note=document.createElement('div');note.className='ops-draft-message';note.setAttribute('data-intake-form-message','');note.setAttribute('role','status');form.prepend(note);}
-      note.hidden=!blocked;note.textContent=`${settingsError||'신규 제안 접수가 중단되었습니다.'} 작성 중인 내용은 유지됩니다. 필요한 내용은 복사해 보관해 주세요. 기존 제안의 수정·재상신은 가능합니다.`;
+      note.hidden=!blocked;note.textContent=`${settingsError||'신규 제안 접수가 중단되었습니다.'} 임시저장 복원과 이전 제출 결과 확인은 가능합니다. 새 제안은 접수 재개 후 제출하세요. 기존 제안의 수정·재상신은 가능합니다.`;
     }
     const dashboard=root.querySelector('[data-ops-dashboard]');if(dashboard){const opened=new Set(Array.from(dashboard.querySelectorAll('details[open]')).map(d=>d.dataset.noticeKey));dashboard.outerHTML=dashboardMarkup();root.querySelectorAll('[data-ops-dashboard] details').forEach(d=>{d.open=opened.has(d.dataset.noticeKey);});}
     root.querySelectorAll('.hero [data-route="new"]').forEach(button=>{button.textContent=settings?.is_open===true?'＋ 새 제안 작성':'접수 상태 확인';});
@@ -61,7 +62,7 @@ export function createOperationsUI({root,repository,getAdmin,adminHeader,notify}
       else if(action==='cancel-notice'){editing=null;retained=[];root.querySelector('#opsNoticeEditor').innerHTML='';}
       else if(action==='remove-file'){retained.splice(Number(b.dataset.index),1);renderRetained();}
       else if(action==='reload-admin')await renderAdmin();else if(action==='reload-notices')await renderPublic();
-      else if(action==='refresh-new'){await refresh();if(settings?.is_open===true){window.dispatchEvent(new Event('hashchange'));}else renderClosedNew();}
+      else if(action==='refresh-new'){const requested=location.hash;await refresh();if(location.hash===requested&&b.isConnected)window.dispatchEvent(new Event('hashchange'));}
       else if(action==='attachment'){
         const win=window.open('about:blank','_blank');if(win)win.opener=null;
         try{b.disabled=true;const url=await repository.getAttachmentUrl(b.dataset.noticeId,b.dataset.filePath);if(win){win.location.replace(url);}else{notify('브라우저에서 새 창 열기를 허용한 후 첨부자료를 다시 눌러 주세요.',true);}}catch(e){if(win)win.close();throw e;}finally{b.disabled=false;}

@@ -11,6 +11,8 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
+const DEFINITE_REJECTION_STATUSES = new Set([400, 401, 403, 404, 422, 429]);
+
 const htmlEscape = (value: unknown) => String(value ?? "")
   .replaceAll("&", "&amp;")
   .replaceAll("<", "&lt;")
@@ -112,7 +114,7 @@ Deno.serve(async (req) => {
           },
           body: JSON.stringify({ from: RESEND_FROM_EMAIL, to: [item.recipient_email], subject, html }),
         });
-        deliveryStage = response.ok ? "accepted" : "rejected";
+        deliveryStage = response.ok ? "accepted" : (DEFINITE_REJECTION_STATUSES.has(response.status) ? "rejected" : "requested");
         const responseBody = await response.text();
         if (!response.ok) throw new Error(`Resend ${response.status}: ${responseBody.slice(0, 500)}`);
         const { error: sentError } = await supabase.from("proposal_notification_queue").update({
@@ -170,14 +172,14 @@ Deno.serve(async (req) => {
     }
 
     if (item.notification_type === "ceo_batch") {
-      const { data: currentAssignments } = await supabase.from("approval_assignments")
+      const { data: currentAssignments, error: assignmentError } = await supabase.from("approval_assignments")
         .select("email,department,active,id")
         .eq("step_id", item.step_id)
         .eq("active", true)
         .order("id", { ascending: false });
       const currentEmail = String((currentAssignments ?? []).find((row) => (row.department == null || row.department === "") && row.email)?.email ?? "").toLowerCase();
-      if (!currentEmail || currentEmail !== String(item.recipient_email ?? "").toLowerCase()) {
-        await supabase.from("proposal_notification_queue").update({ status: "failed", last_error: "대표이사 결재자 배정이 변경되어 발송을 중단했습니다.", updated_at: new Date().toISOString() }).eq("id", item.id);
+      if (assignmentError || !currentEmail || currentEmail !== String(item.recipient_email ?? "").toLowerCase()) {
+        await supabase.from("proposal_notification_queue").update({ status: "failed", last_error: `발송 전 확인 실패: ${assignmentError?.message ?? "대표이사 결재자 배정이 변경되어 발송을 중단했습니다."}`, updated_at: new Date().toISOString() }).eq("id", item.id).eq("status", "sending");
         failed += 1;
         continue;
       }
@@ -189,7 +191,7 @@ Deno.serve(async (req) => {
         .eq("ceo_submission_status", "상신완료")
         .order("proposal_no", { ascending: true });
       if (batchError || !(batchProposals ?? []).length) {
-        await supabase.from("proposal_notification_queue").update({ status: "failed", last_error: batchError?.message ?? "현재 대표이사 상신대상 제안이 없습니다.", updated_at: new Date().toISOString() }).eq("id", item.id);
+        await supabase.from("proposal_notification_queue").update({ status: "failed", last_error: `발송 전 확인 실패: ${batchError?.message ?? "현재 대표이사 상신대상 제안이 없습니다."}`, updated_at: new Date().toISOString() }).eq("id", item.id).eq("status", "sending");
         failed += 1;
         continue;
       }
@@ -219,7 +221,9 @@ Deno.serve(async (req) => {
           </div>
         </div>`;
 
+      let deliveryStage = "not_requested";
       try {
+        deliveryStage = "requested";
         const response = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {
@@ -229,13 +233,24 @@ Deno.serve(async (req) => {
           },
           body: JSON.stringify({ from: RESEND_FROM_EMAIL, to: [item.recipient_email], subject, html }),
         });
-        const responseBody = await response.text();
-        if (!response.ok) throw new Error(`Resend ${response.status}: ${responseBody.slice(0, 500)}`);
-        await supabase.from("proposal_notification_queue").update({ status: "sent", sent_at: new Date().toISOString(), last_error: null, updated_at: new Date().toISOString() }).eq("id", item.id);
+        deliveryStage = response.ok ? "accepted" : (DEFINITE_REJECTION_STATUSES.has(response.status) ? "rejected" : "requested");
+        if (!response.ok) {
+          const responseBody = await response.text().catch((error) => error instanceof Error ? error.message : String(error));
+          throw new Error(`Resend ${response.status}: ${responseBody.slice(0, 500)}`);
+        }
+        await response.text();
+        const { error: sentError } = await supabase.from("proposal_notification_queue").update({ status: "sent", sent_at: new Date().toISOString(), last_error: null, updated_at: new Date().toISOString() }).eq("id", item.id).eq("status", "sending");
+        if (sentError) throw new Error(sentError.message);
         sent += 1;
       } catch (error) {
-        await supabase.from("proposal_notification_queue").update({ status: "failed", last_error: error instanceof Error ? error.message : String(error), updated_at: new Date().toISOString() }).eq("id", item.id);
-        failed += 1;
+        const message = error instanceof Error ? error.message : String(error);
+        const needsVerification = deliveryStage === "requested" || deliveryStage === "accepted";
+        const lastError = needsVerification
+          ? `발송 확인 필요: ${deliveryStage === "accepted" ? "메일 제공자에 접수되었으나 발송 완료 처리를 확인하지 못했습니다." : "메일 요청 후 제공자 접수 여부를 확인하지 못했습니다."} 중복 발송 방지를 위해 재시도를 중단했습니다. 제공자 발송 기록을 확인하세요. ${message}`
+          : message;
+        await supabase.from("proposal_notification_queue").update({ status: needsVerification ? "sending" : "failed", last_error: lastError, updated_at: new Date().toISOString() }).eq("id", item.id).eq("status", "sending");
+        if (needsVerification) uncertain += 1;
+        else failed += 1;
       }
       continue;
     }

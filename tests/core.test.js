@@ -52,13 +52,17 @@ test("nextProposalNo increments the current-year maximum", () => {
   assert.equal(nextProposalNo(proposals, new Date("2027-01-01")), "Q27-001");
 });
 
-test("calculateAward follows configured score bands", () => {
-  assert.deepEqual(calculateAward(90, "개선"), { grade: "A", amount: 100000 });
-  assert.deepEqual(calculateAward(80, "개선"), { grade: "B", amount: 50000 });
-  assert.deepEqual(calculateAward(70, "개선"), { grade: "C", amount: 30000 });
-  assert.deepEqual(calculateAward(60, "개선"), { grade: "D", amount: 10000 });
-  assert.deepEqual(calculateAward(59, "개선"), { grade: "건수처리", amount: 5000 });
-  assert.deepEqual(calculateAward(59, "안전"), { grade: "건수처리", amount: 10000 });
+test("calculateAward uses the current scored result and shared category policy", () => {
+  for (const category of ["개선", "안전"]) {
+    assert.deepEqual(calculateAward(90, category, "채택"), { grade: "A", amount: 100000 });
+    assert.deepEqual(calculateAward(80, category, "채택"), { grade: "B", amount: 50000 });
+    assert.deepEqual(calculateAward(70, category, "채택"), { grade: "C", amount: 30000 });
+    assert.deepEqual(calculateAward(60, category, "채택"), { grade: "D", amount: 10000 });
+    assert.deepEqual(calculateAward(59, category, "건수처리"), { grade: "건수처리", amount: 5000 });
+    assert.deepEqual(calculateAward(60, category, "건수처리"), { grade: "건수처리", amount: 10000 });
+    for (const result of ["미심사", "미채택", "보류", "중복제안"]) assert.deepEqual(calculateAward(90, category, result), {grade:"", amount:0});
+  }
+  assert.deepEqual(calculateAward(90), {grade:"", amount:0});
 });
 
 test("filterProposals searches every entered term across public fields", () => {

@@ -33,8 +33,8 @@ test('buildPrintModel maps proposal fields into printable labels', () => {
   assert.deepEqual(model.afterImages, ['https://example.com/b.png']);
 });
 
-test('print approval roles follow the attached proposal form', () => {
-  assert.deepEqual(PRINT_APPROVAL_ROLES, ['담당', '팀장', '임원', '주관부서', '대표이사']);
+test('print defaults match the current four electronic approval roles', () => {
+  assert.deepEqual(PRINT_APPROVAL_ROLES, ['담당', '부서장', '해당부서 임원', '대표이사']);
 });
 
 test('buildPrintModel provides blank-safe display values', () => {

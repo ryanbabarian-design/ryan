@@ -12,8 +12,15 @@ import { mountEmployeePicker } from "./ui/employee-picker.js?v=2.7.7";
 import { ONE_OFF_NUMBER, validateOneOffEvaluation } from "./oneoff/q26043-core.js?v=2.8.0";
 import { validateAdminScoreCorrection, adminScoreFlowLabel } from "./admin/score-correction-core.js?v=2.8.7";
 import { createQuestionSearch } from "./search/question-ui.js?v=2.9.6";
-import { createOperationsUI } from "./operations/operations-ui.js?v=2.7.0";
-import { createPerformancePage } from './reports/performance-ui.js?v=2.9.15';
+import { createOperationsUI } from "./operations/operations-ui.js?v=2.9.17";
+import { createPerformancePage } from './reports/performance-ui.js?v=2.9.17';
+import { buildPersonPerformance } from './reports/person-report.js?v=2.9.17';
+import { loadQuestionData } from './search/question-source.js?v=2.9.6';
+import { mountProposalDraft } from './editor/proposal-draft.js?v=2.9.17';
+import { createSubmissionGate, isCurrentDetail } from './reliability/submission.js?v=2.9.17';
+import { createWorkflowProgress } from './ui/workflow-progress.js?v=2.9.17';
+import { createProposalHistory } from './admin/proposal-history.js?v=2.9.17';
+import { createCeoRecall } from './admin/ceo-recall.js?v=2.9.17';
 import { installEvaluationGuide } from './ui/evaluation-guide.js?v=2.9.15';
 import { dashboardTopPeople } from "./reports/dashboard-top-person.js?v=2.9.6";
 import {
@@ -28,9 +35,7 @@ import {
   effectAnalysis,
   findSimilarProposals,
   operationalMetrics,
-  proposerPerformance,
   topProposals,
-  buildTimelineFallback,
   filterProposals,
   selectThirdReviewReady,
   formatCurrency,
@@ -43,7 +48,7 @@ import {
   toProposalCsv,
   WORKFLOW_STATUSES,
 } from "./core.js?v=2.9.15";
-import { createStore } from "./services/store.js?v=2.9.16";
+import { createStore } from "./services/store.js?v=2.9.17";
 import {
   appendImageFiles,
   createImageSelection,
@@ -600,6 +605,12 @@ const adminWorkspace = createAdminWorkspace({
 
 
 const operationsUI = createOperationsUI({root:main, repository:store.operations, getAdmin:()=>state.admin, adminHeader:()=>adminPageHeader("접수·공지 관리", "신규 접수 상태와 직원 공지를 한곳에서 관리합니다.", "operations"), notify:(message,error)=>showToast(message,error?"error":"success")});
+let proposalDraft=null,personSourcePromise=null,personSourceData=null,detailGeneration=0;
+const workflowProgress=createWorkflowProgress({root:main,store,getProposals:allKnownProposals,getAdmin:()=>state.admin,navigate:go});
+const proposalHistory=createProposalHistory({root:main,store,getAdmin:()=>state.admin,navigate:go,header:adminPageHeader});
+const ceoRecall=createCeoRecall({root:main,store,loadProposals:readCeoSnapshot,getAdmin:()=>state.admin,navigate:go,header:adminPageHeader,onSaved:refreshData});
+const submissionGate=createSubmissionGate();
+const submissionReceipts=new Map();
 
 let authorPicker = null;
 let formImageSelections = null;
@@ -987,6 +998,7 @@ function appendFormImages(section, files) {
   const result = appendImageFiles(current, files, MAX_IMAGES_PER_SECTION);
   formImageSelections[section] = result.selection;
   renderFormImagePreview(section);
+  void proposalDraft?.flush();
 
   if (result.rejected.length) {
     showToast(`${imageSectionLabel(section)} 사진은 기존 사진과 합쳐 최대 ${MAX_IMAGES_PER_SECTION}장까지 등록할 수 있습니다.`, "error");
@@ -1010,6 +1022,7 @@ function routeParts() {
 }
 
 function go(path) {
+  void proposalDraft?.flush();
   if (path === "admin" || path === "#admin") path = adminWorkspace.getReturnRoute();
   location.hash = path.startsWith("#") ? path : `#${path}`;
 }
@@ -1100,10 +1113,14 @@ function showApprovalLoginNotice() {
 
 async function refreshData() {
   adminWorkspace.invalidate();
+  personSourcePromise=null;personSourceData=null;
+  workflowProgress.invalidate();
+  let approvalStepsError=null;
   const [proposals, employees, approvalDepartments, departmentGoals, approvalSteps, admin, approverAssignments] = await Promise.all([
-    store.getProposals(), store.getEmployees(), store.getApprovalDepartments().catch(() => []), store.getDepartmentGoals().catch(() => []), store.getApprovalSteps(true).catch(() => []), store.getAdminSession(), store.getApproverAssignments(false).catch(() => []),
+    store.getProposals(), store.getEmployees(), store.getApprovalDepartments().catch(() => []), store.getDepartmentGoals().catch(() => []), store.getApprovalSteps(true).catch(error => {approvalStepsError=error.message||String(error);return [];}), store.getAdminSession(), store.getApproverAssignments(false).catch(() => []),
   ]);
   state.proposals = proposals; state.employees = employees; state.approvalDepartments = approvalDepartments; state.departmentGoals = departmentGoals; state.approvalSteps = approvalSteps; state.admin = admin; state.approverAssignments = approverAssignments;
+  state.approvalStepsError=approvalStepsError;
   state.approvalInbox = admin ? await store.getMyApprovalInbox().catch(() => []) : [];
   performancePage.invalidate();
   questionSearch.invalidate();
@@ -1124,6 +1141,9 @@ async function init() {
 }
 
 function render() {
+  proposalDraft?.destroy();proposalDraft=null;
+  detailGeneration++;
+  workflowProgress.suspend();proposalHistory.suspend();ceoRecall.suspend();
   adminWorkspace.suspend();
   authorPicker?.destroy(); authorPicker = null;
   questionSearch.suspend();
@@ -1154,9 +1174,11 @@ function render() {
   else if (route === "print") renderPrint(routeParts()[1]);
   else if (route === "edit") renderProposalForm(routeParts()[1]);
   else if (route === "person") renderProposerProfile(decodeURIComponent(routeParts()[1] || ""));
+  else if (route === "receipt") renderSubmissionReceipt(decodeURIComponent(routeParts()[1] || ""));
   else if (route === "report") renderManagementReport();
   else if (route === "admin") renderAdmin(routeParts()[1], routeParts()[2]);
   else renderDashboard();
+  workflowProgress.refresh();
 }
 
 function currentEvaluationStage(proposal) {
@@ -1177,6 +1199,11 @@ function currentEvaluationStage(proposal) {
   return "1차 자기평가 보완 필요";
 }
 
+function personProposalRoute(proposal) {
+  const q=new URLSearchParams({year:String(proposal.received_date||'').slice(0,4)||'all',proposal:proposal.proposal_no||''});
+  return `person/${encodeURIComponent(proposal.proposer_name||'')}?${q}`;
+}
+
 function proposalCard(proposal) {
   return `
     <article class="proposal-card">
@@ -1192,8 +1219,9 @@ function proposalCard(proposal) {
         ${statusBadge(proposal.review_result)}
       </div>
       <p class="proposal-summary">${escapeHtml(richTextPlainText(proposal.current_problem) || "상세내용 없음")}</p>
+      <div data-workflow-proposal="${escapeHtml(proposal.id)}" data-workflow-compact></div>
       <div class="proposal-card-bottom">
-        <button class="proposer proposer-link" data-route="person/${encodeURIComponent(proposal.proposer_name)}?year=${encodeURIComponent(String(proposal.received_date || "").slice(0,4) || "all")}"><span class="avatar">${escapeHtml(proposal.proposer_name?.slice(0, 1) || "?")}</span>${escapeHtml(proposal.proposer_name)}</button>
+        <button class="proposer proposer-link" data-route="${escapeHtml(personProposalRoute(proposal))}"><span class="avatar">${escapeHtml(proposal.proposer_name?.slice(0, 1) || "?")}</span>${escapeHtml(proposal.proposer_name)}</button>
         <div class="card-actions">
           ${proposal.review_result === "미심사" ? `<span class="evaluation-admin-state ${proposal.legacy_first_evaluation_exempt === true ? "done" : "pending"}">${escapeHtml(currentEvaluationStage(proposal))}</span>` : ""}
           ${statusBadge(proposal.implementation_status)}
@@ -1730,6 +1758,7 @@ function syncImplementationDateField() {
 }
 
 function renderProposalForm(proposalNo = "") {
+  proposalDraft?.destroy();proposalDraft=null;
   const proposal = proposalNo ? state.proposals.find((item) => item.proposal_no === proposalNo) : null;
   if (proposalNo && !proposal) {
     main.innerHTML = `<div class="empty-state"><h2>제안을 찾지 못했습니다.</h2><button class="button button-primary" data-route="list">목록으로</button></div>`;
@@ -1737,14 +1766,14 @@ function renderProposalForm(proposalNo = "") {
   }
 
   const isEdit = Boolean(proposal);
-  if (!isEdit && !operationsUI.canStartNew()) { operationsUI.renderClosedNew(); return; }
+  const recoveryOnly=!isEdit&&!operationsUI.canStartNew();
   initializeFormImageSelections(proposal);
   main.innerHTML = `
     <section class="page-header">
       <div>
         <span class="eyebrow">${isEdit ? "EDIT PROPOSAL" : "NEW PROPOSAL"}</span>
-        <h1>${isEdit ? `${escapeHtml(proposal.proposal_no)} 제안 수정` : "새 제안 작성"}</h1>
-        <p>${isEdit ? "4자리 수정번호로 변경합니다. 결재 반려 건은 수정 저장과 동시에 해당 결재단계로 자동 재상신됩니다." : "제출 즉시 접수현황에 공개됩니다. 회사 기밀이나 개인정보는 입력하지 마세요."}</p>
+        <h1>${isEdit ? `${escapeHtml(proposal.proposal_no)} 제안 수정` : recoveryOnly ? "임시저장·접수 결과 확인" : "새 제안 작성"}</h1>
+        <p>${isEdit ? "4자리 수정번호로 변경합니다. 결재 반려 건은 수정 저장과 동시에 해당 결재단계로 자동 재상신됩니다." : recoveryOnly ? "현재 신규 접수가 열려 있지 않습니다. 임시저장한 내용을 복원하거나, 앞서 제출한 제안의 접수 결과를 확인할 수 있습니다." : "제출 즉시 접수현황에 공개됩니다. 회사 기밀이나 개인정보는 입력하지 마세요."}</p>
       </div>
       <button class="button button-ghost" data-route="list">접수현황 보기</button>
     </section>
@@ -1886,6 +1915,20 @@ function renderProposalForm(proposalNo = "") {
   renderFormImagePreview("after");
   syncImplementationDateField();
   operationsUI.syncChrome();
+  const form=$("#proposalForm");
+  proposalDraft=mountProposalDraft(form,{
+    key:isEdit?`edit:${proposalNo}`:'new',sourceUpdatedAt:proposal?.updated_at||null,
+    recoveryOnly,onStateChange:()=>operationsUI.syncChrome(),
+    syncEditors:syncAllRichEditors,sanitizeHtml:sanitizeRichTextHtml,
+    readImages:()=>formImageSelections,
+    restoreImages:images=>{formImageSelections=images;renderFormImagePreview('before');renderFormImagePreview('after');},
+    restoreEditors:restoredForm=>{
+      $$('.rich-text-editor',restoredForm).forEach(editor=>{editor.innerHTML=sanitizeRichTextHtml(restoredForm.elements[editor.dataset.richField]?.value||'');});
+      authorPicker?.destroy();authorPicker=mountEmployeePicker($('#employeeSelect'));
+      syncImplementationDateField();updateEvaluationTotalFromForm(restoredForm,'first');
+      const similar=$('#similarResults');if(similar)similar.innerHTML=renderSimilar(restoredForm.elements.title?.value||'',proposalNo);
+    },
+  });
 }
 
 function renderDetail(proposalNo) {
@@ -1896,7 +1939,7 @@ function renderDetail(proposalNo) {
   }
 
   main.innerHTML = `
-    <section class="detail-header">
+    <section class="detail-header" data-detail-proposal="${escapeHtml(proposal.proposal_no)}">
       <button class="back-link" data-route="list">← 접수현황</button>
       <div class="detail-title-row">
         <div>
@@ -1906,7 +1949,7 @@ function renderDetail(proposalNo) {
             <span>${escapeHtml(proposal.category)}제안</span>
           </div>
           <h1>${escapeHtml(proposal.title)}</h1>
-          <p><button class="detail-proposer-link" data-route="person/${encodeURIComponent(proposal.proposer_name)}?year=${encodeURIComponent(String(proposal.received_date || "").slice(0,4) || "all")}"><strong>${escapeHtml(proposal.proposer_name)}</strong></button> · ${escapeHtml(proposal.department)}</p>
+          <p><button class="detail-proposer-link" data-route="${escapeHtml(personProposalRoute(proposal))}"><strong>${escapeHtml(proposal.proposer_name)}</strong></button> · ${escapeHtml(proposal.department)}</p>
         </div>
         <div class="detail-actions">
           ${statusBadge(proposal.status)}
@@ -1966,21 +2009,22 @@ function renderDetail(proposalNo) {
       </div>
     </section>
 
+    <div data-workflow-proposal="${escapeHtml(proposal.id)}"></div>
     <section class="detail-operations-grid">
       <article class="detail-operation-card timeline-card">
         <div class="section-heading"><div><span class="eyebrow">TIMELINE</span><h2>진행상태 타임라인</h2></div></div>
-        <div id="timelineContent" class="proposal-timeline">${renderTimelineRows(buildTimelineFallback(proposal))}</div>
+        <div id="timelineContent" class="proposal-timeline"><div class="analytics-empty">저장된 진행이력을 확인하고 있습니다.</div></div>
       </article>
       <article class="detail-operation-card proposer-performance-card">
-        <div class="section-heading"><div><span class="eyebrow">PERSONAL</span><h2>개인 제안실적</h2></div><button class="button button-ghost button-small" data-route="person/${encodeURIComponent(proposal.proposer_name)}?year=${encodeURIComponent(String(proposal.received_date || "").slice(0,4) || "all")}">전체보기</button></div>
-        ${renderProposerMiniPerformance(proposal)}
+        <div class="section-heading"><div><span class="eyebrow">PERSONAL</span><h2>개인 제안실적</h2></div><button class="button button-ghost button-small" data-route="${escapeHtml(personProposalRoute(proposal))}">전체보기</button></div>
+        <div id="personMiniPerformance" class="personal-mini-grid"><span>개인 실적 확인 중…</span></div>
       </article>
     </section>
 
     <section class="detail-operation-card approval-progress-card">
       <div class="section-heading"><div><span class="eyebrow">APPROVAL</span><h2>전자결재 진행</h2></div></div>
       <div id="rejectionResubmitNotice"></div>
-      <div id="approvalContent">${proposal.approval_required === true ? renderApprovalProgress(state.approvalSteps, []) : `<div class="approval-not-required"><strong>전자결재 대상 아님</strong><p>V2.3 적용 이전 등록 제안은 전자결재·이메일 알림 대상에서 제외됩니다.</p></div>`}</div>
+      <div id="approvalContent"><div class="analytics-empty">전자결재 기록을 확인하고 있습니다.</div></div>
     </section>
 
     <section class="review-box">
@@ -2007,71 +2051,112 @@ function renderTimelineRows(rows) {
     </div>`).join("");
 }
 
-function renderApprovalProgress(steps, records) {
+function renderApprovalProgress(steps, records, {error=null}={}) {
+  if(error)return `<div class="workflow-error" role="alert">결재 단계 설정을 불러오지 못했습니다. <button class="button button-small" data-action="retry-approval-steps">다시 조회</button></div>`;
   if (!steps?.length) return `<div class="analytics-empty">전자결재 단계가 설정되지 않았습니다.</div>`;
   const activeSteps = steps.filter((step) => step.active !== false).sort((a,b)=>Number(a.step_order)-Number(b.step_order));
   const recordMap = new Map((records || []).map((row) => [String(row.step_id), row]));
-  const finalStep = activeSteps[activeSteps.length - 1];
-  const finalApproved = finalStep ? recordMap.get(String(finalStep.id))?.status === "승인" : false;
   return `<div class="approval-progress">${activeSteps.map((step) => {
     const record = recordMap.get(String(step.id));
-    const migratedFinalMissing = !record && finalApproved && step.auto_author !== true;
-    const status = migratedFinalMissing ? "승인" : (record?.status || "대기");
+    const status = record?.status || "기록 없음";
     const isAutoAuthor = step.auto_author === true;
-    const statusLabel = migratedFinalMissing ? "전환 전 완료" : (isAutoAuthor && status === "승인" ? "작성완료" : status);
-    const signer = migratedFinalMissing ? "소급결재 제외" : (record?.approver_name || record?.assigned_name || (isAutoAuthor ? "제안자 자동작성" : "결재자 미지정"));
+    const statusLabel = isAutoAuthor && status === "승인" ? "작성완료" : status;
+    const signer = record?.approver_name || record?.assigned_name || (record ? (isAutoAuthor ? "제안자 자동작성" : "결재자 미지정") : "확인 필요");
     return `<div class="approval-step ${status === "승인" ? "approved" : status === "반려" ? "rejected" : "pending"} ${isAutoAuthor ? "auto-author" : ""}"><span>${escapeHtml(String(step.step_order))}</span><div><strong>${escapeHtml(step.role_name)}${isAutoAuthor ? ' <em class="approval-auto-tag">자동작성</em>' : ""}</strong><small>${escapeHtml(statusLabel)} · ${escapeHtml(signer)}</small></div></div>`;
   }).join("")}</div>`;
 }
 
-function renderProposerMiniPerformance(proposal) {
-  const year = String(proposal.received_date || "").slice(0, 4) || "all";
-  const perf = proposerPerformance(state.proposals, proposal.proposer_name, year, proposal.department);
-  if (!perf) return `<div class="analytics-empty">개인 실적이 없습니다.</div>`;
-  return `<div class="personal-mini-grid"><div><small>${year}년 제안</small><strong>${perf.total}건</strong></div><div><small>채택률</small><strong>${perf.adoptionRate}%</strong></div><div><small>누적점수</small><strong>${perf.totalScore}점</strong></div><div><small>연도 순위</small><strong>${perf.rank}위</strong></div></div>`;
+function allKnownProposals() {
+  const rows=new Map((personSourceData?.proposals||[]).map(row=>[String(row.id),row]));
+  state.proposals.forEach(row=>rows.set(String(row.id),row));return [...rows.values()];
+}
+
+function loadPersonSource() {
+  if(!personSourcePromise)personSourcePromise=loadQuestionData(store).then(source=>{personSourceData=source;return source;}).catch(error=>{personSourcePromise=null;throw error;});
+  return personSourcePromise;
+}
+
+async function loadPersonPerformance(options) {
+  const source=await loadPersonSource();
+  let report=buildPersonPerformance(source.proposals,source.employees,options),amountsVerified=true;
+  if(report.rows.length) {
+    try {
+      const summaries=await store.getWorkflowSummaries(report.rows.map(row=>row.id));
+      const approvals=summaries.flatMap(row=>(row.records||[]).map(record=>({...record,proposal_id:row.proposal_id})));
+      report=buildPersonPerformance(source.proposals,source.employees,{...options,approvals});
+    } catch (_) { amountsVerified=false; }
+  }
+  return {report,source,amountsVerified};
+}
+
+async function hydratePersonMini(proposal,token) {
+  try {
+    const year=String(proposal.received_date||'').slice(0,4)||'all';
+    const {report}=await loadPersonPerformance({name:proposal.proposer_name,year,proposalNo:proposal.proposal_no});
+    if(token!==detailGeneration||!isCurrentDetail(proposal.proposal_no,main))return;
+    const target=$('#personMiniPerformance');if(!target)return;
+    const perf=report.summary;
+    target.innerHTML=perf?`<div><small>${escapeHtml(year)}년 제안</small><strong>${perf.total}건</strong></div><div><small>채택률</small><strong>${perf.adoptionRate}%</strong></div><div><small>누적점수</small><strong>${perf.totalScore}점</strong></div><div><small>제안건수 순위</small><strong>${perf.rank==null?'—':perf.rank+'위'}</strong></div>`:'<p>같은 이름의 직원이 있습니다. 전체보기에서 직원을 확인하세요.</p>';
+  } catch(error) {
+    if(token!==detailGeneration||!isCurrentDetail(proposal.proposal_no,main))return;
+    const target=$('#personMiniPerformance');if(target)target.innerHTML=`<p>개인 실적 조회 실패 · ${escapeHtml(error.message)}</p><button class="button button-small" data-action="retry-detail" data-no="${escapeHtml(proposal.proposal_no)}">다시 조회</button>`;
+  }
 }
 
 async function hydrateDetailOperations(proposal) {
-  const [history, approvals] = await Promise.all([
-    store.getStatusHistory(proposal.id).catch(() => []),
-    store.getApprovalRecords(proposal.id).catch(() => []),
-  ]);
-  const proposerDeleteButton = $("#proposerDeleteButton");
-  if (proposerDeleteButton) proposerDeleteButton.hidden = !canProposerDeleteProposal(proposal, approvals);
-  const rejection = rejectedApprovalInfo(approvals);
-  const normalEditButton = $("#proposerEditButton");
-  const rejectedResubmitButton = $("#rejectedResubmitButton");
-  const rejectionNotice = $("#rejectionResubmitNotice");
-  if (rejection) {
-    if (normalEditButton) normalEditButton.hidden = true;
-    if (proposerDeleteButton) proposerDeleteButton.hidden = true;
-    if (rejectedResubmitButton) rejectedResubmitButton.hidden = false;
-    if (rejectionNotice) {
-      const role = rejection.step?.role_name || "결재자";
-      const comment = rejection.record?.comment || "반려사유가 입력되지 않았습니다.";
-      rejectionNotice.innerHTML = `<div class="first-eval-criteria fail"><strong>${escapeHtml(role)} 반려</strong> · ${escapeHtml(comment)}<br><span>제안자가 내용을 수정해 저장하면 기존 반려이력은 남기고 ${escapeHtml(role)} 결재대기로 자동 재상신됩니다.</span></div>`;
-    }
-  } else {
-    if (rejectedResubmitButton) rejectedResubmitButton.hidden = true;
-    if (rejectionNotice) rejectionNotice.innerHTML = "";
+  const token=++detailGeneration;
+  void hydratePersonMini(proposal,token);
+  const [historyResult,approvalResult]=await Promise.allSettled([store.getStatusHistory(proposal.id),store.getApprovalRecords(proposal.id)]);
+  if(token!==detailGeneration||!isCurrentDetail(proposal.proposal_no,main))return;
+  const retry=`<button class="button button-small" data-action="retry-detail" data-no="${escapeHtml(proposal.proposal_no)}">다시 조회</button>`;
+  const timelineTarget=$('#timelineContent');
+  if(timelineTarget)timelineTarget.innerHTML=historyResult.status==='fulfilled'?renderTimelineRows(historyResult.value):`<div role="alert">진행이력을 불러오지 못했습니다. ${retry}</div>`;
+  const approvalTarget=$('#approvalContent'),deleteButton=$('#proposerDeleteButton'),normalEdit=$('#proposerEditButton'),resubmit=$('#rejectedResubmitButton'),notice=$('#rejectionResubmitNotice');
+  if(approvalResult.status!=='fulfilled') {
+    if(deleteButton)deleteButton.hidden=true;
+    if(normalEdit)normalEdit.disabled=true;
+    if(resubmit)resubmit.hidden=true;
+    if(notice)notice.innerHTML='';
+    if(approvalTarget)approvalTarget.innerHTML=`<div class="workflow-error" role="alert"><strong>결재 상태를 확인하지 못했습니다.</strong><p>조회가 완료되면 현재 단계와 수정 가능 여부를 표시합니다.</p>${retry}</div>`;
+    return;
   }
-  const timelineTarget = $("#timelineContent");
-  if (timelineTarget) timelineTarget.innerHTML = renderTimelineRows(history.length ? history : buildTimelineFallback(proposal));
-  const approvalTarget = $("#approvalContent");
-  if (approvalTarget) approvalTarget.innerHTML = proposal.approval_required === true ? renderApprovalProgress(state.approvalSteps, approvals) : `<div class="approval-not-required"><strong>전자결재 대상 아님</strong><p>V2.3 적용 이전 등록 제안은 전자결재·이메일 알림 대상에서 제외됩니다.</p></div>`;
+  const approvals=approvalResult.value;
+  if(deleteButton)deleteButton.hidden=!canProposerDeleteProposal(proposal,approvals);
+  if(normalEdit)normalEdit.disabled=false;
+  const rejection=rejectedApprovalInfo(approvals);
+  if(rejection) {
+    if(normalEdit)normalEdit.hidden=true;
+    if(deleteButton)deleteButton.hidden=true;
+    if(resubmit)resubmit.hidden=false;
+    if(notice)notice.innerHTML=`<div class="first-eval-criteria fail"><strong>${escapeHtml(rejection.step?.role_name||'결재자')} 반려</strong> · ${escapeHtml(rejection.record?.comment||'반려사유 미입력')}<br><span>제안자가 내용을 수정해 저장하면 반려이력을 남기고 해당 결재단계로 재상신됩니다.</span></div>`;
+  } else {
+    if(resubmit)resubmit.hidden=true;
+    if(notice)notice.innerHTML='';
+  }
+  if(approvalTarget)approvalTarget.innerHTML=(proposal.approval_required===true||proposal.legacy_ceo_direct===true)?renderApprovalProgress(proposal.legacy_ceo_direct===true?state.approvalSteps.filter(s=>s.role_name==='대표이사'):state.approvalSteps,approvals,{error:state.approvalStepsError}):'<div class="approval-not-required"><strong>기존 제안 · 전자결재 대상 아님</strong><p>저장된 심사·지급기록을 기준으로 표시합니다.</p></div>';
 }
 
-function renderProposerProfile(name) {
-  const requested = getDashboardYearFromUrl();
-  const report = dashboardBreakdown(state.proposals, requested);
-  const year = report.selectedYear;
-  const perf = proposerPerformance(state.proposals, name, year);
-  const rows = filterProposals(state.proposals, { year: year === "all" ? "all" : year, query: name }).filter((p) => p.proposer_name === name);
-  main.innerHTML = `
-    <section class="page-header"><div><span class="eyebrow">PROPOSER PROFILE</span><h1>${escapeHtml(name)} 개인 제안실적</h1><p>연도별 제안건수·채택률·점수·포상금·효과금액을 확인합니다.</p></div><button class="button button-ghost" data-route="list">접수현황</button></section>
-    <section class="profile-toolbar"><label>조회연도<select id="personYearFilter" data-person="${escapeHtml(name)}"><option value="all" ${year === "all" ? "selected" : ""}>전체 연도</option>${report.years.map((y) => `<option value="${y}" ${year === y ? "selected" : ""}>${y}년</option>`).join("")}</select></label></section>
-    ${perf ? `<section class="metric-grid profile-metrics"><div class="metric-card"><div><small>총 제안</small><strong>${perf.total}건</strong></div></div><div class="metric-card"><div><small>채택</small><strong>${perf.adopted}건</strong></div></div><div class="metric-card"><div><small>채택률</small><strong>${perf.adoptionRate}%</strong></div></div><div class="metric-card"><div><small>순위</small><strong>${perf.rank}위</strong></div></div><div class="metric-card"><div><small>누적점수</small><strong>${perf.totalScore}점</strong></div></div><div class="metric-card"><div><small>포상금</small><strong>${formatCurrency(perf.awardTotal)}</strong></div></div><div class="metric-card"><div><small>효과금액</small><strong>${formatCurrency(perf.effectTotal)}</strong></div></div></section>` : `<div class="analytics-empty">선택 기간 실적이 없습니다.</div>`}
-    <section class="section"><div class="section-heading"><div><span class="eyebrow">IDEAS</span><h2>${escapeHtml(year === "all" ? "전체 연도" : `${year}년`)} 제안내역</h2></div></div>${rows.length ? `<div class="proposal-grid">${rows.map(proposalCard).join("")}</div>` : `<div class="analytics-empty">제안내역이 없습니다.</div>`}</section>`;
+async function renderProposerProfile(name) {
+  const requestedRoute=location.hash,q=new URLSearchParams(location.hash.split('?')[1]||'');
+  const year=/^\d{4}$/.test(q.get('year')||'')?q.get('year'):'all';
+  const options={name,year,identity:q.get('identity')||'',proposalNo:q.get('proposal')||'',department:q.get('department')||''};
+  main.innerHTML='<section class="loading-card"><div class="spinner"></div><p>전체 접수자료와 직원명단을 기준으로 개인 실적을 확인합니다.</p></section>';
+  try {
+    const {report,source,amountsVerified}=await loadPersonPerformance(options);
+    if(location.hash!==requestedRoute)return;
+    const years=[...new Set([String(currentKoreaYear()),...source.proposals.map(p=>String(p.received_date||'').slice(0,4)).filter(y=>/^\d{4}$/.test(y))])].sort().reverse();
+    const perf=report.summary;
+    const choices=report.choices.map(person=>{const params=new URLSearchParams({year,identity:person.identity});return `<button class="button button-secondary" data-route="person/${encodeURIComponent(person.name)}?${escapeHtml(params.toString())}">${escapeHtml(person.name)} · ${escapeHtml(person.department)}${person.employeeNo?' · 사번 '+escapeHtml(person.employeeNo):person.employeeId?' · 직원 ID '+escapeHtml(person.employeeId):' · 명단 확인 필요'}</button>`;}).join('');
+    main.innerHTML=`<section class="page-header"><div><span class="eyebrow">개인 제안실적</span><h1>${escapeHtml(report.name||name)} 개인 제안실적</h1><p>접수연도 기준 · 부서 별칭과 확인된 직원명단을 함께 적용합니다.</p></div><button class="button button-ghost" data-route="list">접수현황</button></section>
+      <section class="profile-toolbar"><label>조회연도<select id="personYearFilter" data-person="${escapeHtml(report.name||name)}" data-identity="${escapeHtml(report.identity||'')}"><option value="all" ${year==='all'?'selected':''}>전체 연도</option>${years.map(y=>`<option value="${y}" ${year===y?'selected':''}>${y}년</option>`).join('')}</select></label><span>${escapeHtml(report.department||'')}</span></section>
+      ${report.ambiguous?`<section class="empty-state"><h2>직원을 선택해 주세요.</h2><p>같은 이름의 직원을 합산하지 않습니다. 부서·사번을 확인하세요.</p><div class="header-buttons">${choices}</div></section>`:perf?`<section class="metric-grid profile-metrics">${[['총 제안',perf.total+'건'],['채택',perf.adopted+'건'],['채택률',perf.adoptionRate+'%'],['제안건수 순위',perf.rank==null?'—':perf.rank+'위'],['누적점수',perf.totalScore+'점'],['심사 지급액',formatCurrency(perf.awardTotal)],['확정 효과금액',amountsVerified?formatCurrency(perf.effectTotal):'확인 필요']].map(([label,value])=>`<div class="metric-card"><div><small>${label}</small><strong>${value}</strong></div></div>`).join('')}</section>`:'<div class="analytics-empty">직원 또는 접수자료를 확인하지 못했습니다.</div>'}
+      ${!amountsVerified?'<p class="workflow-error">결재내역 조회를 완료하지 못해 확정 효과금액을 표시하지 않았습니다. <button class="button button-small" data-action="refresh-person">다시 조회</button></p>':''}
+      ${perf?`<section class="section"><div class="section-heading"><div><span class="eyebrow">제안내역</span><h2>${year==='all'?'전체 연도':year+'년'} · ${report.rows.length}건</h2></div></div>${report.rows.length?`<div class="proposal-grid">${report.rows.map(row=>proposalCard(row.proposal)).join('')}</div>`:'<div class="analytics-empty">선택 기간의 접수 건이 없습니다.</div>'}</section>`:''}`;
+    workflowProgress.refresh();
+  } catch(error) {
+    if(location.hash!==requestedRoute)return;
+    main.innerHTML=`<section class="empty-state"><h2>개인 실적을 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p><button class="button button-primary" data-action="refresh-person">다시 조회</button></section>`;
+  }
 }
 
 function renderPrintImages(images, label) {
@@ -2285,6 +2370,7 @@ function adminNav(active = "proposals") {
       <button class="${active === "proposals" ? "active" : ""}" data-route="${escapeHtml(adminList)}">제안 심사</button>
       <button class="${active === "inbox" ? "active" : ""}" data-route="admin/inbox">내 결재함${actionableApprovalCount() ? ` <span class="approval-inbox-badge inline">${actionableApprovalCount()}</span>` : ""}</button>
       <button class="${active === "ceo-submit" ? "active" : ""}" data-route="admin/ceo-submit?year=${escapeHtml(year)}">대표이사 상신</button>
+      <button class="${active === "ceo-recall" ? "active" : ""}" data-route="admin/ceo-recall?year=${escapeHtml(year)}">상신 회수·재평가</button>
       <button class="${active === "operations" ? "active" : ""}" data-route="admin/operations">접수·공지</button>
     </div>
     <details class="${['goals','approvals','notifications','audit'].includes(active)?'is-active':''}"><summary>운영 설정</summary><div>
@@ -2511,7 +2597,7 @@ function renderApprovalAction(permission, proposalId) {
   if (!permission.canAct) return `<div class="approval-permission waiting"><strong>본인 결재단계: ${escapeHtml(permission.step.role_name)}</strong><p>${escapeHtml(permission.reason)}</p></div>`;
   const isTeamLeader = permission.step?.role_name === "부서장";
   if (isTeamLeader) {
-    return `<div id="approvalActionForm" data-proposal-id="${escapeHtml(proposalId)}" data-step-id="${permission.step.id}" data-role-name="${escapeHtml(permission.step.role_name)}" class="approval-action-form team-leader-action-form">
+    return `<div id="approvalActionForm" data-proposal-id="${escapeHtml(proposalId)}" data-step-id="${permission.step.id}" data-role-name="${escapeHtml(permission.step.role_name)}" data-updated-at="${escapeHtml(state.proposals.find(p=>p.id===proposalId)?.updated_at||'')}" class="approval-action-form team-leader-action-form">
       <div class="approval-own-step"><small>본인 결재단계</small><strong>${permission.step.step_order}. ${escapeHtml(permission.step.role_name)}</strong><span>${escapeHtml(permission.assignment?.department || "전체 부서")}</span></div>
       <div class="team-leader-evaluation-box">
         <div class="team-leader-evaluation-head"><strong>2차 팀장평가</strong><p>50점 미만은 기준미달입니다. 50점 이상은 임원 승인 후 모두 3차 심사하며, 50~64점은 건수처리 후보입니다.</p></div>
@@ -2525,7 +2611,7 @@ function renderApprovalAction(permission, proposalId) {
       </div>
     </div>`;
   }
-  return `<div id="approvalActionForm" data-proposal-id="${escapeHtml(proposalId)}" data-step-id="${permission.step.id}" data-role-name="${escapeHtml(permission.step.role_name)}" class="approval-action-form secure-approval-action">
+  return `<div id="approvalActionForm" data-proposal-id="${escapeHtml(proposalId)}" data-step-id="${permission.step.id}" data-role-name="${escapeHtml(permission.step.role_name)}" data-updated-at="${escapeHtml(state.proposals.find(p=>p.id===proposalId)?.updated_at||'')}" class="approval-action-form secure-approval-action">
     <div class="approval-own-step"><small>본인 결재단계</small><strong>${permission.step.step_order}. ${escapeHtml(permission.step.role_name)}</strong><span>${escapeHtml(permission.assignment?.department || "전체 부서")}</span></div>
     <label class="field">처리<select name="approval_status"><option value="승인">승인</option><option value="반려">반려</option></select></label>
     <label class="field approval-comment">의견<input name="comment" placeholder="결재의견"></label>
@@ -2534,9 +2620,17 @@ function renderApprovalAction(permission, proposalId) {
 }
 
 async function renderApproverReview(id) {
+  const requestedRoute=location.hash;
   const proposal = state.proposals.find((item) => item.id === id);
   if (!proposal) { main.innerHTML = `<div class="empty-state"><h2>제안을 찾지 못했습니다.</h2><button class="button button-primary" data-route="admin/inbox">내 결재함${actionableApprovalCount() ? ` <span class="approval-inbox-badge inline">${actionableApprovalCount()}</span>` : ""}</button></div>`; return; }
-  const records = await store.getApprovalRecords(proposal.id).catch(() => []);
+  main.innerHTML=`${adminPageHeader("전자결재 검토","현재 결재 기록을 확인합니다.","inbox")}<div class="loading-card"><div class="spinner"></div><p>결재 기록을 불러오고 있습니다.</p></div>`;
+  let records;
+  try { records=await store.getApprovalRecords(proposal.id); }
+  catch(error) {
+    if(location.hash===requestedRoute)main.innerHTML=`${adminPageHeader("전자결재 검토","조회 완료 후 평가와 승인 기능을 표시합니다.","inbox")}<div class="empty-state" role="alert"><h2>결재 기록을 불러오지 못했습니다.</h2><p>${escapeHtml(error.message)}</p><button class="button button-primary" data-action="retry-approver-review" data-id="${escapeHtml(id)}">다시 조회</button></div>`;
+    return;
+  }
+  if(location.hash!==requestedRoute)return;
   const permission = resolveApprovalPermission(proposal, state.approvalSteps, records, state.admin?.assignments || []);
   const isTeamLeaderReview = permission?.step?.role_name === "부서장";
   let priorEvaluation = false;
@@ -2545,10 +2639,12 @@ async function renderApproverReview(id) {
     priorEvaluation = history.some(r=>r.proposal_id===proposal.id && r.role_name==='부서장' && r.can_evaluate);
   } catch (_) { /* optional V2.7.2 schema not installed */ }
 
+  if(location.hash!==requestedRoute)return;
+
   main.innerHTML = `${adminPageHeader("전자결재 검토", "제안내용을 확인한 뒤 본인에게 지정된 단계만 승인 또는 반려할 수 있습니다.", "inbox")}
     <section class="approver-review-layout${(isTeamLeaderReview || priorEvaluation) ? " team-leader-review" : ""}">
       <article class="admin-review-preview approver-readonly-preview"><div class="review-preview-head"><div><strong>${escapeHtml(proposal.proposer_name)}</strong><span>${escapeHtml(proposal.department)} · ${escapeHtml(proposal.category)}제안</span></div>${statusBadge(proposal.review_result)}</div><h1>${escapeHtml(proposal.proposal_no)} · ${escapeHtml(proposal.title)}</h1>${hasLegacyScore(proposal)?`<div class="evaluation-lock-note"><strong>기존 심사 ${Number(proposal.score)}점 · ${escapeHtml(proposal.review_result)} · ${formatCurrency(proposal.award_amount)}</strong><br>과거 확정 총점 등록 후 대표이사에게 직접 상신된 건입니다. 부서장·임원 승인이나 항목별 점수를 새로 만들지 않았습니다.</div>`:""}${contentCorrectionNotice(proposal)}<h2>현재 문제점</h2>${renderRichText(proposal.current_problem)}<h2>개선방안</h2>${renderRichText(proposal.improvement_plan)}<h2>기대효과</h2>${renderRichText(proposal.expected_effect)}<div class="detail-summary-grid approver-review-metrics"><div><small>심사결과</small>${statusBadge(proposal.review_result)}</div><div><small>점수</small><strong>${proposal.score == null ? "-" : `${Number(proposal.score)}점`}</strong></div><div><small>포상금</small><strong>${formatCurrency(proposal.award_amount)}</strong></div><div><small>제안자 예상 효과금액</small><strong>${formatCurrency(proposal.proposer_effect_amount)}</strong></div><div><small>심사 확정 효과금액</small><strong>${formatCurrency(proposal.effect_amount)}</strong></div></div>${proposal.first_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">1ST EVALUATION</span><h2>1차 자기평가</h2><p>제안자가 제출 시 작성한 평가표입니다. 결재자는 점수를 변경하지 않고 참고만 합니다.</p></div></div>${renderEvaluationTable("approver-first", proposal.first_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"1차 평가 · 제안자 자기평가" })}` : (proposal.legacy_first_evaluation_exempt === true ? `<div class="analytics-empty"><strong>기존 심사대기 이관건</strong><br>1차 본인평가 면제 · 2차 팀장평가부터 현행 기준 적용</div>` : `<div class="analytics-empty">1차 평가자료가 없습니다.</div>`)}${proposal.team_leader_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">2ND EVALUATION</span><h2>2차 팀장평가</h2><p>팀장이 평가한 점수입니다.</p></div></div>${renderEvaluationTable("approver-team", proposal.team_leader_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"2차 평가 · 팀장평가" })}` : ""}${proposal.second_evaluation_total != null ? `<div class="section-heading"><div><span class="eyebrow">3RD EVALUATION</span><h2>3차 심사위원 평가</h2><p>심사위원회가 공동으로 확정한 최종 평가입니다.</p></div></div>${renderEvaluationTable("approver-second", proposal.second_evaluation || {}, { readOnly:true, title:"제안 평가표", subtitle:"3차 평가 · 심사위원회 공동평가" })}` : ""}<div class="admin-image-pair"><div><strong>개선 전</strong>${renderImages(proposal.before_images, "개선 전 사진")}</div><div><strong>개선 후</strong>${renderImages(proposal.after_images, "개선 후 사진")}</div></div>${renderAiEffectAnalysis(proposal, null, false, "approverAiEffectAnalysisCard")}</article>
-      <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${hasLegacyScore(proposal)?`<p>과거 심사 총점 확인 → 대표이사 최종결재</p>${renderApprovalProgress(state.approvalSteps.filter(s=>s.role_name==='대표이사'), records)}`:renderApprovalProgress(state.approvalSteps, records)}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}${priorEvaluation ? `<section class="team-leader-evaluation-box" id="v272PriorEvaluation" data-role-name="부서장" data-id="${escapeHtml(proposal.id)}"><h3>기존 승인건 · 2차 팀장평가 보완</h3><p>기존 결재는 유지됩니다. 3차 심사 완료건은 수정할 수 없습니다.</p>${renderEvaluationTable('team',proposal.team_leader_evaluation||{},{title:'2차 팀장평가',subtitle:'기존 승인자 평가'})}<div class="evaluation-lock-note" data-team-evaluation-guide role="status" aria-live="polite"></div><button type="button" class="button button-primary" data-action="v272-save-prior-evaluation" data-id="${escapeHtml(proposal.id)}">2차 평가점수 저장</button></section>` : ''}</section></aside>
+      <aside class="approver-review-side"><section class="side-card"><span class="eyebrow">APPROVAL STATUS</span><h2>전자결재 진행</h2>${hasLegacyScore(proposal)?`<p>과거 심사 총점 확인 → 대표이사 최종결재</p>${renderApprovalProgress(state.approvalSteps.filter(s=>s.role_name==='대표이사'), records,{error:state.approvalStepsError})}`:renderApprovalProgress(state.approvalSteps, records,{error:state.approvalStepsError})}</section><section class="side-card"><span class="eyebrow">MY SIGNATURE</span><h2>본인 결재</h2>${renderApprovalAction(permission, proposal.id)}${priorEvaluation ? `<section class="team-leader-evaluation-box" id="v272PriorEvaluation" data-role-name="부서장" data-id="${escapeHtml(proposal.id)}"><h3>기존 승인건 · 2차 팀장평가 보완</h3><p>기존 결재는 유지됩니다. 3차 심사 완료건은 수정할 수 없습니다.</p>${renderEvaluationTable('team',proposal.team_leader_evaluation||{},{title:'2차 팀장평가',subtitle:'기존 승인자 평가'})}<div class="evaluation-lock-note" data-team-evaluation-guide role="status" aria-live="polite"></div><button type="button" class="button button-primary" data-action="v272-save-prior-evaluation" data-id="${escapeHtml(proposal.id)}">2차 평가점수 저장</button></section>` : ''}</section></aside>
     </section>`;
   // Historical-approval editor is separate from the regular approval form.
   if (priorEvaluation) updateEvaluationTotalFromForm($("#v272PriorEvaluation"), "team");
@@ -2638,6 +2734,15 @@ function renderAdmin(action = "", id = "") {
   if (action === "review") { void renderApproverReview(id); return; }
   if (action === "inbox") { void renderApproverInbox(); return; }
   if (action === "ceo-submit") { void renderCeoSubmissionQueue(); return; }
+  if (action === "ceo-recall") {
+    const params=new URLSearchParams(location.hash.split('?')[1]||'');
+    void ceoRecall.render({year:params.get('year')||String(currentKoreaYear()),proposalId:params.get('proposal')||''});return;
+  }
+  if (action === "history") {
+    const proposal=allKnownProposals().find(p=>String(p.id)===String(id));
+    if(!proposal){main.innerHTML=`${adminPageHeader('제안별 변경이력','제안번호와 저장기록을 확인합니다.','audit')}<section class="empty-state"><h2>제안정보를 불러오지 못했습니다.</h2><button class="button button-primary" data-action="refresh-history" data-id="${escapeHtml(id)}">다시 조회</button></section>`;return;}
+    void proposalHistory.render(proposal);return;
+  }
   if (action === "goals") { renderAdminGoals(); return; }
   if (action === "approvals") { renderAdminApprovals(); return; }
   if (action === "notifications") { void renderAdminNotifications(); return; }
@@ -3030,7 +3135,7 @@ function renderThirdReviewFields(proposal, { correction = false } = {}) {
         </div>
         <section class="admin-approval-box">
           <div class="section-heading"><div><span class="eyebrow">APPROVAL</span><h2>전자결재 처리</h2></div></div>
-          <div id="adminApprovalProgress">${renderApprovalProgress(state.approvalSteps, [])}</div>
+          <div id="adminApprovalProgress"><div class="analytics-empty">결재 기록을 확인하고 있습니다.</div></div>
           <div id="adminApprovalAction"><div class="approval-permission blocked"><strong>서명권한 확인 중</strong><p>본인에게 지정된 결재단계를 확인하고 있습니다.</p></div></div>
         </section>
         <div class="admin-review-actions">
@@ -3146,7 +3251,7 @@ async function hydrateAdminApproval(proposal) {
   const legacyExcluded=isLegacyOutcomeReview(proposal,records,context);
   if(target)target.innerHTML=legacyExcluded
     ? `<div class="evaluation-lock-note"><strong>전자결재 제외 과거 제안</strong><br>실제 진행된 결재는 없습니다. 자동작성 ${Number(context.auto_author_count)||0}건과 빈 대기 ${Number(context.empty_pending_count)||0}건은 삭제하지 않고 보존합니다. 임원 승인을 임의로 만들지 않습니다.</div>`
-    : renderApprovalProgress(state.approvalSteps,records);
+    : renderApprovalProgress(state.approvalSteps,records,{error:state.approvalStepsError});
   const actionTarget=form.querySelector("#adminApprovalAction");
   if(actionTarget){
     if(legacyExcluded)actionTarget.innerHTML=`<p class="field-help">관리자는 위 결과심사에서 사유를 남기고 심사완료로 저장할 수 있습니다. 이 작업은 대표이사 상신·승인이나 지급 처리가 아닙니다.</p>`;
@@ -3253,73 +3358,66 @@ function buildProposalPayload(form) {
 }
 
 async function handleProposalSubmit(form) {
-  const data = new FormData(form);
-  if (data.get("website")) return;
-  const payload = buildProposalPayload(form);
-  const isEdit = form.dataset.edit === "true";
-  if (!isEdit) {
-    try { await store.operations.assertNewProposalAllowed(); }
-    catch (error) { await operationsUI.refresh(); throw error; }
-  }
-  validateFirstSelfEvaluationValues(payload.first_evaluation);
-
-  if (!/^\d{4}$/.test(payload.edit_pin)) {
-    throw new Error("수정번호는 숫자 4자리로 입력하세요.");
-  }
-
-  const beforeSelection = formImageSelections?.before || createImageSelection([]);
-  const afterSelection = formImageSelections?.after || createImageSelection([]);
-  const beforeFiles = getNewFiles(beforeSelection);
-  const afterFiles = getNewFiles(afterSelection);
-  if (
-    totalSelectedImages(beforeSelection) > MAX_IMAGES_PER_SECTION
-    || totalSelectedImages(afterSelection) > MAX_IMAGES_PER_SECTION
-  ) {
-    throw new Error(`사진은 개선 전·후 각각 최대 ${MAX_IMAGES_PER_SECTION}장까지 등록할 수 있습니다.`);
-  }
-
-  const submitButton = form.querySelector('button[type="submit"]');
-  submitButton.disabled = true;
-  submitButton.dataset.submitting = "true";
-  submitButton.textContent = isEdit ? "수정 저장 중..." : "제출 중...";
-
+  const running=submissionGate.state(form);if(running.promise)return running.promise;
+  const draft=proposalDraft,knownReceipt=draft?.getReceipt();
+  if(knownReceipt?.proposal_no){go(`receipt/${encodeURIComponent(knownReceipt.proposal_no)}`);return;}
+  const requestId=draft?.getRequestId()||(form.dataset.requestId ||= crypto.randomUUID());
+  const isEdit=form.dataset.edit==='true',button=form.querySelector('button[type="submit"]');
+  const before=formImageSelections?.before||createImageSelection([]),after=formImageSelections?.after||createImageSelection([]);
+  let refreshed=false;
+  button.disabled=true;button.dataset.submitting='true';button.textContent=isEdit?'수정 저장 중…':'제출 중…';
   try {
-    let saved;
-    if (isEdit) {
-      const patch = {
-        ...payload,
-        before_images: getRetainedImages(beforeSelection),
-        after_images: getRetainedImages(afterSelection),
-      };
-      delete patch.edit_pin;
-      const beforeProposal = state.proposals.find((row) => row.proposal_no === form.dataset.no);
-      const beforeApprovals = beforeProposal ? await store.getApprovalRecords(beforeProposal.id).catch(() => []) : [];
-      const wasRejected = Boolean(rejectedApprovalInfo(beforeApprovals));
-      saved = await store.updateProposalWithPin(
-        form.dataset.no,
-        payload.edit_pin,
-        patch,
-        beforeFiles,
-        afterFiles,
-      );
-      showToast(wasRejected ? "제안을 수정하고 반려 결재단계로 재상신했습니다." : "제안이 수정되었습니다.");
-    } else {
-      const lastSubmit = Number(localStorage.getItem("proposal:last-submit") || 0);
-      if (Date.now() - lastSubmit < 15000) {
-        throw new Error("연속 제출 방지를 위해 잠시 후 다시 제출하세요.");
-      }
-      saved = await store.createProposal(payload, beforeFiles, afterFiles);
-      localStorage.setItem("proposal:last-submit", String(Date.now()));
-      showToast(`${saved.proposal_no}로 접수되었습니다.`);
-    }
-    await refreshData();
-    go(`detail/${saved.proposal_no}`);
+    return await submissionGate.run(form,{
+      requestId,
+      save:async()=>{
+        if(!isEdit){
+          if(!draft?.ensureRequestDurable)throw new Error('작성 중인 제안의 저장 상태를 확인하지 못했습니다. 작성 화면을 다시 열어 주세요.');
+          await draft.ensureRequestDurable();
+          if(draft.getRequestId()!==requestId)throw new Error('작성 중인 제안이 변경되었습니다. 현재 내용을 확인한 뒤 다시 제출하세요.');
+        }
+        const data=new FormData(form);if(data.get('website'))throw new Error('입력 내용을 확인하세요.');
+        const payload=buildProposalPayload(form);validateFirstSelfEvaluationValues(payload.first_evaluation);
+        if(!/^\d{4}$/.test(payload.edit_pin))throw new Error('수정번호는 숫자 4자리로 입력하세요.');
+        if(totalSelectedImages(before)>MAX_IMAGES_PER_SECTION||totalSelectedImages(after)>MAX_IMAGES_PER_SECTION)throw new Error(`사진은 개선 전·후 각각 최대 ${MAX_IMAGES_PER_SECTION}장까지 등록할 수 있습니다.`);
+        if(isEdit){
+          const current=state.proposals.find(p=>p.proposal_no===form.dataset.no);
+          const patch={...payload,before_images:getRetainedImages(before),after_images:getRetainedImages(after)};delete patch.edit_pin;
+          return store.updateProposalWithPin(form.dataset.no,payload.edit_pin,patch,getNewFiles(before),getNewFiles(after),{expectedUpdatedAt:draft?.getSourceUpdatedAt()||current?.updated_at});
+        }
+        if(!operationsUI.canStartNew()&&!draft.canRetrySubmission())throw new Error('신규 접수가 열려 있지 않습니다. 이미 제출한 제안의 결과 확인만 가능합니다.');
+        const beforeFiles=getNewFiles(before),afterFiles=getNewFiles(after);
+        await draft.prepareSubmission(payload,beforeFiles,afterFiles);
+        return store.createProposal(payload,beforeFiles,afterFiles,{requestId});
+      },
+      onAccepted:async receipt=>{
+        submissionReceipts.set(receipt.proposal_no,{...receipt,isEdit});
+        await draft?.markSubmitted(receipt);
+        showToast(`${receipt.proposal_no} · ${isEdit?'수정 저장':'접수'} 완료`);
+      },
+      refresh:async()=>{await refreshData();refreshed=true;},
+      onRefreshError:error=>{
+        const saved=submissionGate.state(form).receipt;
+        if(saved)submissionReceipts.set(saved.proposal_no,{...saved,isEdit,refreshError:error.message||String(error)});
+      },
+      navigate:receipt=>{
+        if(!form.isConnected)return;
+        const path=refreshed&&state.proposals.some(p=>p.proposal_no===receipt.proposal_no)?'detail':'receipt';
+        go(`${path}/${encodeURIComponent(receipt.proposal_no)}`);
+      },
+    });
   } finally {
-    delete submitButton.dataset.submitting;
-    submitButton.disabled = false;
-    submitButton.textContent = isEdit ? "수정 저장" : "제안 제출";
-    if (!isEdit) await operationsUI.refresh();
+    if(form.isConnected){
+      const accepted=Boolean(submissionGate.state(form).receipt);
+      delete button.dataset.submitting;button.disabled=accepted;
+      button.textContent=accepted?(isEdit?'수정 완료':'접수 완료'):(isEdit?'수정 저장':'제안 제출');
+    }
+    if(!isEdit)try{await operationsUI.refresh();}catch(_){/* The saved receipt and current input remain authoritative. */}
   }
+}
+
+function renderSubmissionReceipt(proposalNo) {
+  const receipt=submissionReceipts.get(proposalNo),known=receipt||state.proposals.find(p=>p.proposal_no===proposalNo);
+  main.innerHTML=`<section class="empty-state submission-receipt" data-receipt-no="${escapeHtml(proposalNo)}"><span class="eyebrow">${known?'저장 완료':'접수번호 확인'}</span><h1>${escapeHtml(proposalNo)}</h1><h2>${known?(receipt?.isEdit?'수정 저장이 완료되었습니다.':'제안이 접수되었습니다.'):'접수번호로 저장 결과를 확인합니다.'}</h2><p>${known?'이 접수번호로 처리됐습니다. 새로 제출하지 않아도 됩니다.':'아래 버튼으로 접수내역을 조회하세요.'}</p>${receipt?.refreshError?'<p class="workflow-error">화면 조회를 완료하지 못했습니다. 접수는 완료되었으며 다시 조회할 수 있습니다.</p>':''}<div class="header-buttons"><button class="button button-primary" data-action="refresh-submitted-proposal" data-no="${escapeHtml(proposalNo)}">접수내역 확인</button><button class="button button-secondary" data-route="list">접수현황</button><button class="button button-ghost" data-route="new">새 제안 작성</button></div></section>`;
 }
 
 async function parseEmployeeFile(file) {
@@ -3411,7 +3509,31 @@ document.addEventListener("click", async (event) => {
 
   const { action } = actionButton.dataset;
   try {
-    if (action === "focus-unified-search") {
+    if (action === "retry-approval-steps") {
+      const requestedRoute=location.hash;actionButton.disabled=true;
+      try{await refreshData();if(location.hash===requestedRoute&&actionButton.isConnected)render();}
+      finally{if(actionButton.isConnected)actionButton.disabled=false;}
+    } else if (action === "retry-approver-review") {
+      await renderApproverReview(actionButton.dataset.id);
+    } else if (action === "retry-detail") {
+      const proposal=state.proposals.find(p=>p.proposal_no===actionButton.dataset.no);
+      if(proposal&&isCurrentDetail(proposal.proposal_no,main))await hydrateDetailOperations(proposal);
+    } else if (action === "refresh-person") {
+      personSourcePromise=null;personSourceData=null;
+      await renderProposerProfile(decodeURIComponent(routeParts()[1]||''));
+    } else if (action === "refresh-history") {
+      const requestedRoute=location.hash;await refreshData();
+      if(location.hash===requestedRoute&&actionButton.isConnected)renderAdmin('history',actionButton.dataset.id);
+    } else if (action === "refresh-submitted-proposal") {
+      const requestedRoute=location.hash;
+      actionButton.disabled=true;
+      try {
+        await refreshData();
+        if(location.hash!==requestedRoute||!actionButton.isConnected)return;
+        if(!state.proposals.some(p=>p.proposal_no===actionButton.dataset.no))throw new Error('접수내역을 아직 확인하지 못했습니다. 잠시 후 같은 접수번호로 다시 조회하세요.');
+        go(`detail/${encodeURIComponent(actionButton.dataset.no)}`);
+      } finally {if(actionButton.isConnected)actionButton.disabled=false;}
+    } else if (action === "focus-unified-search") {
       $("#questionSearch")?.scrollIntoView({block:"start", behavior:"smooth"});
       $("#questionSearchInput")?.focus({preventScroll:true});
     } else if (action === "remove-form-image") {
@@ -3421,6 +3543,7 @@ document.addEventListener("click", async (event) => {
       if (!formImageSelections?.[section]) return;
       formImageSelections[section] = removeSelectedImage(formImageSelections[section], kind, index);
       renderFormImagePreview(section);
+      void proposalDraft?.flush();
     } else if (action === "detail") {
       go(`detail/${actionButton.dataset.no}`);
     } else if (action === "print-proposal") {
@@ -3525,35 +3648,28 @@ document.addEventListener("click", async (event) => {
         if (actionButton.isConnected) { actionButton.disabled = false; actionButton.textContent = originalLabel; }
       }
     } else if (action === "save-approval-action") {
-      const box = $("#approvalActionForm");
-      if (!box) return;
-      const stepId = box.dataset.stepId;
-      const approvalStatus = box.querySelector('[name="approval_status"]')?.value;
-      const comment = box.querySelector('[name="comment"]')?.value?.trim() || "";
-      const roleName = box.dataset.roleName || "";
-      if (roleName === "부서장" && approvalStatus === "승인") {
-        updateEvaluationTotalFromForm(box, "team");
-        const teamEvaluation = collectEvaluationFromForm(box, "team");
-        const teamTotal = calculateEvaluationTotal(teamEvaluation);
-        if (teamTotal < 50) {
-          await store.actApproval(box.dataset.proposalId, stepId, approvalStatus, `${comment}${comment ? " · " : ""}2차 팀장평가 ${teamTotal}점 기준미달`);
-        } else if (teamTotal < 65) {
-          await store.actApproval(box.dataset.proposalId, stepId, approvalStatus, `${comment}${comment ? " · " : ""}2차 팀장평가 ${teamTotal}점 건수처리 후보 · 3차 심사 필요`);
-        } else {
-          await store.actApproval(box.dataset.proposalId, stepId, approvalStatus, `${comment}${comment ? " · " : ""}2차 팀장평가 ${teamTotal}점 · 3차 심사대상`);
+      const box=$('#approvalActionForm');if(!box||actionButton.disabled)return;
+      const stepId=box.dataset.stepId,approvalStatus=box.querySelector('[name="approval_status"]')?.value;
+      const comment=box.querySelector('[name="comment"]')?.value?.trim()||'',roleName=box.dataset.roleName||'';
+      actionButton.disabled=true;let accepted=false;
+      try {
+        if(roleName==='부서장'&&approvalStatus==='승인') {
+          updateEvaluationTotalFromForm(box,'team');
+          const evaluation=collectEvaluationFromForm(box,'team'),total=calculateEvaluationTotal(evaluation);
+          const note=total<50?'기준미달':total<65?'건수처리 후보 · 3차 심사 필요':'3차 심사대상';
+          await store.approveTeamEvaluation(box.dataset.proposalId,stepId,evaluation,`${comment}${comment?' · ':''}2차 팀장평가 ${total}점 ${note}`,box.dataset.updatedAt);
+        } else await store.actApproval(box.dataset.proposalId,stepId,approvalStatus,comment);
+        accepted=true;actionButton.textContent='저장 완료';showToast('평가·전자서명을 저장했습니다.');
+        try {
+          await refreshData();
+          if(!box.isConnected)return;
+          const proposal=state.proposals.find(p=>p.id===box.dataset.proposalId);
+          if(routeParts()[1]==='review')await renderApproverReview(box.dataset.proposalId);
+          else if(proposal)await hydrateAdminApproval(proposal);
+        } catch(error) {
+          if(box.isConnected)box.insertAdjacentHTML('beforeend','<p class="workflow-error" role="alert">저장은 완료됐습니다. 최신 화면 조회를 완료하지 못했으므로 내 결재함에서 다시 확인하세요. <button class="button button-small" data-route="admin/inbox">내 결재함</button></p>');
         }
-        await store.saveTeamLeaderEvaluation(box.dataset.proposalId, teamEvaluation);
-      } else {
-        await store.actApproval(box.dataset.proposalId, stepId, approvalStatus, comment);
-      }
-      await refreshData();
-      const proposal = state.proposals.find((p) => p.id === box.dataset.proposalId);
-      if (routeParts()[1] === "review") {
-        await renderApproverReview(box.dataset.proposalId);
-      } else if (proposal) {
-        await hydrateAdminApproval(proposal);
-      }
-      showToast("본인 전자서명을 저장했습니다.");
+      } finally {if(actionButton.isConnected&&!accepted)actionButton.disabled=false;}
     } else if (action === "import-employees") {
       const rows = await parseEmployeeFile($("#employeeFile").files[0]);
       const result = await store.importEmployees(rows);
@@ -3842,7 +3958,10 @@ document.addEventListener("change", (event) => {
   }
   if (event.target.id === "personYearFilter") {
     const name = event.target.dataset.person || "";
-    location.hash = `#person/${encodeURIComponent(name)}?year=${encodeURIComponent(event.target.value || "all")}`;
+    const params=new URLSearchParams(location.hash.split('?')[1]||'');
+    params.set('year',event.target.value||'all');
+    if(event.target.dataset.identity){params.set('identity',event.target.dataset.identity);params.delete('proposal');}
+    location.hash = `#person/${encodeURIComponent(name)}?${params}`;
     render();
     return;
   }

@@ -9,6 +9,8 @@ import { SEED_EMPLOYEES, SEED_PROPOSALS } from "../data/seed.js";
 import { collectProposalImagePaths, isEmployeeEditable, nextProposalNo, normalizeImplementationDetails, resolveApprovalPermission, sha256 } from "../core.js?v=2.9.5";
 import { mergeRetainedWithUploaded } from "../image-manager.js?v=2.3.11";
 import { mergeEmployeeRoster, normalizeEmployeeImportRows } from "../employee-sync.js?v=2.3.11";
+import { fetchAllPages } from "../reports/report-source.js?v=2.9.6";
+import { uploadProposalImages } from "../reliability/image-upload.js?v=2.9.17";
 
 // V2.7.4: content-only corrections are separate from review/PIN APIs.
 const ADMIN_SCORE_HISTORY_V281_KEY = "proposal-system:v281:score-history";
@@ -748,6 +750,43 @@ class DemoStore {
       .sort((a, b) => String(a.happened_at).localeCompare(String(b.happened_at)));
   }
 
+  async getWorkflowSummaries(ids) {
+    const selected=new Set(ids),steps=await this.getApprovalSteps(),rows=await this.getProposals();
+    const allRecords=JSON.parse(localStorage.getItem(APPROVAL_RECORDS_KEY)||"[]");
+    return rows.filter(p=>selected.has(p.id)).map(p=>{
+      const records=allRecords.filter(r=>r.proposal_id===p.id).map(r=>({...r,role_name:steps.find(s=>String(s.id)===String(r.step_id))?.role_name||'',step_order:steps.find(s=>String(s.id)===String(r.step_id))?.step_order}));
+      const pending=records.filter(r=>r.status==='대기'&&r.actionable_at).sort((a,b)=>a.step_order-b.step_order)[0];
+      const ceo=records.find(r=>r.role_name==='대표이사');
+      let stage_key='check',current_stage='저장된 데모 기록 확인',next_action='실제 연결에서 현재 담당자와 처리 가능 여부 확인';
+      if(p.payment_status==='완료'){stage_key='paid';current_stage='지급 완료';}
+      else if(ceo?.status==='승인'){stage_key='approved';current_stage='대표이사 승인 완료';}
+      else if(records.some(r=>r.status==='반려')){stage_key='rejected';current_stage='반려·보완';}
+      else if(p.ceo_submission_status==='상신완료'&&ceo?.status==='대기'){stage_key='ceo';current_stage='대표이사 결재 대기';}
+      else if(pending){current_stage=`${pending.role_name} 결재 대기`;stage_key=pending.role_name==='부서장'?'team':'executive';}
+      else if(p.second_evaluation_completed_at||p.legacy_score_registered_at){stage_key='submission';current_stage='심사결과 저장됨';}
+      return {proposal_id:p.id,stage_key,current_stage,current_role:pending?.role_name||null,assignee_name:pending?.assigned_name||null,
+        actionable_at:pending?.actionable_at||null,pending_days:pending?.actionable_at?Math.max(0,Math.floor((Date.now()-Date.parse(pending.actionable_at))/86400000)):null,
+        next_action,legacy_direct:p.legacy_ceo_direct===true,records};
+    });
+  }
+
+  async getProposalHistory(id,{limit=50,cursor=null}={}) {
+    if(!(await this.getAdminSession())?.isSystemAdmin)throw new Error('시스템 관리자만 조회할 수 있습니다.');
+    const rows=(await this.getStatusHistory(id)).map(r=>({...r,id:`status:${r.id}`,category:'status'})).reverse();
+    const start=cursor==null?0:rows.findIndex(r=>r.id===cursor)+1;
+    if(cursor!=null&&start===0)throw new Error('이력 조회 위치를 확인하지 못했습니다. 다시 조회하세요.');
+    const items=rows.slice(start,start+Math.min(100,Math.max(1,limit)));
+    return {items,next_cursor:start+items.length<rows.length?items.at(-1).id:null};
+  }
+
+  async approveTeamEvaluation() {
+    throw new Error('평가·승인 동시 저장은 실제 서버 연결에서 지원합니다. 현재는 데모 모드입니다.');
+  }
+
+  async recallCeoSubmissions() {
+    throw new Error('상신 회수는 실제 서버 연결에서 지원합니다. 현재는 데모 모드입니다.');
+  }
+
   async getDepartmentGoals(year = "") {
     const rows = JSON.parse(localStorage.getItem(GOAL_KEY) || "[]");
     return year && year !== "all" ? rows.filter((row) => String(row.year) === String(year)) : rows;
@@ -999,9 +1038,8 @@ class SupabaseStore {
   }
 
   async getProposals() {
-    const { data, error } = await this.client.rpc("get_public_proposals_v258");
-    if (error) throw error;
-    return (data || []).map(normalizeProposal);
+    const data=await fetchAllPages((from,to)=>this.client.rpc("get_public_proposals_v258",{}, {count:"exact"}).range(from,to));
+    return data.map(normalizeProposal);
   }
 
   async getEmployees() {
@@ -1048,29 +1086,30 @@ class SupabaseStore {
     return uploaded;
   }
 
-  async createProposal(payload, beforeFiles, afterFiles) {
-    await this.operations.assertNewProposalAllowed();
+  async createProposal(payload, beforeFiles, afterFiles, {requestId=crypto.randomUUID()}={}) {
     const implementation = normalizeImplementationDetails(
       payload.implementation_status,
       payload.implemented_date,
     );
     const [beforeImages, afterImages] = await Promise.all([
-      this.uploadImages(beforeFiles, "before"),
-      this.uploadImages(afterFiles, "after"),
+      uploadProposalImages(this.client,this.config.storageBucket,beforeFiles,"before",{requestId}),
+      uploadProposalImages(this.client,this.config.storageBucket,afterFiles,"after",{requestId}),
     ]);
 
     const body = { ...payload, ...implementation, before_images: beforeImages, after_images: afterImages };
     delete body.edit_pin;
 
-    const { data, error } = await this.client.rpc("create_proposal", {
+    const { data, error } = await this.client.rpc("v2917_create_proposal", {
+      p_request_id: requestId,
       p_payload: body,
       p_edit_pin: payload.edit_pin,
     });
     if (error) throw error;
-    return normalizeProposal(Array.isArray(data) ? data[0] : data);
+    if(!data?.proposal?.id||!data.proposal.proposal_no)throw new Error("접수번호를 확인하지 못했습니다. 같은 작성 내용으로 다시 확인하세요.");
+    return data.proposal;
   }
 
-  async updateProposalWithPin(proposalNo, pin, patch, beforeFiles, afterFiles) {
+  async updateProposalWithPin(proposalNo, pin, patch, beforeFiles, afterFiles, {expectedUpdatedAt}={}) {
     const implementation = normalizeImplementationDetails(
       patch.implementation_status,
       patch.implemented_date,
@@ -1088,13 +1127,15 @@ class SupabaseStore {
       payload.after_images = mergeRetainedWithUploaded(patch.after_images, afterImages);
     }
 
-    const { data, error } = await this.client.rpc("edit_proposal_with_pin", {
+    const { data, error } = await this.client.rpc("v2917_edit_proposal", {
       p_proposal_no: proposalNo,
       p_edit_pin: pin,
       p_payload: payload,
+      p_expected_updated_at: expectedUpdatedAt,
     });
     if (error) throw error;
-    return normalizeProposal(Array.isArray(data) ? data[0] : data);
+    if(!data?.proposal_no)throw new Error("수정 저장 결과를 확인하지 못했습니다. 제안을 다시 조회하세요.");
+    return data;
   }
 
   async cleanupRemovedImages() {
@@ -1553,6 +1594,39 @@ class SupabaseStore {
     });
     if (error) throw error;
     return Array.isArray(data) ? data[0] : data;
+  }
+
+  async approveTeamEvaluation(proposalId,stepId,evaluation,comment,expectedUpdatedAt) {
+    const {data,error}=await this.client.rpc("v2917_approve_team",{p_proposal_id:proposalId,p_step_id:Number(stepId),p_evaluation:evaluation,p_comment:comment||null,p_expected_updated_at:expectedUpdatedAt});
+    if(error)throw error;
+    if(data?.proposal_id!==proposalId||data?.status!=="승인")throw new Error("팀장 평가와 승인 저장 결과를 확인하지 못했습니다. 다시 조회하세요.");
+    return data;
+  }
+
+  async recallCeoSubmissions(ids,reason,expected) {
+    const {data,error}=await this.client.rpc("v2917_recall_ceo",{p_proposal_ids:[...new Set(ids)],p_reason:String(reason||"").trim(),p_expected:expected});
+    if(error)throw error;
+    if(!Number.isInteger(data?.recalled_count)||!Array.isArray(data?.proposal_ids))throw new Error("상신 회수 결과를 확인하지 못했습니다. 다시 조회하세요.");
+    return data;
+  }
+
+  async getWorkflowSummaries(ids) {
+    const unique=[...new Set(ids.filter(Boolean))];if(!unique.length)return [];
+    const result=[];
+    for(let i=0;i<unique.length;i+=100){
+      const {data,error}=await this.client.rpc("v2917_workflow_summary",{p_proposal_ids:unique.slice(i,i+100)});
+      if(error)throw error;
+      if(!Array.isArray(data))throw new Error("담당자·진행현황 응답을 확인하지 못했습니다.");
+      result.push(...data);
+    }
+    return result;
+  }
+
+  async getProposalHistory(id,{limit=50,cursor=null}={}) {
+    const {data,error}=await this.client.rpc("v2917_proposal_history",{p_proposal_id:id,p_limit:limit,p_cursor:cursor});
+    if(error)throw error;
+    if(!Array.isArray(data?.items))throw new Error("변경이력을 확인하지 못했습니다.");
+    return data;
   }
 
   async getAuditLogs(limit = 200, proposalId = "") {

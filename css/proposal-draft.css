@@ -1,0 +1,70 @@
+#proposalForm .draft-panel {
+  display: grid;
+  gap: .65rem;
+  padding: clamp(1rem, 2.4vw, 1.5rem);
+  color: #182c44;
+  background: #fff;
+  border: 1px solid #c6d4df;
+  border-radius: 14px;
+}
+.draft-head, .draft-recovery, .draft-missing { display: flex; gap: .5rem .8rem; align-items: center; flex-wrap: wrap; }
+.draft-head { justify-content: space-between; }
+.draft-panel .draft-head strong { font-size: 1.05rem; }
+.draft-panel [data-draft-count] { margin-inline-start: .25rem; color: #285d75; font-weight: 700; }
+.draft-panel progress { width: 100%; height: .45rem; border: 0; border-radius: .4rem; accent-color: #23736a; background: #dde5eb; }
+.draft-panel progress::-webkit-progress-bar { background: #dde5eb; border-radius: .4rem; }
+.draft-panel progress::-webkit-progress-value { background: #23736a; border-radius: .4rem; }
+.draft-panel button, .draft-preview button {
+  border: 1px solid #c1d0db;
+  border-radius: .5rem;
+  background: #f4f8fa;
+  color: #173851;
+  padding: .45rem .7rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.draft-panel button:focus-visible, .draft-preview button:focus-visible { outline: 3px solid #1670a6; outline-offset: 2px; }
+.draft-panel button:disabled { opacity: .6; cursor: default; }
+.draft-panel .draft-missing { gap: .35rem .65rem; }
+.draft-panel .draft-missing button { border: 0; background: none; text-decoration: underline; text-underline-offset: 3px; padding: .3rem 0; font-size: .85rem; }
+.draft-panel .draft-status, .draft-panel .draft-warning { margin: 0; line-height: 1.55; font-size: .88rem; }
+.draft-panel .draft-warning:not(:empty) { background: #fff3dd; color: #794500; padding: .6rem .8rem; border-radius: .5rem; }
+.draft-panel .draft-warning:empty, .draft-panel .draft-missing:empty, .draft-panel [hidden] { display: none; }
+.draft-recovery { border-top: 1px solid #c6d4df; padding-top: .8rem; }
+.draft-recovery strong { flex: 1 1 16rem; }
+.draft-preview { color: #182c44; background: white; width: min(46rem, calc(100% - 2rem)); max-height: 86dvh; border: 1px solid #b8c8d5; border-radius: 1rem; padding: clamp(1rem, 3vw, 2rem); overflow: auto; overflow-wrap: anywhere; }
+.draft-preview::backdrop { background: rgb(12 26 40 / 60%); }
+.draft-preview h2, .draft-preview h3 { margin: .5rem 0; }
+.draft-preview h3 { border-top: 1px solid #dbe3e9; padding-top: .8rem; }
+.draft-preview .rich-text-display { max-width: 100%; overflow-x: auto; }
+.draft-preview dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .5rem 1rem; border-top: 1px solid #dbe3e9; padding-top: 1rem; }
+.draft-preview dt { font-weight: 700; }
+.draft-preview dd { margin: 0; }
+
+/* Each tbody contains a single criterion and the original score input. */
+@media (max-width: 760px) {
+  #proposalForm .proposal-evaluation-scroll { overflow: visible; }
+  #proposalForm .proposal-evaluation-table { display: block; min-width: 0; width: 100%; padding: .55rem; border-collapse: separate; font-size: .88rem; }
+  #proposalForm .proposal-evaluation-table thead { display: none; }
+  #proposalForm .proposal-evaluation-table tbody {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .5rem;
+    border: 1px solid #c7d4df; border-radius: .7rem; margin-bottom: .55rem; padding: .75rem; background: #fff;
+  }
+  #proposalForm .proposal-evaluation-table tbody tr { display: contents; }
+  #proposalForm .proposal-evaluation-table tbody td { display: block; width: auto; min-width: 0; border: 0; padding: 0; text-align: left; overflow-wrap: anywhere; }
+  #proposalForm .proposal-evaluation-table .eval-no { display: none; }
+  #proposalForm .proposal-evaluation-table .eval-label { grid-area: 1 / 1; align-self: end; white-space: normal; font-size: 1rem; }
+  #proposalForm .proposal-evaluation-table .eval-weight { grid-area: 2 / 1; color: #496073; font-size: .8rem; }
+  #proposalForm .proposal-evaluation-table .eval-weight::before { content: '가중치 '; }
+  #proposalForm .proposal-evaluation-table .eval-score { grid-area: 1 / 2 / 3; align-self: center; justify-self: end; background: none; }
+  #proposalForm .proposal-evaluation-table .eval-score input { width: 4rem; min-height: 44px; }
+  #proposalForm .proposal-evaluation-table td:not([class]) { grid-column: 1; }
+  #proposalForm .proposal-evaluation-table .eval-range { grid-column: 2; text-align: right; color: #495c6b; }
+  #proposalForm .proposal-evaluation-table tfoot { display: block; }
+  #proposalForm .proposal-evaluation-table tfoot tr { display: flex; align-items: center; justify-content: space-between; padding: .45rem .7rem; background: #edf4f6; border-radius: .5rem; }
+  #proposalForm .proposal-evaluation-table tfoot td { border: 0; background: none; }
+  #proposalForm .proposal-evaluation-table tfoot td:nth-child(2), #proposalForm .proposal-evaluation-table tfoot td:nth-child(3) { display: none; }
+}
+.draft-preview .draft-photo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(6rem, 100%), 1fr)); gap: .4rem; margin-top: .45rem; }
+.draft-preview .draft-photo-grid img { width: 100%; max-height: 10rem; object-fit: contain; background: #f1f5f7; border-radius: .4rem; }

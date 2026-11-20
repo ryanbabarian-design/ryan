@@ -1,0 +1,17 @@
+CREATE TRIGGER approval_records_assign_signer BEFORE INSERT OR UPDATE OF proposal_id, step_id ON public.approval_records FOR EACH ROW EXECUTE FUNCTION v21_set_record_assignee();
+CREATE TRIGGER approval_records_touch BEFORE UPDATE ON public.approval_records FOR EACH ROW EXECUTE FUNCTION v2_touch_updated_at();
+CREATE TRIGGER trg_v25_after_approval_stage AFTER UPDATE OF status ON public.approval_records FOR EACH ROW EXECUTE FUNCTION v25_after_approval_stage();
+CREATE TRIGGER a00_proposal_intake_guard_v270 BEFORE INSERT ON public.proposals FOR EACH ROW EXECUTE FUNCTION guard_proposal_intake_v270();
+CREATE TRIGGER proposals_audit AFTER INSERT OR DELETE OR UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION proposal_audit();
+CREATE TRIGGER proposals_before_update BEFORE UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION proposal_before_update();
+CREATE TRIGGER proposals_block_second_eval_below_50_v252 BEFORE UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION block_second_evaluation_below_first_minimum_v252();
+CREATE TRIGGER proposals_v2_audit AFTER DELETE OR UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION proposal_audit_trigger();
+CREATE TRIGGER proposals_v2_status_history AFTER INSERT OR UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION proposal_status_history_trigger();
+CREATE TRIGGER proposals_validate_first_self_evaluation_v256 BEFORE INSERT OR UPDATE OF first_evaluation ON public.proposals FOR EACH ROW EXECUTE FUNCTION validate_first_self_evaluation_v256();
+CREATE TRIGGER zzzz_v274_preserve_review_on_content_edit BEFORE UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION v274_preserve_review_on_content_edit();
+CREATE TRIGGER zzzzzz_v280_guard_q26043_scoring BEFORE UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION v280_guard_q26043_scoring();
+CREATE TRIGGER zzzzzzz_v281_guard_admin_score_update BEFORE UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION v281_guard_admin_score_update();
+CREATE TRIGGER zzzzzzzz_v289_mode_guard BEFORE UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION v289_guard_review_mode();
+CREATE TRIGGER zzzzzzzzz_v287_review_write_guard BEFORE UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION v287_guard_review_write();
+CREATE TRIGGER zzzzzzzzzzz_v294_preserve_paid_legacy BEFORE UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION v294_preserve_paid_legacy();
+CREATE TRIGGER zzzzzzzzzzzz_v295_preserve_legacy_score BEFORE UPDATE ON public.proposals FOR EACH ROW EXECUTE FUNCTION v295_preserve_legacy_score();
