@@ -6,14 +6,15 @@ import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, FINAL_RESU
 const str = v => String(v ?? '').trim();
 const numeric = v => v == null || str(v)==='' || !Number.isFinite(Number(v)) ? null : Number(v);
 const safeAmount = v => Number.isFinite(Number(v)) ? Math.max(0,Number(v)) : 0;
-export const WORKSPACE_VERSION = '2.9.5';
+import {isPendingReview,isBelowStandardClosed,isLegacyReassessment,isInactiveUnsigned} from '../review/pending-policy.js?v=2.9.19';
+export const WORKSPACE_VERSION = '2.9.19';
 export const QUEUES = Object.freeze([
-  {key:'open',label:'처리할 제안'}, {key:'review',label:'3차 심사대기'},
-  {key:'reviewed',label:'심사완료 · 상신 전'}, {key:'submitted',label:'대표결재 중'},
+  {key:'open',label:'처리할 제안'}, {key:'review',label:'심사대기'},
+  {key:'reviewed',label:'대표이사 상신 가능'}, {key:'submitted',label:'대표결재 중'},
   {key:'closed',label:'승인·지급 완료'}, {key:'all',label:'전체 제안'},
 ]);
 export const RESULT_LABELS = Object.freeze({미심사:'미심사',채택:'채택',건수처리:'건수처리 인정',미채택:'미채택',보류:'보류',중복제안:'중복제안'});
-const validQueues=new Set([...QUEUES.map(x=>x.key),'waiting','check','archived']);
+const validQueues=new Set([...QUEUES.map(x=>x.key),'waiting','check','archived','ready','legacy-check','reassessment','terminal']);
 export function currentKoreaYear(now=new Date()) {
   return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric'}).format(new Date(now));
 }
@@ -55,7 +56,7 @@ export function classifyWork(p,meta={}) {
   const third = (hasLegacyScore(p)||(p.approval_required===false&&numeric(p.score)!==null&&!thirdDone))?{text:`기존 심사 ${Number(p.score)}점`,tone:'ok'}:thirdDone
     ? p.third_review_mode==='outcome'?{text:'결과심사',tone:'ok'}:numeric(p.second_evaluation_total)!==null?{text:`${Number(p.second_evaluation_total)}점`,tone:'ok'}:{text:'심사기록 있음',tone:'muted'}
     : {text:'미심사',tone:'warn'};
-  const base={first:firstCell(p),team:teamCell(p),third,result,resultLabel:RESULT_LABELS[result]||result,
+  const base={pendingReview:isPendingReview(p),first:firstCell(p),team:teamCell(p),third,result,resultLabel:RESULT_LABELS[result]||result,
     candidate:isCandidate||(!thirdDone && numeric(p.team_leader_evaluation_total)>=50 && numeric(p.team_leader_evaluation_total)<65),
     amount:thirdDone&&savedResult?safeAmount(p.award_amount):null,
     canSubmit:false,primary:'심사내용 확인',route:`admin/edit/${encodeURIComponent(id)}`,protected:false};
@@ -75,20 +76,29 @@ export function classifyWork(p,meta={}) {
   if(!id)return done('check','접수정보 확인','제안 ID가 없어 상세화면을 연결할 수 없습니다.',{route:'',primary:'자료 확인'});
   if(meta.errors?.has(id)||meta.stepsError)return done('check','결재 조회 확인','결재기록을 읽지 못했습니다. 새로고침 후 다시 확인하세요.');
   if(p.ceo_submission_status==='반려'||scoped.some(r=>r.status==='반려'&&steps.some(s=>str(s.id)===str(r.step_id)&&s.active!==false)))return done('waiting','반려 · 보완 필요','기존 결재의 반려 내용을 확인하세요.');
+  if(isBelowStandardClosed(p) && Array.isArray(records)) {
+    const downstream=scoped.filter(r=>steps.some(s=>str(s.id)===str(r.step_id)&&Number(s.step_order)>2));
+    if(!scoped.some(r=>!steps.some(s=>str(s.id)===str(r.step_id))) && downstream.every(isInactiveUnsigned)) {
+      return done('terminal','기준미달 · 미채택 종결','2차 50점 미만 · 3차 및 후속 결재 제외. 기존 평가와 서명은 유지합니다.',{third:{text:'대상 제외',tone:'muted'},amount:0,candidate:false,protected:true,primary:'결과 확인',route:`detail/${encodeURIComponent(p.proposal_no||'')}`});
+    }
+    return done('check','기준미달 결재기록 확인','후속 결재 기록을 확인해야 합니다. 기존 이력은 변경하지 않습니다.');
+  }
   if(p.approval_required===false) {
     const legacyDecision=thirdReviewDecision(p,steps,records,true,'outcome',context);
     if(!legacyDecision.allowed)return done('check','과거 제안 상태 확인',legacyDecision.reason);
     if(thirdDone && savedResult && p.third_review_mode==='outcome' && p.status==='심사완료')return done('archived','과거건 결과 정리완료','전자결재 제외 · 관리자 결과심사 저장 완료. 대표상신 완료를 뜻하지 않습니다.',{primary:'결과 확인',canSubmit:false,amount:safeAmount(p.award_amount)});
-    if(hasLegacyScore(p))return done('reviewed','기존 심사 등록완료','대표상신 목록에서 자격을 다시 확인하세요.',{primary:'기존 심사 확인',route:`admin/legacy-score/${encodeURIComponent(id)}`,amount:safeAmount(p.award_amount)});
-    return done('review','과거건 결과 확인','전자결재 제외 과거 제안 · 점수/승인기록을 만들지 않고 결과를 정정합니다.',{primary:'결과심사',mode:'outcome',amount:null});
+    if(isLegacyReassessment(p))return done('reassessment','재평가 대기','기존 총점과 결과를 보존한 재평가 상태 · 저장 후 상신 가능 여부를 확인하세요.',{primary:'재평가',route:`admin/legacy-score/${encodeURIComponent(id)}`,amount:safeAmount(p.award_amount)});
+    if(hasLegacyScore(p))return done('check','상신요건 확인','기존 심사 등록 완료 · 서버 상신대상 목록에서 자격을 확인하세요.',{primary:'기존 심사 확인',route:`admin/legacy-score/${encodeURIComponent(id)}`,amount:safeAmount(p.award_amount)});
+    if(!base.pendingReview && savedResult)return done('legacy-check','과거 심사결과 확인','이미 저장된 과거 심사결과 · 미심사 건수와 별도로 관리합니다.',{primary:p.review_result==='채택'?'기존 심사 확인':'결과심사',route:p.review_result==='채택'?`admin/legacy-score/${encodeURIComponent(id)}`:base.route,mode:'outcome',amount:null});
+    return done(base.pendingReview?'review':'check','과거 미심사 결과 확인','전자결재 제외 과거 제안 · 점수/승인기록을 만들지 않고 결과를 정정합니다.',{primary:'결과심사',mode:'outcome',amount:null});
   }
   if(meta.candidateIds?.has(id))return done('reviewed','대표상신 가능','서버의 상신대기 목록에서 확인한 제안입니다.',{canSubmit:true,primary:'결과 확인',amount:safeAmount(p.award_amount)});
-  if(thirdDone && savedResult)return done('reviewed','3차 심사완료',meta.candidateIds===null?'상신대상 조회 실패 · 일괄상신 화면에서 확인':'상신요건 확인 필요 · 임원/대표 결재 상태 확인',{canSubmit:meta.candidateIds===null?null:false,primary:'결과 확인'});
+  if(thirdDone && savedResult)return done('check','3차 심사완료 · 상신요건 확인',meta.candidateIds===null?'상신대상 조회 실패 · 일괄상신 화면에서 확인':'상신요건 확인 필요 · 임원/대표 결재 상태 확인',{canSubmit:meta.candidateIds===null?null:false,primary:'결과 확인'});
   if(!thirdDone && p.status==='심사완료'&&savedResult&&!isCandidate)return done('check','기존 심사기록 확인','3차 평가기록 없이 저장된 과거 결과입니다. 자동으로 다시 심사하지 않습니다.',{third:{text:'기존 결과',tone:'muted'},amount:null});
   if(!Array.isArray(records))return done('check','결재 상태 확인','결재기록을 확인한 뒤 처리단계를 표시합니다.');
   const outcome=thirdReviewDecision(p,steps,records,true,'outcome',context);
   const score=thirdReviewDecision(p,steps,records,true,'score',context);
-  if(outcome.allowed || score.allowed)return done('review','3차 심사대기',score.allowed?(base.candidate?'건수처리 후보 · 최종 결과는 3차에서 결정':'점수심사 또는 결과심사 선택 가능'):'결과심사 가능 · 1·2차 보완은 별도',{primary:score.allowed?'3차 심사':'결과심사',mode:score.allowed?'score':'outcome',amount:null,result:'미심사',resultLabel:isCandidate?'건수처리 후보':'미심사'});
+  if(outcome.allowed || score.allowed)return done(base.pendingReview?'review':'check',base.pendingReview?'3차 심사대기':'심사상태 확인',score.allowed?(base.candidate?'건수처리 후보 · 최종 결과는 3차에서 결정':'점수심사 또는 결과심사 선택 가능'):'결과심사 가능 · 1·2차 보완은 별도',{primary:score.allowed?'3차 심사':'결과심사',mode:score.allowed?'score':'outcome',amount:null,result:'미심사',resultLabel:isCandidate?'건수처리 후보':'미심사'});
   if(numeric(p.first_evaluation_total)===null&&p.legacy_first_evaluation_exempt!==true)return done('waiting','1차 평가 확인','기존 점수 누락 여부를 확인하세요.',{primary:'1·2차 확인',route:`admin/score/${encodeURIComponent(id)}`});
   if(numeric(p.first_evaluation_total)!==null&&Number(p.first_evaluation_total)<50)return done('waiting','1차 기준미달','1차 기준미달 상태를 확인하세요.',{primary:'1·2차 확인',route:`admin/score/${encodeURIComponent(id)}`});
   if(numeric(p.team_leader_evaluation_total)===null)return done('waiting','2차 팀장평가 대기','팀장평가와 부서장 결재를 확인하세요.',{primary:'1·2차 확인',route:`admin/score/${encodeURIComponent(id)}`});
@@ -104,10 +114,17 @@ export function buildWorkspace(proposals=[],filters={},meta={},now=new Date()) {
   const departments=[...new Set(annual.map(p=>normalizeDepartmentName(p.department)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'));
   const needle=f.q.toLocaleLowerCase('ko').replace(/\s+/g,'');
   const source=annual.filter(p=>(!f.department||normalizeDepartmentName(p.department)===f.department) && (!needle||[p.proposal_no,p.title,p.proposer_name,p.department,normalizeDepartmentName(p.department)].some(x=>str(x).toLocaleLowerCase('ko').replace(/\s+/g,'').includes(needle))));
-  const items=source.map(proposal=>({proposal,...classifyWork(proposal,meta)})).filter(row=>!f.result||row.result===f.result);
-  const counts={all:items.length,open:0,waiting:0,review:0,reviewed:0,submitted:0,closed:0,check:0,archived:0,canSubmit:0};
-  for(const row of items){counts[row.group]++;if(!['submitted','closed','archived'].includes(row.group))counts.open++;if(row.canSubmit===true)counts.canSubmit++;}
-  let filtered=items.filter(r=>f.queue==='all'||(f.queue==='open'?!['submitted','closed','archived'].includes(r.group):r.group===f.queue));
+  const items=source.map(proposal=>({proposal,...classifyWork(proposal,meta)})).filter(row=>!f.result||row.proposal.review_result===f.result);
+  const counts={all:items.length,open:0,waiting:0,review:0,ready:0,reviewed:0,submitted:0,closed:0,check:0,archived:0,'legacy-check':0,reassessment:0,terminal:0,canSubmit:0};
+  const isOpen=r=>!['submitted','closed','archived','terminal'].includes(r.group);
+  // review is the common backlog; ready is the actionable subgroup, not an additional total.
+  for(const row of items){
+    counts[row.group==='review'?'ready':row.group]++;
+    if(row.pendingReview)counts.review++;
+    if(isOpen(row))counts.open++;
+    if(row.canSubmit===true)counts.canSubmit++;
+  }
+  let filtered=items.filter(r=>f.queue==='all'||(f.queue==='open'?isOpen(r):f.queue==='review'?r.pendingReview:f.queue==='ready'?r.group==='review':r.group===f.queue));
   filtered.sort((a,b)=>{
     const ap=a.proposal,bp=b.proposal;
     const ad=proposalDate(ap)||'',bd=proposalDate(bp)||'';

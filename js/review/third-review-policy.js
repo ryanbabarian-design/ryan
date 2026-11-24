@@ -59,6 +59,7 @@ export function thirdReviewDecision(p,steps=[],records=[],systemAdmin=true,mode=
   }
   if(mode==='score' && !firstReviewPassed(p))return fail('1차 본인평가 50점 이상 또는 확인된 기존건 면제가 필요합니다.');
   const team=Number(p.team_leader_evaluation_total);
+  if(p.approval_required===true && p.team_leader_evaluation_total!=null && Number.isFinite(team) && team<50)return fail('2차 팀장평가 기준미달 · 3차 심사 및 후속 결재 제외');
   if(mode==='score' && (p.team_leader_evaluation_total==null||!Number.isFinite(team)||team<50))return fail('2차 팀장평가 50점 이상이어야 3차 심사할 수 있습니다.');
   if(rowForRole('부서장').some(r=>r.status==='반려')||rowForRole('해당부서 임원').some(r=>r.status==='반려'))return fail('반려된 결재를 보완·재상신하여 승인받은 후 심사하세요.');
   if(!rowForRole('해당부서 임원').some(r=>r.status==='승인'))return fail('해당부서 임원 승인 후 3차 평가를 진행할 수 있습니다.');

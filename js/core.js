@@ -1,6 +1,7 @@
 import { legacyCeoPermission, hasLegacyScore } from "./review/legacy-score-policy.js?v=2.9.5";
 import { awardForScore } from "./review/award-policy.js?v=2.9.1";
 import { firstReviewPassed, isReviewProtected, isLegacyCountCandidate, thirdReviewDecision } from "./review/third-review-policy.js?v=2.8.7";
+import {isPendingReview,isBelowTeamMinimum} from "./review/pending-policy.js?v=2.9.19";
 export const REVIEW_RESULTS = ["미심사", "채택", "미채택", "보류", "중복제안", "건수처리"];
 export const WORKFLOW_STATUSES = ["접수", "심사중", "심사완료"];
 export const IMPLEMENTATION_STATUSES = ["미실시", "진행중", "완료"];
@@ -128,7 +129,7 @@ export function filterProposals(proposals, filters = {}) {
       const date = proposalDateParts(proposal);
       if (year && year !== "all" && date?.year !== year) return false;
       if (month && month !== "all" && date?.month !== Number(month)) return false;
-      if (workflow === "pending" && !((["접수", "심사중"].includes(proposal.status) && proposal.review_result === "미심사") || isLegacyCountCandidate(proposal))) return false;
+      if (workflow === "pending" && !isPendingReview(proposal)) return false;
       if (workflow === "third-review" && !isThirdReviewCandidate(proposal)) return false;
       if (workflow === "auto-count" && !(
         proposal.team_leader_evaluation_total != null &&
@@ -143,7 +144,7 @@ export function filterProposals(proposals, filters = {}) {
         Number(proposal.team_leader_evaluation_total) < 50 &&
         ["미심사", "미채택"].includes(proposal.review_result)
       )) return false;
-      if (workflow === "overdue-review" && !(["접수", "심사중"].includes(proposal.status) && proposal.review_result === "미심사" && daysBetween(proposal.received_date, new Date()) >= 7)) return false;
+      if (workflow === "overdue-review" && !(isPendingReview(proposal) && daysBetween(proposal.received_date, new Date()) >= 7)) return false;
       if (workflow === "adopted" && proposal.review_result !== "채택") return false;
       if (workflow === "overdue-implementation" && !(proposal.review_result === "채택" && proposal.implementation_status !== "완료" && daysBetween(proposal.reviewed_at || proposal.updated_at || proposal.received_date, new Date()) >= 30)) return false;
       if (workflow === "completed" && proposal.implementation_status !== "완료") return false;
@@ -183,7 +184,7 @@ export function currentYearProposalCount(proposals, now = new Date()) {
 export function dashboardMetrics(proposals) {
   return {
     total: proposals.length,
-    pending: proposals.filter((item) => ["접수", "심사중"].includes(item.status) && item.review_result === "미심사").length,
+    pending: proposals.filter(isPendingReview).length,
     adopted: proposals.filter((item) => item.review_result === "채택").length,
     completed: proposals.filter((item) => item.implementation_status === "완료").length,
     awardTotal: proposals.reduce((sum, item) => sum + Number(item.award_amount || 0), 0),
@@ -456,6 +457,9 @@ export function resolveApprovalPermission(proposal, steps, records, assignments)
     if (!assignment) continue;
 
     const record = recordFor(step.id) || { step_id: step.id, status: "대기" };
+    if (record.status === "대기" && Number(step.step_order)>2 && isBelowTeamMinimum(proposal)) {
+      return {assigned:true,canAct:false,step,assignment,record,reason:"2차 팀장평가 기준미달 · 후속 결재 제외"};
+    }
     const previousSteps = activeSteps.filter((candidate) => Number(candidate.step_order || 0) < Number(step.step_order || 0));
     const rejectedPrevious = previousSteps.find((candidate) => recordFor(candidate.id)?.status === "반려");
     if (rejectedPrevious) {
@@ -530,8 +534,7 @@ export function operationalMetrics(proposals, now = new Date(), options = {}) {
   const month = now.getMonth() + 1;
 
   const overdueReview = source.filter((proposal) =>
-    proposal.review_result === "미심사"
-    && ["접수", "심사중"].includes(proposal.status)
+    isPendingReview(proposal)
     && daysBetween(proposal.received_date, now) >= reviewDelayDays
   ).length;
 

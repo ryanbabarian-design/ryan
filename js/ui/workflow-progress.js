@@ -2,6 +2,7 @@ import {escapeOperationsHtml as esc, formatOperationsDate} from '../operations/o
 import {reviewStages} from './review-stages.js?v=2.9.12-original';
 import {proposalYear} from '../admin/workspace-core.js?v=2.9.5';
 
+import {isBelowStandardClosed,isLegacyReassessment,isInactiveUnsigned} from '../review/pending-policy.js?v=2.9.19';
 const selector = '[data-workflow-proposal]';
 const retry = '<button class="wf-link" type="button" data-wf-retry>다시 조회</button>';
 const message = (value, action = '') => `<div class="wf-message" role="status">${esc(value)} ${action}</div>`;
@@ -14,8 +15,9 @@ export function isPendingCeo(proposal, summary) {
   return records.length === 1 && records[0].status === '대기' && !records[0].acted_at && !records[0].approver_name;
 }
 
-function approval(records, role, exempt) {
+function approval(records, role, exempt, terminated=false) {
   const record = records.find(row => row.role_name === role);
+  if (terminated && isInactiveUnsigned(record)) return {value:'대상 제외',status:'2차 기준미달로 종결'};
   if (!record?.status) return {value:exempt ? '기존건 결재 제외' : '승인 기록 없음', status:''};
   const actor = record.status === '대기' ? record.assigned_name : record.approver_name;
   return {value:record.status === '대기' && !record.actionable_at ? '처리 전' : record.status || '상태 미기록',
@@ -23,13 +25,16 @@ function approval(records, role, exempt) {
 }
 
 export function renderWorkflow(proposal, summary, {compact = false, admin = false} = {}) {
-  const stage = summary.current_stage;
-  const role = summary.current_role || '';
-  const assignee = summary.assignee_name || (role ? '담당자 미기록' : '');
-  const timing = validTime(summary.actionable_at);
+  const downstream=(summary.records||[]).filter(r=>['해당부서 임원','대표이사'].includes(r.role_name));
+  const terminated=isBelowStandardClosed(proposal) && Array.isArray(summary.records) && downstream.length>0 && downstream.every(isInactiveUnsigned);
+  const reassessment=isLegacyReassessment(proposal);
+  const stage = terminated?'기준미달 · 미채택 종결':reassessment?'재평가 대기':summary.current_stage;
+  const role = terminated||reassessment?'':summary.current_role || '';
+  const assignee = terminated||reassessment?'':summary.assignee_name || (role ? '담당자 미기록' : '');
+  const timing = !terminated&&!reassessment&&validTime(summary.actionable_at);
   const days = summary.pending_days;
   const wait = timing && Number.isInteger(days) && days >= 0 ? `대기 ${days}일` : '';
-  const next = summary.next_action || '다음 작업 미기록';
+  const next = terminated?'결과 확인 · 후속 결재 없음':reassessment?'기존 심사점수 재평가 저장':summary.next_action || '다음 작업 미기록';
   const actor = [role, assignee].filter((part, index, all) => part && all.indexOf(part) === index).join(' · ');
   if (compact) return `<div class="wf-compact" aria-label="결재 진행"><strong>${esc(stage)}</strong><span>${esc([actor, wait].filter(Boolean).join(' · '))}</span><small>다음 · ${esc(next)}</small></div>`;
   const [first, team, third] = reviewStages(proposal).stages;
@@ -37,9 +42,9 @@ export function renderWorkflow(proposal, summary, {compact = false, admin = fals
   const stages = [
     ['1차 본인평가', first],
     ['2차 팀장평가', team],
-    ['임원 결재', approval(summary.records, '해당부서 임원', exempt)],
-    ['3차 심사', third],
-    ['대표이사 결재', approval(summary.records, '대표이사', exempt && !summary.legacy_direct)]
+    ['임원 결재', approval(summary.records, '해당부서 임원', exempt, terminated)],
+    ['3차 심사', terminated?{value:'대상 제외',status:'기준미달'}:third],
+    ['대표이사 결재', approval(summary.records, '대표이사', exempt && !summary.legacy_direct, terminated)]
   ];
   const id = encodeURIComponent(proposal.id);
   const year = proposalYear(proposal);
