@@ -6,8 +6,8 @@ import { thirdReviewDecision, hasThirdReview, isLegacyCountCandidate, FINAL_RESU
 const str = v => String(v ?? '').trim();
 const numeric = v => v == null || str(v)==='' || !Number.isFinite(Number(v)) ? null : Number(v);
 const safeAmount = v => Number.isFinite(Number(v)) ? Math.max(0,Number(v)) : 0;
-import {isPendingReview,isBelowStandardClosed,isLegacyReassessment,isInactiveUnsigned} from '../review/pending-policy.js?v=2.9.19';
-export const WORKSPACE_VERSION = '2.9.19';
+import {isPendingReview,isBelowStandardClosed,isLegacyReassessment,isInactiveUnsigned,isProcessingProposal} from '../review/pending-policy.js?v=2.9.20';
+export const WORKSPACE_VERSION = '2.9.20';
 export const QUEUES = Object.freeze([
   {key:'open',label:'처리할 제안'}, {key:'review',label:'심사대기'},
   {key:'reviewed',label:'대표이사 상신 가능'}, {key:'submitted',label:'대표결재 중'},
@@ -116,7 +116,7 @@ export function buildWorkspace(proposals=[],filters={},meta={},now=new Date()) {
   const source=annual.filter(p=>(!f.department||normalizeDepartmentName(p.department)===f.department) && (!needle||[p.proposal_no,p.title,p.proposer_name,p.department,normalizeDepartmentName(p.department)].some(x=>str(x).toLocaleLowerCase('ko').replace(/\s+/g,'').includes(needle))));
   const items=source.map(proposal=>({proposal,...classifyWork(proposal,meta)})).filter(row=>!f.result||row.proposal.review_result===f.result);
   const counts={all:items.length,open:0,waiting:0,review:0,ready:0,reviewed:0,submitted:0,closed:0,check:0,archived:0,'legacy-check':0,reassessment:0,terminal:0,canSubmit:0};
-  const isOpen=r=>!['submitted','closed','archived','terminal'].includes(r.group);
+  const isOpen=r=>isProcessingProposal(r.proposal);
   // review is the common backlog; ready is the actionable subgroup, not an additional total.
   for(const row of items){
     counts[row.group==='review'?'ready':row.group]++;

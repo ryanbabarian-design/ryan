@@ -1,7 +1,7 @@
 import { legacyCeoPermission, hasLegacyScore } from "./review/legacy-score-policy.js?v=2.9.5";
 import { awardForScore } from "./review/award-policy.js?v=2.9.1";
 import { firstReviewPassed, isReviewProtected, isLegacyCountCandidate, thirdReviewDecision } from "./review/third-review-policy.js?v=2.8.7";
-import {isPendingReview,isBelowTeamMinimum} from "./review/pending-policy.js?v=2.9.19";
+import {isPendingReview,isBelowTeamMinimum,isProcessingProposal,processingGroup} from "./review/pending-policy.js?v=2.9.20";
 export const REVIEW_RESULTS = ["미심사", "채택", "미채택", "보류", "중복제안", "건수처리"];
 export const WORKFLOW_STATUSES = ["접수", "심사중", "심사완료"];
 export const IMPLEMENTATION_STATUSES = ["미실시", "진행중", "완료"];
@@ -130,6 +130,9 @@ export function filterProposals(proposals, filters = {}) {
       if (year && year !== "all" && date?.year !== year) return false;
       if (month && month !== "all" && date?.month !== Number(month)) return false;
       if (workflow === "pending" && !isPendingReview(proposal)) return false;
+      if (workflow === "processing" && !isProcessingProposal(proposal)) return false;
+      if (workflow === "processing-legacy" && processingGroup(proposal)!=="legacy-check") return false;
+      if (workflow === "processing-reassessment" && processingGroup(proposal)!=="reassessment") return false;
       if (workflow === "third-review" && !isThirdReviewCandidate(proposal)) return false;
       if (workflow === "auto-count" && !(
         proposal.team_leader_evaluation_total != null &&

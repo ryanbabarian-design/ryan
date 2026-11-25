@@ -168,3 +168,9 @@
  #app[data-workspace] .ws-notice-tools input{flex-basis:100%;max-width:none}
 }
 @media print{#app[data-workspace] :is(.ws-result-tools,.ws-pagination,.ws-quick-filters,.ws-return-bar,.ws-notice-tools,.ws-notice-links){display:none!important}#app[data-workspace] :is(.ws-table-scroll,.perf-table-scroll){max-height:none;overflow:visible}}
+
+/* V2.9.20 common processing backlog. */
+@media(min-width:1000px){#app[data-workspace=dashboard] .workflow-metric-grid{grid-template-columns:repeat(5,minmax(0,1fr))}}
+#app[data-workspace=dashboard] .workflow-metric-grid .processing{border-top-color:#295c84}
+#app[data-workspace] .ws-processing-summary{margin:0 0 10px;padding:9px 12px;border:1px solid #dce4ed;border-radius:8px;background:#f6f9fc;color:#344f6d;font-size:12px;line-height:1.6}
+#app[data-workspace] .ws-processing-tag{display:block;margin-top:5px;color:#315e85;font-size:11px;font-weight:650;overflow-wrap:anywhere}

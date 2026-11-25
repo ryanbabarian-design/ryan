@@ -19,7 +19,7 @@ import { loadQuestionData } from './search/question-source.js?v=2.9.6';
 import { mountProposalDraft } from './editor/proposal-draft.js?v=2.9.17';
 import { createSubmissionGate, isCurrentDetail } from './reliability/submission.js?v=2.9.17';
 import { createWorkflowProgress } from './ui/workflow-progress.js?v=2.9.19';
-import {isBelowStandardClosed} from './review/pending-policy.js?v=2.9.19';
+import {isBelowStandardClosed,isProcessingProposal,processingGroup,processingLabel,PROCESSING_LABELS} from './review/pending-policy.js?v=2.9.20';
 import { createProposalHistory } from './admin/proposal-history.js?v=2.9.17';
 import { createCeoRecall } from './admin/ceo-recall.js?v=2.9.17';
 import { installEvaluationGuide } from './ui/evaluation-guide.js?v=2.9.15';
@@ -1207,7 +1207,7 @@ function personProposalRoute(proposal) {
 
 function proposalCard(proposal) {
   return `
-    <article class="proposal-card">
+    <article class="proposal-card" data-processing-label="${escapeHtml(processingLabel(proposal))}">
       <div class="proposal-card-top">
         <div>
           <div class="proposal-meta">
@@ -1381,6 +1381,11 @@ function renderDashboard() {
       <button class="metric-card workflow-card total" data-route="list?year=${dashboardYearParam}&workflow=total">
         <span class="metric-icon" aria-hidden="true">♢</span>
         <div><small>전체 제안</small><strong>${metrics.total.toLocaleString("ko-KR")}</strong></div>
+        <span class="metric-arrow">›</span>
+      </button>
+      <button class="metric-card workflow-card processing" data-route="list?year=${dashboardYearParam}&workflow=processing">
+        <span class="metric-icon" aria-hidden="true">▤</span>
+        <div><small>처리할 제안</small><strong>${scopedProposals.filter(isProcessingProposal).length.toLocaleString("ko-KR")}</strong></div>
         <span class="metric-arrow">›</span>
       </button>
       <button class="metric-card workflow-card pending" data-route="list?year=${dashboardYearParam}&workflow=pending">
@@ -1586,8 +1591,10 @@ function getFiltersFromUrl() {
 
 let thirdReviewListRequestId = 0;
 
-function renderListItems(proposals) {
+function renderListItems(proposals, {showProcessing=false}={}) {
+  const groups=showProcessing?Object.entries(PROCESSING_LABELS).map(([key,label])=>({label,count:proposals.filter(p=>processingGroup(p)===key).length})).filter(x=>x.count>0):[];
   return `<div class="result-bar"><strong>${proposals.length}건</strong><span>검색 결과</span></div>
+    ${showProcessing&&groups.length?`<p class="ws-processing-summary" role="status">${groups.map(x=>escapeHtml(x.label)+' '+x.count+'건').join(' · ')}</p>`:''}
     ${proposals.length
       ? `<div class="proposal-grid">${proposals.map(proposalCard).join("")}</div>`
       : `<div class="empty-state"><h2>검색 결과가 없습니다.</h2><p>현재 조건에 맞는 제안이 없습니다. 현황 또는 연도 조건을 확인하세요.</p></div>`}`;
@@ -1625,7 +1632,7 @@ function renderList() {
   const proposals = filterProposals(state.proposals, filters);
   const departments = [...new Set(state.proposals.map((item) => normalizeDepartmentName(item.department)))].sort((a,b)=>a.localeCompare(b,"ko"));
   const years = dashboardBreakdown(state.proposals, "all").years;
-  const workflowLabels = { total: "전체 제안", pending: "심사 대기", "third-review": "3차 심사대기 · 2차 50점 이상", "auto-count": "건수처리 후보 · 3차 미심사", "below-standard": "기준미달 · 50점 미만", "overdue-review": "장기 미심사", adopted: "채택", "overdue-implementation": "시행 지연", completed: "실시 완료" };
+  const workflowLabels = { total: "전체 제안", processing: "처리할 제안", "processing-legacy": "과거 심사결과 확인", "processing-reassessment": "재평가 대기", pending: "심사 대기", "third-review": "3차 심사대기 · 2차 50점 이상", "auto-count": "건수처리 후보 · 3차 미심사", "below-standard": "기준미달 · 50점 미만", "overdue-review": "장기 미심사", adopted: "채택", "overdue-implementation": "시행 지연", completed: "실시 완료" };
   const yearLabel = filters.year === "all" ? "전체 연도" : `${filters.year}년`;
   const workflowLabel = workflowLabels[filters.workflow] || "전체 제안";
 
@@ -1658,7 +1665,10 @@ function renderList() {
           <label>현황
             <select name="workflow">
               <option value="total" ${filters.workflow === "total" ? "selected" : ""}>전체 제안</option>
+              <option value="processing" ${filters.workflow === "processing" ? "selected" : ""}>처리할 제안 (전체 미처리)</option>
               <option value="pending" ${filters.workflow === "pending" ? "selected" : ""}>전체 심사대기</option>
+              <option value="processing-legacy" ${filters.workflow === "processing-legacy" ? "selected" : ""}>과거 심사결과 확인</option>
+              <option value="processing-reassessment" ${filters.workflow === "processing-reassessment" ? "selected" : ""}>재평가 대기</option>
               <option value="third-review" ${filters.workflow === "third-review" ? "selected" : ""}>3차 심사대기 (2차 50점 이상·임원 승인)</option>
               <option value="auto-count" ${filters.workflow === "auto-count" ? "selected" : ""}>건수처리 후보 · 3차 미심사 (2차 50~64점)</option>
               <option value="below-standard" ${filters.workflow === "below-standard" ? "selected" : ""}>기준미달 (2차 50점 미만)</option>
@@ -1703,7 +1713,7 @@ function renderList() {
     <section class="section" id="filteredProposalResults" aria-live="polite">
       ${filters.workflow === "third-review"
         ? `<div class="loading-card"><div class="spinner"></div><p>해당부서 임원 승인기록을 확인하고 있습니다. 확인된 3차 심사 대상만 표시합니다.</p></div>`
-        : renderListItems(proposals)}
+        : renderListItems(proposals,{showProcessing:filters.workflow.startsWith("processing")})}
     </section>
   `;
   const requestId = ++thirdReviewListRequestId;

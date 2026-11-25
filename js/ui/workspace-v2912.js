@@ -5,7 +5,7 @@ import { reviewStages, createReviewSource } from './review-stages.js?v=2.9.12';
   if (window.__hanaWorkspace) return;
   const root = document.getElementById('app');
   if (!root) return;
-  window.__hanaWorkspace = '2.9.19';
+  window.__hanaWorkspace = '2.9.20';
   const $ = (s, el = root) => el.querySelector(s);
   const $$ = (s, el = root) => [...el.querySelectorAll(s)];
   const mounted = new WeakSet(), memory = new Map();
@@ -38,7 +38,7 @@ import { reviewStages, createReviewSource } from './review-stages.js?v=2.9.12';
     mounted.add(hero);
     const scope = select.value === 'all' ? '전체 연도' : select.value + '년';
     const head = el('section', 'ws-heading hero'); head.dataset.wsHeading = '';
-    const copy = el('div'); copy.append(el('span', 'ws-kicker', 'WORKSPACE · 2.9.19'), el('h1', '', '제안 업무 현황'));
+    const copy = el('div'); copy.append(el('span', 'ws-kicker', 'WORKSPACE · 2.9.20'), el('h1', '', '제안 업무 현황'));
     copy.append(el('p', 'ws-muted', scope + ' 접수 기준 · 숫자를 누르면 해당 제안으로 이동합니다.'));
     const guide = button('제안제도 안내 · 평가 기준·절차', 'data-evaluation-guide-open');
     guide.classList.add('evaluation-guide-link'); guide.setAttribute('aria-haspopup', 'dialog'); copy.append(guide);
@@ -49,7 +49,7 @@ import { reviewStages, createReviewSource } from './review-stages.js?v=2.9.12';
     actions.append(button('실적·엑셀', 'data-route', 'performance?year=' + (select.value === 'all' ? year() : select.value)));
     head.append(copy, actions); hero.replaceWith(head);
     const totalLabel = $('.workflow-card.total small', metrics); if (totalLabel) totalLabel.textContent = '선택기간 접수';
-    const note = el('p', 'ws-metric-note', '심사결과와 실시상태는 별도 기준입니다. 채택·실시완료 건수를 더해 전체 건수로 계산하지 않습니다.');
+    const note = el('p', 'ws-metric-note', '처리할 제안은 심사대기·과거 결과 확인·재평가·상신 전 등 미처리 자료를 포함합니다. 심사결과와 실시상태는 별도 기준입니다.');
     root.prepend(head, metrics, ...(operational ? [operational] : []), note, search);
     const recent = $('.dashboard-recent');
     if (recent) {
@@ -94,7 +94,7 @@ import { reviewStages, createReviewSource } from './review-stages.js?v=2.9.12';
       const b = button(t, 'data-ws-year', v); b.setAttribute('aria-pressed', String(form.elements.year.value === v)); quick.append(b);
     }
     quick.append(el('span', 'ws-divider'));
-    for (const [v, t] of [['total', '전체 현황'], ['pending', '심사대기'], ['overdue-review', '장기 미심사'], ['adopted', '채택'], ['completed', '실시완료']]) {
+    for (const [v, t] of [['total', '전체 현황'], ['processing', '처리할 제안'], ['pending', '심사대기'], ['overdue-review', '장기 미심사'], ['adopted', '채택'], ['completed', '실시완료']]) {
       const b = button(t, 'data-ws-workflow', v); b.setAttribute('aria-pressed', String(form.elements.workflow.value === v)); quick.append(b);
     }
     row.after(quick);
@@ -111,7 +111,7 @@ import { reviewStages, createReviewSource } from './review-stages.js?v=2.9.12';
       title: $('h3', card)?.textContent || '', review: $('.proposal-card-top > .badge', card),
       reviewText: $('.proposal-card-top > .badge', card)?.textContent.trim() || '',
       implementationText: $('.card-actions > .badge', card)?.textContent.trim() || '',
-      stage: $('.evaluation-admin-state', card)?.textContent || '', implementation: $('.card-actions > .badge', card),
+      processingLabel: card.dataset.processingLabel || '', stage: $('.evaluation-admin-state', card)?.textContent || '', implementation: $('.card-actions > .badge', card),
       detail: $('[data-action="detail"]', card) };
   }
   const stageLabels = ['1차 본인평가', '2차 팀장평가', '3차 심사위원'];
@@ -142,7 +142,7 @@ import { reviewStages, createReviewSource } from './review-stages.js?v=2.9.12';
     strip.replaceChildren(...model.stages.map((v, i) => { const n = stageContent(v, true); n.dataset.wsStage = String(i + 1); return n; }));
     let progress = $('.ws-review-progress', r.card);
     if (!progress) { progress = el('p', 'ws-review-progress'); strip.after(progress); }
-    progress.textContent = model.resultNote || model.progress;
+    progress.textContent = [r.processingLabel,model.resultNote || model.progress].filter(Boolean).join(' · ');
     const old = $('.evaluation-admin-state', r.card); if (old) old.hidden = true;
     if (r.review) { r.review.textContent = model.result; r.review.title = '최종 심사결과 · ' + (model.resultNote || model.result); }
   }
@@ -197,6 +197,7 @@ import { reviewStages, createReviewSource } from './review-stages.js?v=2.9.12';
       const model = rowReview(r);
       const cells = model.stages.map((v, i) => { const td = el('td', 'ws-stage-cell'); td.dataset.wsStage = String(i + 1); td.append(stageContent(v)); return td; });
       if (r.review) { const badge = r.review.cloneNode(true); badge.textContent = model.result; result.append(badge); }
+      if (r.processingLabel) result.append(el('small', 'ws-processing-tag', r.processingLabel));
       if (model.resultNote) result.append(el('small', 'ws-review-candidate', model.resultNote));
       if (model.progress) result.append(el('small', 'ws-stage', model.progress));
       if (r.implementation) implementation.append(r.implementation.cloneNode(true));
